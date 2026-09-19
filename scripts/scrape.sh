@@ -6,6 +6,9 @@ set -euo pipefail
 
 BASE="${SCRAPER_BASE_URL:-http://localhost:8080}"
 KEY="${SCRAPER_API_KEY:-}"
+# NOTE: empty-array expansion needs the ${a[@]+...} guard — plain "${AUTH[@]}" is an
+# unbound-variable error under 'set -u' on bash 3.2 (stock macOS), which is the
+# common case here since local use needs no API key.
 AUTH=(); [ -n "$KEY" ] && AUTH=(-H "X-API-Key: $KEY")
 
 KEYWORD="${1:-}"; LAT="${2:-}"; LON="${3:-}"; DEPTH="${4:-5}"
@@ -16,7 +19,7 @@ if [ -z "$KEYWORD" ] || [ -z "$LAT" ] || [ -z "$LON" ]; then
 fi
 
 # Is the scraper up?
-if ! curl -s -m 5 "${AUTH[@]}" "$BASE/api/v1/jobs" >/dev/null 2>&1; then
+if ! curl -s -m 5 ${AUTH[@]+"${AUTH[@]}"} "$BASE/api/v1/jobs" >/dev/null 2>&1; then
   echo "✗ Scraper not reachable at $BASE — run 'docker compose up -d' first." >&2
   exit 1
 fi
@@ -25,7 +28,7 @@ echo "▶ Creating job: \"$KEYWORD\" @ $LAT,$LON depth=$DEPTH (email extraction 
 # email:true → the scraper visits each business website to pull emails (the key lead field). A bit slower.
 BODY=$(printf '{"name":"scrape-cli","keywords":["%s"],"lang":"en","zoom":15,"lat":"%s","lon":"%s","fast_mode":false,"radius":10000,"depth":%s,"email":true,"max_time":600}' \
   "$KEYWORD" "$LAT" "$LON" "$DEPTH")
-ID=$(curl -s -X POST "$BASE/api/v1/jobs" "${AUTH[@]}" -H "Content-Type: application/json" -d "$BODY" \
+ID=$(curl -s -X POST "$BASE/api/v1/jobs" ${AUTH[@]+"${AUTH[@]}"} -H "Content-Type: application/json" -d "$BODY" \
      | grep -oE '[a-f0-9-]{36}' | head -1 || true)
 [ -n "$ID" ] || { echo "✗ Failed to create job (check required fields)." >&2; exit 1; }
 echo "  job id: $ID"
@@ -33,7 +36,7 @@ echo "  job id: $ID"
 echo "▶ Polling (up to ~10 min)…"
 for i in $(seq 1 60); do
   # '|| true' keeps the script alive under 'set -euo pipefail' when grep finds no match yet
-  S=$(curl -s "${AUTH[@]}" "$BASE/api/v1/jobs/$ID" | grep -oE '"Status":"[^"]*"' | head -1 | cut -d'"' -f4 || true)
+  S=$(curl -s ${AUTH[@]+"${AUTH[@]}"} "$BASE/api/v1/jobs/$ID" | grep -oE '"Status":"[^"]*"' | head -1 | cut -d'"' -f4 || true)
   printf '\r  status: %-10s (attempt %d)' "${S:-?}" "$i"
   [ "$S" = ok ] && { echo; break; }
   [ "$S" = failed ] && { echo; echo "✗ Job failed." >&2; exit 1; }
@@ -44,7 +47,7 @@ done
 OUT="results-$(echo "$KEYWORD" | tr ' /' '__' | tr -cd 'A-Za-z0-9_-').csv"
 RAW="$(mktemp)"
 echo "▶ Downloading…"
-curl -s "${AUTH[@]}" "$BASE/api/v1/jobs/$ID/download" -o "$RAW"
+curl -s ${AUTH[@]+"${AUTH[@]}"} "$BASE/api/v1/jobs/$ID/download" -o "$RAW"
 
 # Trim the raw 34-column dump down to money-useful LEAD fields only (drops geo coords, IDs, hours, images…).
 if command -v python3 >/dev/null 2>&1; then
