@@ -1,5 +1,5 @@
 # Runs the open-source Google Maps scraper (gosom/google-maps-scraper) locally.
-# Web/API mode on http://localhost:8080. The image has NO built-in auth, so we bind
+# Web/API mode on http://localhost:8080 (host port: SCRAPER_PORT in .env, default 8080). The image has NO built-in auth, so we bind
 # to 127.0.0.1 ONLY — that localhost binding is the security boundary. Do not change
 # the port mapping to 0.0.0.0 / a public interface without putting an auth proxy in front.
 
@@ -17,7 +17,8 @@ services:
     restart: unless-stopped
     command: ["-web", "-data-folder", "/gmapsdata"]
     ports:
-      - "127.0.0.1:8080:8080"   # localhost only — see warning above
+      # Host port comes from SCRAPER_PORT in .env. The container side stays 8080.
+      - "127.0.0.1:${SCRAPER_PORT:-8080}:8080"   # localhost only — see warning above
     volumes:
       - gmaps_data:/gmapsdata    # job results persist here
       - gmaps_cache:/opt         # Playwright browser cache (faster restarts)

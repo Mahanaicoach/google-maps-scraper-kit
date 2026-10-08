@@ -4,7 +4,18 @@
 # Example: ./scripts/scrape.sh "coffee shops in Austin TX" 30.2672 -97.7431 5
 set -euo pipefail
 
-BASE="${SCRAPER_BASE_URL:-http://localhost:8080}"
+# Read SCRAPER_* from the kit's .env, the same file docker compose reads, so a remapped
+# port needs one edit. Variables already exported in the shell win over the file.
+ENV_FILE="$(cd "$(dirname "$0")/.." && pwd)/.env"
+if [ -f "$ENV_FILE" ]; then
+  while IFS='=' read -r k v || [ -n "$k" ]; do
+    case "$k" in SCRAPER_BASE_URL|SCRAPER_PORT|SCRAPER_API_KEY) ;; *) continue ;; esac
+    v="${v%$'\r'}"; v="${v#\"}"; v="${v%\"}"
+    [ -n "${!k+x}" ] || export "$k=$v"
+  done < "$ENV_FILE"
+fi
+
+BASE="${SCRAPER_BASE_URL:-http://localhost:${SCRAPER_PORT:-8080}}"
 KEY="${SCRAPER_API_KEY:-}"
 # NOTE: empty-array expansion needs the ${a[@]+...} guard — plain "${AUTH[@]}" is an
 # unbound-variable error under 'set -u' on bash 3.2 (stock macOS), which is the

@@ -18,7 +18,25 @@ Notes:
 import argparse, csv, io, json, os, re, sys, time, urllib.request, urllib.parse, urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
-BASE = os.environ.get("SCRAPER_BASE_URL", "http://localhost:8080")
+ENV_KEYS = ("SCRAPER_BASE_URL", "SCRAPER_PORT", "SCRAPER_API_KEY")
+
+
+def load_env_file():
+    """Read SCRAPER_* from the kit's .env, the same file docker compose reads, so a remapped
+    port needs one edit. Variables already set in the environment win over the file."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, ".env")
+    try:
+        with open(path) as f:
+            for line in f:
+                k, sep, v = line.strip().partition("=")
+                if sep and k in ENV_KEYS and k not in os.environ:
+                    os.environ[k] = v.strip().strip("\"'")
+    except OSError:
+        pass
+
+
+load_env_file()
+BASE = os.environ.get("SCRAPER_BASE_URL") or f"http://localhost:{os.environ.get('SCRAPER_PORT') or '8080'}"
 KEY = os.environ.get("SCRAPER_API_KEY", "")
 # Money-useful LEAD fields only — what you actually use to contact/qualify a lead.
 # Everything else (geo coordinates, IDs, hours, images, reviews blobs…) is dropped by default.

@@ -168,6 +168,7 @@ curl -X DELETE http://localhost:8080/api/v1/jobs/<job-id>
 | Symptom | Fix |
 |---|---|
 | `curl: connection refused` on :8080 | Container not up. `docker compose up -d`, then `docker ps`. |
+| `port is already allocated` / something else already uses 8080 | Set `SCRAPER_PORT=8081` in `.env`, then `docker compose up -d`. Compose publishes the scraper on that host port and `scripts/scrape.sh` and `scripts/scrape.py` read the same file, so nothing else needs editing. The port inside the container stays 8080 (do not change the right-hand side of the mapping). If your `.env` still has a `SCRAPER_BASE_URL` line, delete it or update its port: it overrides `SCRAPER_PORT`. The slash commands and the skill show `localhost:8080` in their examples, so tell Claude the port you picked. |
 | `422 missing max time` | Job body needs `max_time` (in **seconds**, e.g. `300`). |
 | `422 missing geo coordinates` | Job body needs `lat` and `lon` as **strings**, e.g. `"30.2672"`. |
 | Job stuck `working` forever | Lower `depth`, or the IP is being throttled by Google — wait, or add proxies (see skill). |
