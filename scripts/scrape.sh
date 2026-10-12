@@ -10,7 +10,7 @@ ENV_FILE="$(cd "$(dirname "$0")/.." && pwd)/.env"
 if [ -f "$ENV_FILE" ]; then
   while IFS='=' read -r k v || [ -n "$k" ]; do
     case "$k" in SCRAPER_BASE_URL|SCRAPER_PORT|SCRAPER_API_KEY) ;; *) continue ;; esac
-    v="${v%$'\r'}"; v="${v#\"}"; v="${v%\"}"
+    v="${v%$'\r'}"; v="${v#\"}"; v="${v%\"}"; v="${v#\'}"; v="${v%\'}"
     [ -n "${!k+x}" ] || export "$k=$v"
   done < "$ENV_FILE"
 fi
