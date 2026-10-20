@@ -76,17 +76,20 @@ def parse_cidade(linha):
 
 def rodar_cidade(cidade, lat, lon, nichos, depth, sem_email, pasta):
     nome_cidade = cidade.split(",")[0].strip()
+    buscas = [f"{n} em {cidade}" for n in nichos]
+    # scrape.py lê os posicionais como "keyword lat lon": a 1ª busca vai como posicional,
+    # o resto no arquivo de keywords.
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as f:
-        for n in nichos:
-            f.write(f"{n} em {cidade}\n")
+        f.write("\n".join(buscas[1:]) + "\n")
         kw_file = f.name
     slug = re.sub(r"\W+", "_", nome_cidade.lower()).strip("_")
     out = os.path.join(pasta, f"bruto-{slug}.csv")
     cmd = [sys.executable, os.path.join(HERE, "scrape.py"), "--keywords-file", kw_file,
            "--depth", str(depth), "--out", out, "--max-time", str(max(600, 120 * len(nichos)))]
-    cmd += [lat, lon] if lat and lon else ["--city", f"{cidade}, Brasil"]
     if sem_email:
         cmd.append("--no-email")
+    # posicionais juntos no fim, senão o argparse não casa lat/lon
+    cmd += [buscas[0], lat, lon] if lat and lon else ["--city", f"{cidade}, Brasil", buscas[0]]
     print(f"\n=== {cidade}: {len(nichos)} nichos ===")
     try:
         r = subprocess.run(cmd)

@@ -24,6 +24,23 @@ services:
       - gmaps_data:/gmapsdata    # job results; they persist until you delete the job or the volume
       - gmaps_cache:/opt         # Playwright browser cache, so restarts skip the download
 
+  # Captação de lojas (Brasil): roda scripts/captar_lojas.py dentro de um container Python,
+  # falando com o engine pela rede interna do compose. Não sobe no "up -d" (profile).
+  # Uso: docker compose run --rm captador --cidade "Uberlandia, MG"
+  # O relatório sai na pasta captacao-<data>/ dentro desta pasta do kit.
+  captador:
+    image: python:3.12-slim
+    profiles: ["captacao"]
+    depends_on:
+      - google-maps-scraper
+    environment:
+      SCRAPER_BASE_URL: http://google-maps-scraper:8080
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    working_dir: /kit
+    volumes:
+      - ./:/kit
+    entrypoint: ["sh", "-c", "pip install -q --root-user-action=ignore openpyxl && exec python scripts/captar_lojas.py \"$@\"", "--"]
+
 volumes:
   gmaps_data:
   gmaps_cache:
