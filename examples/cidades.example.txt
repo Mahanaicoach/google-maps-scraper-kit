@@ -1,0 +1,6 @@
+# Uma cidade por linha: "Cidade, UF". Linhas com # são ignoradas.
+# Se o geocoding falhar, informe as coordenadas: "Cidade, UF;latitude;longitude"
+# Rodar: python3 scripts/captar_lojas.py --cidades-file examples/cidades.example.txt
+Uberlandia, MG;-18.9186;-48.2772
+Goiania, GO;-16.6869;-49.2648
+Ribeirao Preto, SP;-21.1775;-47.8103
