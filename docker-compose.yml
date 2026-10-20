@@ -39,7 +39,8 @@ services:
     working_dir: /kit
     volumes:
       - ./:/kit
-    entrypoint: ["sh", "-c", "pip install -q --root-user-action=ignore openpyxl && exec python scripts/captar_lojas.py \"$@\"", "--"]
+    # Sem openpyxl (pip sem internet), o relatório sai em CSV com ";" em vez de .xlsx.
+    entrypoint: ["sh", "-c", "pip install -q --root-user-action=ignore openpyxl 2>/dev/null || echo 'aviso: openpyxl não instalado, relatório sairá em CSV'; exec python scripts/captar_lojas.py \"$@\"", "--"]
 
 volumes:
   gmaps_data:
