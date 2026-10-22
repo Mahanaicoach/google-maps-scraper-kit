@@ -30,7 +30,7 @@ On Windows, run the same commands with `py` or `python3`. Python is only the cli
 | `--max-time` | Job time limit in seconds. Default `600`. |
 | `--out` | Output path. Default `results-<id>.csv`. A `.json` extension writes JSON. |
 | `--json` | Writes JSON instead of CSV. |
-| `--full` | Keeps all ~34 raw columns instead of the 8 lead fields. |
+| `--full` | Keeps all 36 raw columns instead of the 8 lead fields. |
 | `--fields` | Comma-separated columns to keep, overriding the lead fields. |
 | `--socials` | Adds Instagram, Facebook and LinkedIn from each website. Slower. Zero AI tokens. |
 | `--keyword` | Adds an extra keyword to the same job. Repeatable. |

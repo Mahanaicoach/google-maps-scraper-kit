@@ -22,8 +22,8 @@ docker ps               # should NOT error (means the daemon is up)
 ```
 
 > **Platform notes:**
-> - **Apple Silicon (M1/M2/M3):** the engine image is `linux/amd64` and runs under emulation. If the
->   container won't start, uncomment the `platform: linux/amd64` line in `docker-compose.yml`.
+> - **Apple Silicon (M1/M2/M3):** from v1.18.0 the image publishes an arm64 build, so it runs
+>   natively and no `platform` line is needed. Only older tags are amd64 and run under emulation.
 > - **Windows:** use `scripts/scrape.py` (run with `py` or `python3`). The bash script `scrape.sh` needs
 >   **WSL2** or **Git Bash**.
 
@@ -68,7 +68,7 @@ If `curl` returns a JSON array, the engine is live.
 > temporarily rate-limited by Google, for minutes to hours. Your Google account is not affected. Run
 > one job at a time, start at `depth 5`, and add proxies for large or repeated runs. Scraping Google
 > Maps is against Google's Terms of Service, and phones and emails are personal data, so follow GDPR,
-> CCPA and CAN-SPAM. Details: [Responsible use](README.md#responsible-use).
+> CCPA and CAN-SPAM — and LGPD if you operate in Brazil. Details: [Responsible use](README.md#responsible-use).
 
 ---
 
