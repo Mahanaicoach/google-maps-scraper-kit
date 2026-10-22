@@ -2,6 +2,7 @@
 # Google Maps scrape for one keyword: creates the job, polls, downloads, and saves the 8 lead fields to a CSV.
 # Usage:   ./scripts/scrape.sh "<keyword>" <lat> <lon> [depth]
 # Example: ./scripts/scrape.sh "coffee shops in Austin TX" 30.2672 -97.7431 5
+# Language: export SCRAPER_LANG=pt (default: en; the engine wants exactly two letters).
 set -euo pipefail
 
 # Read SCRAPER_* from the kit's .env, the same file docker compose reads, so a remapped
@@ -37,8 +38,8 @@ fi
 
 echo "▶ Creating job: \"$KEYWORD\" @ $LAT,$LON depth=$DEPTH (email extraction ON)"
 # email:true makes the engine visit each business website for emails (the key lead field). A little slower.
-BODY=$(printf '{"name":"scrape-cli","keywords":["%s"],"lang":"en","zoom":15,"lat":"%s","lon":"%s","fast_mode":false,"radius":10000,"depth":%s,"email":true,"max_time":600}' \
-  "$KEYWORD" "$LAT" "$LON" "$DEPTH")
+BODY=$(printf '{"name":"scrape-cli","keywords":["%s"],"lang":"%s","zoom":15,"lat":"%s","lon":"%s","fast_mode":false,"radius":10000,"depth":%s,"email":true,"max_time":600}' \
+  "$KEYWORD" "${SCRAPER_LANG:-en}" "$LAT" "$LON" "$DEPTH")
 ID=$(curl -s -X POST "$BASE/api/v1/jobs" ${AUTH[@]+"${AUTH[@]}"} -H "Content-Type: application/json" -d "$BODY" \
      | grep -oE '[a-f0-9-]{36}' | head -1 || true)
 [ -n "$ID" ] || { echo "✗ Failed to create job (check required fields)." >&2; exit 1; }

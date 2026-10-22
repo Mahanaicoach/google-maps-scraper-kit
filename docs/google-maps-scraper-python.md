@@ -24,6 +24,7 @@ On Windows, run the same commands with `py` or `python3`. Python is only the cli
 | `lat`, `lon` | Coordinates. Optional when you pass `--city`. |
 | `--city` | Geocodes a city name to coordinates via OpenStreetMap. |
 | `--depth` | How far to scroll each search. Default `5`. Higher is slower and more likely to be blocked. |
+| `--lang XX` | Two-letter result language. Default `en`. Use `pt` for Brazilian Portuguese, `es` for Spanish, and so on; the engine rejects anything that is not exactly two letters. |
 | `--no-email` | Skips email extraction for a faster run. Emails are on by default. |
 | `--no-deep-emails` | Skips the deep email pass over contact and about pages. |
 | `--grid N` | Splits the `--city` area into N x N map tiles, one job each, deduped. Needs `--city`. Max 10. |

@@ -9,6 +9,9 @@ Single keyword:
 Auto-geocode (no coordinates needed):
     python3 scripts/scrape.py "cafes in Austin TX" --city "Austin, TX" --depth 5
 
+Non-English results (the engine defaults to English metadata; pass a two-letter language):
+    python3 scripts/scrape.py "dentistas em Curitiba PR" --city "Curitiba, PR" --lang pt
+
 Batch (one job, many keywords) from a file (one keyword per line):
     python3 scripts/scrape.py --keywords-file examples/queries.example.txt --city "Denver, CO"
 
@@ -303,6 +306,9 @@ def main():
     ap.add_argument("--keywords-file", help="file with one keyword per line (batch)")
     ap.add_argument("--city", help="city/place to auto-geocode for lat/lon")
     ap.add_argument("--depth", type=int, default=5)
+    ap.add_argument("--lang", default="en", metavar="XX",
+                    help="two-letter result language, e.g. pt for Brazilian Portuguese (default: en). "
+                         "The engine rejects anything that is not exactly two letters.")
     # Emails are ON by default (they're the most valuable lead field). Visits each business
     # website to find an address — a bit slower. Use --no-email to skip for a fast run.
     ap.add_argument("--email", dest="email", action="store_true", default=True, help=argparse.SUPPRESS)
@@ -326,6 +332,9 @@ def main():
     keywords = collect_keywords(a)
     if not keywords:
         sys.exit("✗ No keywords. Pass a keyword, --keyword, or --keywords-file.")
+
+    if len(a.lang) != 2:
+        sys.exit(f'✗ --lang must be exactly two letters (got "{a.lang}"). The engine returns 422 otherwise.')
 
     if a.grid is not None:
         if not a.city:
@@ -370,7 +379,7 @@ def main():
     except Exception as e:
         sys.exit(f"✗ Scraper not reachable at {BASE} — run 'docker compose up -d' first.\n  ({e})")
 
-    body = {"name": "scrape-py", "keywords": keywords, "lang": "en", "zoom": 15,
+    body = {"name": "scrape-py", "keywords": keywords, "lang": a.lang, "zoom": 15,
             "lat": str(lat), "lon": str(lon), "fast_mode": False, "radius": 10000,
             "depth": a.depth, "email": a.email, "max_time": a.max_time}
     if not a.grid:
