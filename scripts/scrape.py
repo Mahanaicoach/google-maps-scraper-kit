@@ -23,7 +23,7 @@ Notes:
 - Geocoding uses OpenStreetMap Nominatim (free, no key). It allows ~1 request/sec and requires a
   descriptive User-Agent (set below). Do not loop it aggressively.
 """
-import argparse, csv, functools, io, json, math, os, re, sys, time, urllib.request, urllib.parse, urllib.error
+import argparse, csv, functools, io, ipaddress, json, math, os, re, socket, sys, time, urllib.request, urllib.parse, urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
 ENV_KEYS = ("SCRAPER_BASE_URL", "SCRAPER_PORT", "SCRAPER_API_KEY")
@@ -183,11 +183,47 @@ _SKIP_HANDLE = {"", "home", "pages", "people", "help", "about", "policies", "pol
                 "p", "reel", "reels", "explore", "stories", "tv", "watch", "events",
                 "groups", "marketplace", "gaming", "photo", "hashtag", "search"}
 
+# ── SSRF guard: every website URL here comes from a third party ───────────────
+# A listing can point at http://169.254.169.254/... or an internal service, which would make THIS
+# machine fetch it (cloud metadata, the local engine, other services on the host). Only public
+# addresses are fetched unless --allow-private-sites is passed, which exists for local testing.
+ALLOW_PRIVATE_FETCH = False
+_BLOCKED_HOSTS = set()
+
+
+def _is_public_address(ip):
+    """False for loopback, private, link-local, reserved, multicast and unspecified addresses."""
+    try:
+        a = ipaddress.ip_address(str(ip).split("%", 1)[0])  # drop an IPv6 zone id
+    except ValueError:
+        return False
+    return not (a.is_private or a.is_loopback or a.is_link_local or a.is_reserved
+                or a.is_multicast or a.is_unspecified)
+
+
+def host_allowed(url):
+    """True when every address the URL's host resolves to is public."""
+    host = _host(url)
+    if not host:
+        return False
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return False
+    return bool(infos) and all(_is_public_address(i[4][0]) for i in infos)
+
+
 def _fetch_html(url, timeout=10):
     if not url:
         return ""
     if not url.startswith(("http://", "https://")):
         url = "http://" + url
+    if not ALLOW_PRIVATE_FETCH and not host_allowed(url):
+        h = _host(url)
+        if h not in _BLOCKED_HOSTS:
+            _BLOCKED_HOSTS.add(h)
+            print(f"  (skipped {h}: not a public address — see --allow-private-sites)", file=sys.stderr)
+        return ""
     try:
         r = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0 (compatible; " + UA + ")", "Accept": "text/html"})
@@ -321,7 +357,14 @@ def main():
     ap.add_argument("--fields", help="comma-separated columns to keep (overrides the default lead set)")
     ap.add_argument("--socials", action="store_true",
                     help="also find Instagram/Facebook/LinkedIn from each website (0 LLM tokens; slower)")
+    ap.add_argument("--allow-private-sites", dest="allow_private_sites", action="store_true",
+                    help="fetch website URLs even when they resolve to loopback/private addresses "
+                         "(local testing only; off by default so a listing cannot point this machine "
+                         "at internal services or cloud metadata)")
     a = ap.parse_args()
+
+    global ALLOW_PRIVATE_FETCH
+    ALLOW_PRIVATE_FETCH = a.allow_private_sites
 
     keywords = collect_keywords(a)
     if not keywords:

@@ -33,6 +33,7 @@ On Windows, run the same commands with `py` or `python3`. Python is only the cli
 | `--full` | Keeps all ~34 raw columns instead of the 8 lead fields. |
 | `--fields` | Comma-separated columns to keep, overriding the lead fields. |
 | `--socials` | Adds Instagram, Facebook and LinkedIn from each website. Slower. Zero AI tokens. |
+| `--allow-private-sites` | Fetches a lead's website even when it resolves to a loopback or private address. Off by default: a listing cannot make this machine call internal services or cloud metadata. For local testing only. |
 | `--keyword` | Adds an extra keyword to the same job. Repeatable. |
 | `--keywords-file` | Reads one keyword per line from a file. One job, one CSV. |
 

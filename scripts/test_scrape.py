@@ -179,5 +179,26 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual([r[0] for r in rows[1:]], ["Biz A", "Biz B", "Biz C", "Biz D", "Biz E"])
 
 
+class HostGuard(unittest.TestCase):
+    def test_literal_addresses(self):
+        for ip in ("127.0.0.1", "127.1.2.3", "10.0.0.5", "192.168.1.10", "169.254.169.254",
+                   "::1", "fd00:ec2::254", "0.0.0.0", "not-an-ip"):
+            self.assertFalse(scrape._is_public_address(ip), ip)
+        for ip in ("8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"):
+            self.assertTrue(scrape._is_public_address(ip), ip)
+
+    def test_url_with_non_public_host_is_blocked(self):
+        self.assertFalse(scrape.host_allowed("http://169.254.169.254/latest/meta-data/"))
+        self.assertFalse(scrape.host_allowed("127.0.0.1:8080"))
+        self.assertFalse(scrape.host_allowed("http://10.0.0.7/admin"))
+        self.assertTrue(scrape.host_allowed("http://8.8.8.8/"))
+        self.assertFalse(scrape.host_allowed("http://"))  # no host
+
+    def test_fetch_html_skips_blocked_hosts_without_network(self):
+        self.assertEqual(scrape._fetch_html("http://169.254.169.254/latest/meta-data/"), "")
+        self.assertEqual(scrape._fetch_html("http://127.0.0.1:9/"), "")
+        self.assertEqual(scrape._fetch_html(""), "")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
