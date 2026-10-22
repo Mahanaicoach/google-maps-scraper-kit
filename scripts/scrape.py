@@ -314,6 +314,9 @@ def main():
                     help="split the --city area into N x N map tiles, one job each, deduped "
                          "(breaks Google's ~120 per search cap; max 10)")
     ap.add_argument("--max-time", type=int, default=600, help="job time limit in SECONDS")
+    ap.add_argument("--proxy", action="append", metavar="URL",
+                    help="proxy the engine rotates per request (repeatable): socks5, socks5h, http "
+                         "or https. Needed for large or repeated runs; the engine does the rotation.")
     ap.add_argument("--out", default=None, help="output file path (default: results-<id>.csv). "
                     "The extension picks the format: .csv (default) or .json")
     ap.add_argument("--json", action="store_true", help="write JSON instead of the default CSV")
@@ -373,6 +376,8 @@ def main():
     body = {"name": "scrape-py", "keywords": keywords, "lang": "en", "zoom": 15,
             "lat": str(lat), "lon": str(lon), "fast_mode": False, "radius": 10000,
             "depth": a.depth, "email": a.email, "max_time": a.max_time}
+    if a.proxy:
+        body["proxies"] = a.proxy
     if not a.grid:
         print(f"▶ Creating job: {len(keywords)} keyword(s) @ {lat},{lon} depth={a.depth} email={a.email}")
         for k in keywords:

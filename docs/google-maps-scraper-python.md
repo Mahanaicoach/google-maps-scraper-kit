@@ -28,6 +28,7 @@ On Windows, run the same commands with `py` or `python3`. Python is only the cli
 | `--no-deep-emails` | Skips the deep email pass over contact and about pages. |
 | `--grid N` | Splits the `--city` area into N x N map tiles, one job each, deduped. Needs `--city`. Max 10. |
 | `--max-time` | Job time limit in seconds. Default `600`. |
+| `--proxy URL` | Proxy the engine rotates per request, repeatable: `socks5`, `socks5h`, `http` or `https`. Needed for large or repeated runs. |
 | `--out` | Output path. Default `results-<id>.csv`. A `.json` extension writes JSON. |
 | `--json` | Writes JSON instead of CSV. |
 | `--full` | Keeps all ~34 raw columns instead of the 8 lead fields. |
