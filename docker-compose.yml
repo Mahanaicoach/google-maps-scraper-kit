@@ -21,9 +21,12 @@ services:
       # Host port comes from SCRAPER_PORT in .env (default 8080). The container side stays 8080.
       - "127.0.0.1:${SCRAPER_PORT:-8080}:8080"   # localhost only, see the warning above
     volumes:
-      - gmaps_data:/gmapsdata    # job results; they persist until you delete the job or the volume
-      - gmaps_cache:/opt         # Playwright browser cache, so restarts skip the download
+      # Only job results. Do not mount a named volume over /opt: the image already ships Chromium at
+      # /opt/browsers and the Playwright driver at /opt/ms-playwright-go, so a volume there shadows
+      # both, and after an image bump it keeps serving the OLD browsers from the volume — which is
+      # how the driver-mismatch failures mentioned above come back. Restarts download nothing
+      # either way: the browsers are baked into the image.
+      - gmaps_data:/gmapsdata
 
 volumes:
   gmaps_data:
-  gmaps_cache:

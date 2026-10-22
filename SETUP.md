@@ -199,7 +199,7 @@ curl -X DELETE http://localhost:8080/api/v1/jobs/<job-id>
 ```bash
 docker run -d --name gmaps-scraper --restart unless-stopped \
   -p 127.0.0.1:8080:8080 \
-  -v gmaps_data:/gmapsdata -v gmaps_cache:/opt \
+  -v gmaps_data:/gmapsdata \
   gosom/google-maps-scraper:v1.18.1 -web -data-folder /gmapsdata
 ```
 
