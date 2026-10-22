@@ -45,9 +45,27 @@ ID=$(curl -s -X POST "$BASE/api/v1/jobs" ${AUTH[@]+"${AUTH[@]}"} -H "Content-Typ
 echo "  job id: $ID"
 
 echo "▶ Polling (up to ~10 min)…"
+# Read the job's Status field. Parsed with python3 when it is available; the grep fallback tolerates
+# whitespace around the colon, which a fixed '"Status":"..."' pattern does not (a proxy or any
+# re-encoding of the response would otherwise stall the loop at 'status: ?').
+job_status() {
+  local body
+  body=$(curl -s ${AUTH[@]+"${AUTH[@]}"} "$BASE/api/v1/jobs/$1") || return 0
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$body" | python3 -c 'import json, sys
+try:
+    print(json.load(sys.stdin).get("Status") or "")
+except Exception:
+    pass'
+  else
+    printf '%s' "$body" | grep -oE '"Status"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 \
+      | sed -E 's/.*"([^"]*)"$/\1/'
+  fi
+}
+
 for i in $(seq 1 60); do
-  # '|| true' keeps the script alive under 'set -euo pipefail' when grep finds no match yet
-  S=$(curl -s ${AUTH[@]+"${AUTH[@]}"} "$BASE/api/v1/jobs/$ID" | grep -oE '"Status":"[^"]*"' | head -1 | cut -d'"' -f4 || true)
+  # '|| true' keeps the script alive under 'set -euo pipefail' when the status is still empty
+  S=$(job_status "$ID" || true)
   printf '\r  status: %-10s (attempt %d)' "${S:-?}" "$i"
   [ "$S" = ok ] && { echo; break; }
   [ "$S" = failed ] && { echo; echo "✗ Job failed." >&2; exit 1; }
