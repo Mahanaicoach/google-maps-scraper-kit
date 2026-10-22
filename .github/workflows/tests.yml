@@ -1,0 +1,32 @@
+name: tests
+
+# The repo shipped tests but no CI, so nothing ran them on a pull request. This is stdlib-only:
+# the CLI must stay dependency-free (see CONTRIBUTING), so no pip installs here either.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Run the offline test suite
+        run: python3 scripts/test_scrape.py
+
+      - name: Check the bash CLI parses
+        run: bash -n scripts/scrape.sh
