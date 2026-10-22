@@ -22,6 +22,18 @@ KEY="${SCRAPER_API_KEY:-}"
 # common case here since local use needs no API key.
 AUTH=(); [ -n "$KEY" ] && AUTH=(-H "X-API-Key: $KEY")
 
+# JSON-escape a string using bash expansions only: no jq, no python dependency, bash 3.2 safe.
+# Without it, a keyword containing a quote or a backslash builds invalid JSON and the engine
+# rejects the job with a generic "check required fields" error.
+json_escape() {
+  local s=${1//\\/\\\\}
+  s=${s//\"/\\\"}
+  s=${s//$'\t'/\\t}
+  s=${s//$'\n'/\\n}
+  s=${s//$'\r'/\\r}
+  printf '%s' "$s"
+}
+
 KEYWORD="${1:-}"; LAT="${2:-}"; LON="${3:-}"; DEPTH="${4:-5}"
 if [ -z "$KEYWORD" ] || [ -z "$LAT" ] || [ -z "$LON" ]; then
   echo "Usage: $0 \"<keyword>\" <lat> <lon> [depth]" >&2
@@ -37,11 +49,11 @@ fi
 
 echo "▶ Creating job: \"$KEYWORD\" @ $LAT,$LON depth=$DEPTH (email extraction ON)"
 # email:true makes the engine visit each business website for emails (the key lead field). A little slower.
-BODY=$(printf '{"name":"scrape-cli","keywords":["%s"],"lang":"en","zoom":15,"lat":"%s","lon":"%s","fast_mode":false,"radius":10000,"depth":%s,"email":true,"max_time":600}' \
-  "$KEYWORD" "$LAT" "$LON" "$DEPTH")
-ID=$(curl -s -X POST "$BASE/api/v1/jobs" ${AUTH[@]+"${AUTH[@]}"} -H "Content-Type: application/json" -d "$BODY" \
-     | grep -oE '[a-f0-9-]{36}' | head -1 || true)
-[ -n "$ID" ] || { echo "✗ Failed to create job (check required fields)." >&2; exit 1; }
+RESP=$(curl -s -X POST "$BASE/api/v1/jobs" ${AUTH[@]+"${AUTH[@]}"} -H "Content-Type: application/json" \
+  -d "$(printf '{"name":"scrape-cli","keywords":["%s"],"lang":"%s","zoom":15,"lat":"%s","lon":"%s","fast_mode":false,"radius":10000,"depth":%s,"email":true,"max_time":600}' \
+    "$(json_escape "$KEYWORD")" "en" "$LAT" "$LON" "$DEPTH")")
+ID=$(printf '%s' "$RESP" | grep -oE '[a-f0-9-]{36}' | head -1 || true)
+[ -n "$ID" ] || { echo "✗ Failed to create job. API said: ${RESP:-<empty response>}" >&2; exit 1; }
 echo "  job id: $ID"
 
 echo "▶ Polling (up to ~10 min)…"
