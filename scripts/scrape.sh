@@ -64,10 +64,11 @@ curl -s ${AUTH[@]+"${AUTH[@]}"} "$BASE/api/v1/jobs/$ID/download" -o "$RAW"
 if command -v python3 >/dev/null 2>&1; then
   python3 - "$RAW" "$OUT" <<'PY'
 import csv, sys
+sys.stdout.reconfigure(encoding='utf-8', errors='replace')  # ✓ and accented names vs. cp1252
 LEAD = ["title", "phone", "emails", "website", "category", "address", "review_rating", "review_count"]
-with open(sys.argv[1], newline='') as f:
+with open(sys.argv[1], newline='', encoding='utf-8') as f:
     rows = list(csv.DictReader(f))
-with open(sys.argv[2], "w", newline='') as f:
+with open(sys.argv[2], "w", newline='', encoding='utf-8') as f:
     w = csv.DictWriter(f, fieldnames=LEAD); w.writeheader()
     for r in rows:
         w.writerow({k: r.get(k, "") for k in LEAD})
