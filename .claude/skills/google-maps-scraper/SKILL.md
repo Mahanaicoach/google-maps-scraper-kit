@@ -127,7 +127,7 @@ contact and about pages checked, and the script prints the found rate. `--no-dee
 
 ## Other endpoints
 - `GET /api/v1/jobs` lists jobs. `DELETE /api/v1/jobs/{id}` deletes a job and frees disk.
-- Browser UI and OpenAPI docs: `http://localhost:8080` and `http://localhost:8080/api/docs`.
+- Browser UI and OpenAPI docs: `http://localhost:8080` and `http://localhost:8080/api/docs`. On engine v1.18.1 the browser UI loads, but Start Scraping does not submit and the jobs table stays empty ([gosom/google-maps-scraper#337](https://github.com/gosom/google-maps-scraper/issues/337)). Do not send the user there to run a scrape. Use `scripts/scrape.py` or the API above. The OpenAPI page is fine.
 
 ## Best practices (from the upstream docs)
 - **Depth:** higher `depth` returns more results but is slower and more likely to be blocked. Start at 5

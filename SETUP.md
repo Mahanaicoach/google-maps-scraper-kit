@@ -61,6 +61,8 @@ The engine also serves a web UI and API docs in the browser:
 - Web UI: **http://localhost:8080**
 - OpenAPI docs: **http://localhost:8080/api/docs**
 
+On the pinned engine `v1.18.1`, that page loads, but **Start Scraping** does not create a job and the jobs table stays empty. The engine drops the table body on load ([gosom/google-maps-scraper#337](https://github.com/gosom/google-maps-scraper/issues/337)). Use `scripts/scrape.py` or `POST /api/v1/jobs`. The OpenAPI docs page is unaffected.
+
 If `curl` returns a JSON array, the engine is live.
 
 > **Rate limits and the law.** The engine sends real requests to Google Maps. Light use is fine. Big
@@ -181,6 +183,7 @@ curl -X DELETE http://localhost:8080/api/v1/jobs/<job-id>
 | Symptom | Fix |
 |---|---|
 | `curl: connection refused` on :8080 | Container not up. `docker compose up -d`, then `docker ps`. |
+| Web UI loads, Start Scraping does nothing, jobs table stays empty | Pinned engine `v1.18.1` bug ([gosom/google-maps-scraper#337](https://github.com/gosom/google-maps-scraper/issues/337)). `scripts/scrape.py` and `POST /api/v1/jobs` still work. Download with `GET /api/v1/jobs/<id>/download`. |
 | `port is already allocated` / something else already uses 8080 | Set `SCRAPER_PORT=8081` in `.env`, then `docker compose up -d`. Compose publishes the scraper on that host port and `scripts/scrape.sh` and `scripts/scrape.py` read the same file, so nothing else needs editing. The port inside the container stays 8080 (do not change the right-hand side of the mapping). If your `.env` still has a `SCRAPER_BASE_URL` line, delete it or update its port: it overrides `SCRAPER_PORT`. The slash commands and the skill show `localhost:8080` in their examples, so tell Claude the port you picked. |
 | `422 missing max time` | Job body needs `max_time` (in **seconds**, e.g. `300`). |
 | `422 missing geo coordinates` | Job body needs `lat` and `lon` as **strings**, e.g. `"30.2672"`. |
