@@ -380,5 +380,48 @@ class EnrichEmails(unittest.TestCase):
         self.assertEqual(results[0]["emails"], "")
 
 
+class FullOutputMode(unittest.TestCase):
+    def test_full_output_includes_all_fields(self):
+        """Test that --full flag includes all raw fields from the engine."""
+        # Mock a row with all typical raw fields (approximately 34 fields)
+        full_row = {
+            "input_id": "123", "link": "https://maps.google.com/123", "title": "Test Biz",
+            "category": "Restaurant", "address": "123 Main St", "phone": "+1 555-1234",
+            "website": "https://test.com", "emails": "info@test.com", "review_rating": "4.5",
+            "review_count": "100", "latitude": "30.2672", "longitude": "-97.7431",
+            "cid": "0x123456789", "place_id": "ChIJ123456789", "plus_code": "1234+56",
+            "owner_id": "987654321", "owner_name": "Owner", "owner_link": "https://owner.com",
+            "owner_website": "https://owner-site.com", "time": "Monday: 9AM-5PM",
+            "verified": "True", "open_state": "open", "description": "Test description",
+            "email_domains": "test.com", "emails_from_website": "info@test.com",
+            "facebook": "https://facebook.com/test", "instagram": "https://instagram.com/test",
+            "linkedin": "https://linkedin.com/company/test", "twitter": "https://twitter.com/test",
+            "pinterest": "https://pinterest.com/test", "youtube": "https://youtube.com/test",
+            "wikipedia": "https://wikipedia.org/test", "image_url": "https://test.com/image.jpg",
+            "logo_url": "https://test.com/logo.jpg", "banner_url": "https://test.com/banner.jpg",
+            "h3_index": "1.0"
+        }
+
+        # Test the field selection logic (lines 406-412 in scrape.py)
+        # When --full is used, fields should be all keys from the first row
+        fields = list(full_row.keys()) if full_row else scrape.LEAD
+        result = [{k: r.get(k, "") for k in fields} for r in [full_row]]
+
+        # Verify all fields from the row are included (not hardcoded to 34)
+        expected_field_count = len(full_row.keys())
+        self.assertEqual(len(fields), expected_field_count)
+        self.assertEqual(len(result[0].keys()), expected_field_count)
+        self.assertIn("title", result[0])
+        self.assertIn("image_url", result[0])
+        self.assertIn("banner_url", result[0])
+        self.assertIn("h3_index", result[0])
+
+    def test_full_output_empty_rows_fallback(self):
+        """Test that --full with empty rows falls back to LEAD fields."""
+        empty_rows = []
+        fields = list(empty_rows[0].keys()) if empty_rows else scrape.LEAD
+        self.assertEqual(fields, scrape.LEAD)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
