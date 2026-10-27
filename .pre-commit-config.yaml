@@ -1,0 +1,13 @@
+# Pre-commit hooks for Google Maps Scraper Kit
+# Install: pip install pre-commit && pre-commit install
+# Skip: git commit --no-verify
+
+repos:
+  - repo: local
+    hooks:
+      - id: pytest
+        name: Run pytest
+        entry: pytest scripts/test_scrape.py
+        language: system
+        pass_filenames: false
+        always_run: true

@@ -1,0 +1,5 @@
+# Development dependencies for testing and CI/CD
+# Production code uses only Python stdlib (no pip installs required)
+
+pytest>=9.0.0
+pytest-cov>=7.0.0

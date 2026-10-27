@@ -13,6 +13,13 @@ data/
 __pycache__/
 *.pyc
 
+# Testing and coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+
 # OS / editor noise
 .DS_Store
 Thumbs.db
