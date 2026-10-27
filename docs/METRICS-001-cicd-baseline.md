@@ -103,21 +103,31 @@
 
 **Total Estimated Time:** ~1.5 minutes
 
-## KPIs Final
+## KPIs Final (Post-Hardening)
 
-| KPI | Baseline Value | Final Value | Target | Status |
-|-----|---------------|-------------|--------|--------|
-| Test Pass Rate | 100% (11/11) | 100% (27/27) | 100% | ✅ Met |
-| Coverage | 65% | 81% | ≥80% | ✅ Met |
-| Local Execution Time | 0.68s | 0.85s | <1s | ✅ Met |
-| CI Execution Time (Projected) | ~1.5 min | ~1.5 min | <3 min | ✅ Met (projected) |
-| Flaky Test Rate | 0% | 0% | 0% | ✅ Met |
+| KPI | Baseline Value | Pre-Hardening | Post-Hardening | Target | Status |
+|-----|---------------|----------------|-----------------|--------|--------|
+| Test Pass Rate | 100% (11/11) | 100% (27/27) | 100% (29/29) | 100% | ✅ Met |
+| Coverage | 65% | 81% | 81% | ≥80% | ✅ Met |
+| Local Execution Time | 0.68s | 0.85s | 0.85s | <1s | ✅ Met |
+| CI Execution Time | ~1.5 min (proj) | 55s | 67s | <3 min | ✅ Met |
+| Flaky Test Rate | 0% | 0% | 0% | 0% | ✅ Met |
+
+### CI Performance Improvement
+- **Pre-Hardening:** 55s (no cache)
+- **Post-Hardening:** 67s (with cache, additional test)
+- **Note:** Pip cache will show benefits on subsequent runs (first run still cold)
+
+### Test Count Evolution
+- **Baseline:** 11 tests
+- **Post-Initial:** 27 tests (+16)
+- **Post-Hardening:** 29 tests (+2 for --full)
 
 ## Dependencies Added
 
 ### Development Dependencies
-- `pytest>=9.0.0` - Test framework
-- `pytest-cov>=7.0.0` - Coverage reporting
+- `pytest>=8.0.0` - Test framework (compatible with Python 3.9+)
+- `pytest-cov>=5.0.0` - Coverage reporting
 
 **Production Dependencies:** None (stdlib only, as before)
 
@@ -134,7 +144,8 @@
 
 ### Modified
 1. `.gitignore` - Added coverage and pytest cache patterns
-2. `scripts/test_scrape.py` - Added 16 new test cases (HttpRequest, Geocode, EnrichSocials, EnrichEmails)
+2. `scripts/test_scrape.py` - Added 18 new test cases (HttpRequest, Geocode, EnrichSocials, EnrichEmails, FullOutputMode)
+3. `.github/workflows/test.yml` - Pinned actions, added cache, timeout, tightened permissions
 
 ### Unchanged
 1. `scripts/scrape.py` - Production code (no changes)
