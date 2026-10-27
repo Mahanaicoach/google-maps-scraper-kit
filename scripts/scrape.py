@@ -51,6 +51,23 @@ KEY = os.environ.get("SCRAPER_API_KEY", "")
 LEAD = ["title", "phone", "emails", "website", "category", "address", "review_rating", "review_count"]
 UA = "google-maps-scraper-kit/1.1 (https://github.com/Mahanaicoach/google-maps-scraper-kit)"
 
+POLL_EVERY = 8            # seconds between status checks
+POLL_GRACE = 120          # the engine still has to flush results and flip the status
+POLL_CEILING = 7200       # never wait longer than 2h, whatever --max-time asked for
+ENGINE_MIN_RUNTIME = 180  # the engine floors anything below this (runner/webrunner)
+
+
+def poll_attempts(max_time):
+    """How many status checks to make before giving up on a job.
+
+    Derived from the job's own max_time, because that is how long the engine is allowed to
+    work: waiting any less abandons a job that is still running normally. The engine floors
+    max_time at ENGINE_MIN_RUNTIME, so even a tiny --max-time needs that much patience, and
+    POLL_CEILING stops an absurd value from parking the script for a day."""
+    engine_runtime = max(ENGINE_MIN_RUNTIME, int(max_time or 0))
+    budget = min(POLL_CEILING, engine_runtime + POLL_GRACE)
+    return max(1, budget // POLL_EVERY)
+
 
 def req(method, path, body=None):
     headers = {"Content-Type": "application/json", "User-Agent": UA}
@@ -136,9 +153,10 @@ def run_job(body):
         raise RuntimeError("✗ No job id returned.")
     print(f"  job id: {job_id}")
 
-    print("▶ Polling…")
+    attempts = poll_attempts(body.get("max_time"))
+    print(f"▶ Polling (up to ~{attempts * POLL_EVERY // 60} min)…")
     status = None
-    for i in range(120):
+    for i in range(attempts):
         _, raw = req("GET", f"/api/v1/jobs/{job_id}")
         status = json.loads(raw).get("Status")
         print(f"\r  status: {str(status):<10} (attempt {i + 1})", end="", flush=True)
@@ -146,9 +164,14 @@ def run_job(body):
             print(); break
         if status == "failed":
             raise RuntimeError("\n✗ Job failed. If this keeps happening you may be rate-limited — wait or add proxies.")
-        time.sleep(8)
+        time.sleep(POLL_EVERY)
     else:
-        raise RuntimeError("\n✗ Timed out.")
+        raise RuntimeError(
+            f"\n✗ Gave up waiting after ~{attempts * POLL_EVERY // 60} min. The job may still be "
+            f"running, and the engine keeps the results either way, so nothing is lost:\n"
+            f"    curl {BASE}/api/v1/jobs/{job_id}\n"
+            f"  and once its Status is \"ok\", download the CSV with\n"
+            f"    curl -o results.csv {BASE}/api/v1/jobs/{job_id}/download")
 
     _, raw = req("GET", f"/api/v1/jobs/{job_id}/download")
     return job_id, list(csv.DictReader(io.StringIO(raw.decode("utf-8", "replace"))))
@@ -313,7 +336,9 @@ def main():
     ap.add_argument("--grid", type=int, metavar="N",
                     help="split the --city area into N x N map tiles, one job each, deduped "
                          "(breaks Google's ~120 per search cap; max 10)")
-    ap.add_argument("--max-time", type=int, default=600, help="job time limit in SECONDS")
+    ap.add_argument("--max-time", type=int, default=600,
+                    help="job time limit in SECONDS; the script waits that long for the "
+                         "engine, plus a short grace (default: 600)")
     ap.add_argument("--out", default=None, help="output file path (default: results-<id>.csv). "
                     "The extension picks the format: .csv (default) or .json")
     ap.add_argument("--json", action="store_true", help="write JSON instead of the default CSV")
