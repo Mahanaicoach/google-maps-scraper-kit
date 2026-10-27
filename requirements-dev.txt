@@ -1,5 +1,6 @@
 # Development dependencies for testing and CI/CD
 # Production code uses only Python stdlib (no pip installs required)
+# Python 3.9+ compatibility: pytest 8.x supports Python 3.9
 
-pytest>=9.0.0
-pytest-cov>=7.0.0
+pytest>=8.0.0
+pytest-cov>=5.0.0
