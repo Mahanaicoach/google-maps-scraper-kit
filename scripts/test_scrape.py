@@ -173,7 +173,7 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("cell 4/4: 3 rows, 6 unique so far", text)
         self.assertIn("cell 3/4 skipped", text)
         self.assertIn("dropped 1 rows outside the city box", text)
-        with open(out, newline="") as f:
+        with open(out, newline="", encoding="utf-8-sig") as f:
             rows = list(csv.reader(f))
         self.assertEqual(rows[0], scrape.LEAD)
         self.assertEqual([r[0] for r in rows[1:]], ["Biz A", "Biz B", "Biz C", "Biz D", "Biz E"])

@@ -437,12 +437,10 @@ def main():
         with open(out, "w") as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
     else:
-        
-         with open(out, "w", newline="", encoding="utf-8-sig") as f:
+        with open(out, "w", newline="", encoding="utf-8-sig") as f:
             w = csv.DictWriter(f, fieldnames=fields)
             w.writeheader()
             w.writerows(results)
-
     print(f"  saved → {out}")
     for r in results[:5]:
         tail = f" | IG:{r.get('instagram','') or '—'}" if a.socials else f" | {r.get('website','')}"
