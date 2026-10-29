@@ -58,6 +58,10 @@ Need the whole city, not just the first 120? Add `--grid 3`:
 python3 scripts/scrape.py "dentists in Denver CO" --city "Denver, CO" --grid 3
 ```
 
+Prefer a simple page to the command line? Run `python3 scripts/ui.py` (or double-click
+`start-ui.bat` on Windows) and open **http://localhost:8090**. Type a business and a place, pick how
+many results you want, and download the table as a CSV.
+
 ### Example output
 
 `coffee_shops_austin.csv` (illustrative rows):
@@ -270,7 +274,9 @@ google-maps-scraper-kit/
 ├── .env.example            config template
 ├── scripts/
 │   ├── scrape.py           Python CLI: single, batch, geocoding, socials, CSV
-│   └── scrape.sh           bash CLI: single query
+│   ├── scrape.sh           bash CLI: single query
+│   └── ui.py, ui.html      simple web page on 127.0.0.1:8090
+├── start-ui.bat            Windows: double-click to open the simple page
 ├── examples/               sample job body and batch keyword list
 ├── .claude/
 │   ├── settings.json       pre-approved local commands for hands-free runs

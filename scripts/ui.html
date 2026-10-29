@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Business Finder</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1d2330; --muted: #5f6b7d; --line: #e2e6ec;
+    --accent: #1f6feb; --accent-text: #ffffff; --soft: #eef4ff;
+    --ok: #1a7f37; --ok-soft: #e6f4ea; --bad: #c62828; --bad-soft: #fdecea; --warn-soft: #fff6e0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --card: #1a1f27; --text: #e7eaf0; --muted: #9aa5b5; --line: #2b323d;
+      --accent: #4c8dff; --accent-text: #0b0e13; --soft: #1c2a42;
+      --ok: #4ac26b; --ok-soft: #16301f; --bad: #ff6b6b; --bad-soft: #3a1c1c; --warn-soft: #3a3016;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 64px; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+  h1 { font-size: 26px; margin: 0; }
+  h2 { font-size: 19px; margin: 0 0 14px; }
+  .sub { color: var(--muted); margin: 4px 0 0; }
+  .pill { padding: 6px 12px; border-radius: 999px; font-size: 14px; font-weight: 600; }
+  .pill.on { background: var(--ok-soft); color: var(--ok); }
+  .pill.off { background: var(--bad-soft); color: var(--bad); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 22px; margin-bottom: 20px; }
+  label.field { display: block; font-weight: 600; margin-bottom: 6px; }
+  .hint { color: var(--muted); font-size: 14px; margin: 6px 0 0; }
+  input[type=text] { width: 100%; padding: 12px 14px; font: inherit; color: var(--text); background: var(--bg);
+                     border: 1px solid var(--line); border-radius: 10px; }
+  input[type=text]:focus { outline: 2px solid var(--accent); border-color: transparent; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 18px; }
+  .sizes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 8px; }
+  .size { position: relative; border: 2px solid var(--line); border-radius: 12px; padding: 12px 14px; cursor: pointer; }
+  .size input { position: absolute; opacity: 0; }
+  .size b { display: block; }
+  .size span { color: var(--muted); font-size: 14px; }
+  .size:has(input:checked) { border-color: var(--accent); background: var(--soft); }
+  .size:has(input:focus-visible) { outline: 2px solid var(--accent); }
+  .check { display: flex; gap: 10px; align-items: center; margin: 16px 0 20px; }
+  .check input { width: 18px; height: 18px; }
+  .warn { background: var(--warn-soft); border-radius: 10px; padding: 10px 14px; font-size: 14px; margin-top: 10px; }
+  button { font: inherit; font-weight: 600; border: 0; border-radius: 10px; padding: 12px 22px; cursor: pointer;
+           background: var(--accent); color: var(--accent-text); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); padding: 8px 14px; }
+  button.danger { color: var(--bad); }
+  .steps { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  .step { padding: 6px 12px; border-radius: 999px; background: var(--bg); color: var(--muted); font-size: 14px; }
+  .step.now { background: var(--soft); color: var(--accent); font-weight: 600; }
+  .step.done { background: var(--ok-soft); color: var(--ok); }
+  .bar { height: 6px; background: var(--bg); border-radius: 3px; overflow: hidden; margin: 12px 0; }
+  .bar i { display: block; height: 100%; width: 30%; background: var(--accent); border-radius: 3px; animation: slide 1.4s infinite ease-in-out; }
+  @keyframes slide { 0% { margin-left: -30%; } 100% { margin-left: 100%; } }
+  .error { background: var(--bad-soft); color: var(--bad); border-radius: 10px; padding: 12px 14px; }
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 18px; }
+  .tile { background: var(--bg); border-radius: 12px; padding: 12px 14px; }
+  .tile b { display: block; font-size: 26px; }
+  .tile span { color: var(--muted); font-size: 14px; }
+  .tools { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .tools input { max-width: 320px; }
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: var(--bg); position: sticky; top: 0; white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  td a { color: var(--accent); text-decoration: none; word-break: break-all; }
+  td.none { color: var(--muted); }
+  .hist { list-style: none; padding: 0; margin: 0; }
+  .hist li { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap;
+             padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .hist li:last-child { border-bottom: 0; }
+  .hist small { color: var(--muted); display: block; }
+  .hist .acts { display: flex; gap: 8px; }
+  [hidden] { display: none !important; }
+  @media (max-width: 720px) {
+    .row, .sizes { grid-template-columns: 1fr; }
+    .tiles { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>Business Finder</h1>
+      <p class="sub">Find businesses on Google Maps and download their contact details.</p>
+    </div>
+    <span id="engine" class="pill">Checking scraper…</span>
+  </header>
+
+  <div id="engineOff" class="card error" hidden>
+    The scraper is not running. Open <b>Docker Desktop</b>, then run <code>docker compose up -d</code>
+    in the kit folder. This page will notice when it's ready.
+  </div>
+
+  <section class="card" id="formCard">
+    <h2>1. What are you looking for?</h2>
+    <form id="form">
+      <div class="row">
+        <div>
+          <label class="field" for="business">Type of business</label>
+          <input type="text" id="business" placeholder="marble factory" required>
+          <p class="hint">Tip: add similar words separated by commas to find more, e.g.
+            <i>marble factory, granite supplier, stone supplier</i></p>
+        </div>
+        <div>
+          <label class="field" for="place">Place</label>
+          <input type="text" id="place" placeholder="Rawat, Pakistan" required>
+          <p class="hint">Include the city or country so the map finds the right place.</p>
+        </div>
+      </div>
+
+      <label class="field">How many results?</label>
+      <div class="sizes">
+        <label class="size"><input type="radio" name="size" value="few" checked>
+          <b>A few</b><span>About 20 per type · ~5 min</span></label>
+        <label class="size"><input type="radio" name="size" value="more">
+          <b>More</b><span>About 50 per type · ~10 min</span></label>
+        <label class="size"><input type="radio" name="size" value="max">
+          <b>As many as possible</b><span>Up to ~120 per type · 15–30 min</span></label>
+      </div>
+      <div id="bigWarn" class="warn" hidden>
+        Big searches are fine, but running many of them back-to-back can make Google block your
+        internet connection for a while (usually under an hour).
+      </div>
+
+      <label class="check"><input type="checkbox" id="emails" checked>
+        Also look for email addresses on business websites (a bit slower)</label>
+
+      <button type="submit" id="go">Find businesses</button>
+      <p id="formError" class="error" hidden style="margin-top:14px"></p>
+    </form>
+  </section>
+
+  <section class="card" id="progressCard" hidden>
+    <h2>2. Searching…</h2>
+    <div class="steps">
+      <span class="step" data-s="locating">Finding the place</span>
+      <span class="step" data-s="searching">Searching Google Maps</span>
+      <span class="step" data-s="emails">Finding emails</span>
+      <span class="step" data-s="done">Done</span>
+    </div>
+    <div id="progMsg"></div>
+    <div class="bar" id="bar"><i></i></div>
+    <p class="hint" id="progTime"></p>
+    <p class="hint">You can leave this page open and do something else. Closing the tab is fine too:
+      the search keeps running and shows up under <b>Past searches</b>.</p>
+    <p id="progError" class="error" hidden></p>
+  </section>
+
+  <section class="card" id="resultsCard" hidden>
+    <h2 id="resTitle">3. Results</h2>
+    <div class="tiles">
+      <div class="tile"><b id="tTotal">0</b><span>businesses</span></div>
+      <div class="tile"><b id="tPhone">0</b><span>with phone</span></div>
+      <div class="tile"><b id="tEmail">0</b><span>with email</span></div>
+      <div class="tile"><b id="tWeb">0</b><span>with website</span></div>
+    </div>
+    <div class="tools">
+      <input type="text" id="filter" placeholder="Search in results…" aria-label="Search in results">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="ghost" id="newSearch" type="button">New search</button>
+        <button id="dl" type="button">Download for Excel (CSV)</button>
+      </div>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>#</th><th>Name</th><th>Phone</th><th>Email</th><th>Website</th>
+          <th>Category</th><th>Address</th><th>Rating</th><th>Reviews</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Past searches</h2>
+    <ul class="hist" id="hist"><li class="hint">Loading…</li></ul>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const STORE = "bf-task";
+let results = [], taskId = null, timer = null;
+
+function store(key, val) {
+  try { val == null ? localStorage.removeItem(key) : localStorage.setItem(key, val); } catch (e) {}
+}
+function load(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.error || "Request failed");
+  return body;
+}
+
+async function checkEngine() {
+  let on = false;
+  try { on = (await api("/api/health")).engine; } catch (e) {}
+  $("engine").textContent = on ? "● Scraper ready" : "● Scraper off";
+  $("engine").className = "pill " + (on ? "on" : "off");
+  $("engineOff").hidden = on;
+  $("go").disabled = !on;
+}
+
+document.querySelectorAll("input[name=size]").forEach(r =>
+  r.addEventListener("change", () => { $("bigWarn").hidden = r.value !== "max" || !r.checked; }));
+
+$("form").addEventListener("submit", async e => {
+  e.preventDefault();
+  $("formError").hidden = true;
+  $("go").disabled = true;
+  try {
+    const { id } = await api("/api/search", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        business: $("business").value, place: $("place").value,
+        size: document.querySelector("input[name=size]:checked").value, emails: $("emails").checked,
+      }),
+    });
+    startWatching(id);
+  } catch (err) {
+    $("formError").textContent = err.message;
+    $("formError").hidden = false;
+    $("go").disabled = false;
+  }
+});
+
+function startWatching(id) {
+  taskId = id;
+  store(STORE, id);
+  $("formCard").hidden = true;
+  $("resultsCard").hidden = true;
+  $("progressCard").hidden = false;
+  $("progError").hidden = true;
+  $("bar").hidden = false;
+  clearInterval(timer);
+  poll();
+  timer = setInterval(poll, 3000);
+}
+
+const ORDER = ["locating", "searching", "emails", "done"];
+function fmt(sec) {
+  const m = Math.floor(sec / 60), s = sec % 60;
+  return m ? `${m} min ${s} s` : `${s} s`;
+}
+
+async function poll() {
+  let t;
+  try { t = await api("/api/task/" + taskId); }
+  catch (e) { clearInterval(timer); store(STORE, null); showForm(); return; }
+  const idx = ORDER.indexOf(t.stage);
+  document.querySelectorAll(".step").forEach(el => {
+    const i = ORDER.indexOf(el.dataset.s);
+    el.className = "step" + (i < idx || t.stage === "done" ? " done" : i === idx ? " now" : "");
+  });
+  $("progMsg").textContent = t.message + (t.stage === "done" || t.stage === "error" ? "" : "…");
+  $("progTime").textContent = t.elapsed != null && t.stage === "searching"
+    ? `Running for ${fmt(t.elapsed)}. Google Maps searches usually take 5–30 minutes.` : "";
+  if (t.stage === "error") {
+    clearInterval(timer);
+    store(STORE, null);
+    $("bar").hidden = true;
+    $("progError").textContent = t.message;
+    $("progError").hidden = false;
+    $("formCard").hidden = false;
+    $("go").disabled = false;
+    loadHistory();
+  } else if (t.stage === "done") {
+    clearInterval(timer);
+    $("progressCard").hidden = true;
+    showResults(t);
+    loadHistory();
+  }
+}
+
+function showForm() {
+  $("progressCard").hidden = true;
+  $("resultsCard").hidden = true;
+  $("formCard").hidden = false;
+  $("go").disabled = false;
+}
+
+function cell(text, cls) {
+  const td = document.createElement("td");
+  if (!text) { td.textContent = "—"; td.className = "none"; }
+  else td.textContent = text;
+  if (cls) td.classList.add(cls);
+  return td;
+}
+function linkCell(href, text) {
+  const td = document.createElement("td");
+  if (!text) return cell("");
+  const a = document.createElement("a");
+  a.href = href; a.textContent = text;
+  if (href.startsWith("http")) { a.target = "_blank"; a.rel = "noopener noreferrer"; }
+  td.appendChild(a);
+  return td;
+}
+
+function showResults(t) {
+  results = t.results || [];
+  $("resTitle").textContent = `3. Results: ${t.name}`;
+  const count = k => results.filter(r => r[k]).length;
+  $("tTotal").textContent = results.length;
+  $("tPhone").textContent = count("phone");
+  $("tEmail").textContent = count("emails");
+  $("tWeb").textContent = count("website");
+  $("filter").value = "";
+  renderRows();
+  $("resultsCard").hidden = false;
+}
+
+function renderRows() {
+  const q = $("filter").value.trim().toLowerCase();
+  const tbody = $("rows");
+  tbody.replaceChildren();
+  results.filter(r => !q || Object.values(r).join(" ").toLowerCase().includes(q)).forEach((r, i) => {
+    const tr = document.createElement("tr");
+    const site = /^https?:\/\//i.test(r.website || "") ? r.website : "";
+    const email = (r.emails || "").split(",")[0].trim();
+    tr.append(
+      cell(String(i + 1)),
+      cell(r.title),
+      r.phone ? linkCell("tel:" + r.phone.replace(/\s/g, ""), r.phone) : cell(""),
+      email ? linkCell("mailto:" + email, r.emails) : cell(""),
+      site ? linkCell(site, site.replace(/^https?:\/\/(www\.)?/i, "").replace(/\/$/, "")) : cell(""),
+      cell(r.category), cell(r.address),
+      cell(parseFloat(r.review_rating) > 0 ? "★ " + parseFloat(r.review_rating).toFixed(1) : ""),
+      cell(r.review_count && r.review_count !== "0" ? r.review_count : ""),
+    );
+    tbody.appendChild(tr);
+  });
+}
+
+$("filter").addEventListener("input", renderRows);
+$("dl").addEventListener("click", () => { location.href = `/api/task/${taskId}/csv`; });
+$("newSearch").addEventListener("click", () => { store(STORE, null); showForm(); });
+
+async function loadHistory() {
+  const list = $("hist");
+  let jobs = [];
+  try { jobs = await api("/api/history"); } catch (e) {}
+  list.replaceChildren();
+  if (!jobs.length) {
+    const li = document.createElement("li");
+    li.className = "hint"; li.textContent = "No searches yet.";
+    return list.appendChild(li);
+  }
+  const words = { ok: "Finished", working: "Running", pending: "Waiting", failed: "Failed" };
+  jobs.forEach(j => {
+    const li = document.createElement("li");
+    const info = document.createElement("div");
+    const name = document.createElement("b"); name.textContent = j.name || "Search";
+    const meta = document.createElement("small");
+    meta.textContent = `${j.date ? new Date(j.date).toLocaleString() : ""} · ${words[j.status] || j.status}`;
+    info.append(name, meta);
+    const acts = document.createElement("div"); acts.className = "acts";
+    if (j.status === "ok") {
+      const dl = document.createElement("button");
+      dl.className = "ghost"; dl.type = "button"; dl.textContent = "Download";
+      dl.onclick = () => { location.href = `/api/history/${j.id}/csv`; };
+      acts.appendChild(dl);
+    }
+    const del = document.createElement("button");
+    del.className = "ghost danger"; del.type = "button"; del.textContent = "Delete";
+    del.onclick = async () => {
+      if (del.dataset.sure !== "1") { del.dataset.sure = "1"; del.textContent = "Click again to delete"; return; }
+      try { await api("/api/history/" + j.id, { method: "DELETE" }); } catch (e) {}
+      loadHistory();
+    };
+    acts.appendChild(del);
+    li.append(info, acts);
+    list.appendChild(li);
+  });
+}
+
+checkEngine();
+setInterval(checkEngine, 15000);
+loadHistory();
+const saved = load(STORE);
+if (saved) startWatching(saved);
+</script>
+</body>
+</html>
