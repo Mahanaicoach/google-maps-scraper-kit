@@ -91,8 +91,10 @@ python3 scripts/scrape.py "dentists in Denver CO" --city "Denver, CO" --grid 3
 | Example Roasters | +1 512-555-0101 | hello@example.com | example.com | Coffee shop | 100 Congress Ave, Austin, TX | 4.7 | 812 |
 | Sample Espresso Bar | +1 512-555-0102 | info@example.org | example.org | Cafe | 200 S Lamar Blvd, Austin, TX | 4.5 | 356 |
 
-`--socials` adds `instagram`, `facebook` and `linkedin` columns. `--full` keeps all 36 raw fields,
-including opening hours, coordinates, price range and reviews.
+`--socials` adds `instagram`, `facebook` and `linkedin` columns. `--tech` adds `fb_pixel`,
+`google_ads_tag`, `analytics`, `cms`, `mobile_friendly` and `intent_score`, and sorts the hottest
+leads first. `--full` keeps all 36 raw fields, including opening hours, coordinates, price range and
+reviews.
 
 Full walkthrough, platform notes and troubleshooting: [SETUP.md](SETUP.md).
 
@@ -144,8 +146,9 @@ scrapes Google Maps business listings only. It does not scrape social platforms 
 | **Email extraction, on by default** | Visits each business website and pulls published contact emails. A second pass checks the contact and about pages of rows still missing one, then prints your found rate. |
 | **Beyond the 120 cap** | `--grid 3` splits the city into 3 x 3 map tiles, runs them one at a time and dedupes on `place_id`. |
 | **Social enrichment** | `--socials` finds Instagram, Facebook and LinkedIn profiles in code (HTTP + regex). Zero AI tokens. |
+| **Who already advertises** | `--tech` spots a Meta Pixel, Google Ads tag and analytics on each website, plus its platform (WordPress, Shopify, Wix…) and mobile support, then ranks leads by an `intent_score` from 0 to 100. Zero AI tokens. |
 | **Auto-geocoding** | Type a city name. Coordinates are resolved for you via OpenStreetMap. |
-| **Batch jobs** | Many keywords, one job, one CSV. |
+| **Batch jobs** | Many keywords, one job, one CSV. The engine lists a place found by several keywords once. |
 | **Proxy rotation** | Built into the engine for large or repeated runs. `socks5`, `socks5h`, `http`, `https`. |
 | **Agent-native** | A skill plus four slash commands. The agent handles create, poll, download, clean and present. |
 | **Safe defaults** | API bound to `127.0.0.1`, results git-ignored, rate-limit and data-law guardrails built into the skill. |

@@ -127,6 +127,50 @@ class ExtractEmails(unittest.TestCase):
         self.assertEqual(scrape.extract_emails("", "x.com"), [])
         self.assertEqual(scrape.extract_emails("no emails here", "x.com"), [])
 
+    def test_entities_and_obfuscation(self):
+        html = "Mail info&#64;acme.com, jane [at] acme [dot] com or bob (at) acme dot co"
+        self.assertEqual(scrape.extract_emails(html, "acme.com"),
+                         ["info@acme.com", "jane@acme.com", "bob@acme.co"])
+
+    def test_prose_is_not_an_email(self):
+        self.assertEqual(scrape.extract_emails("Meet us at noon dot com, look at me dot org", "x.com"), [])
+
+
+class PublicHostGuard(unittest.TestCase):
+    def test_private_addresses_blocked(self):
+        for host in ("localhost", "127.0.0.1", "10.0.0.5", "192.168.1.1", "169.254.169.254", "::1", ""):
+            self.assertFalse(scrape._is_public_host(host), host)
+        self.assertTrue(scrape._is_public_host("8.8.8.8"))
+
+    def test_fetch_refuses_local_engine(self):
+        with mock.patch.object(scrape._OPENER, "open") as opened:
+            self.assertEqual(scrape._fetch_html("http://localhost:8080/api/v1/jobs"), "")
+        opened.assert_not_called()
+
+    def test_redirect_to_private_address_refused(self):
+        handler = scrape._PublicRedirectsOnly()
+        req = scrape.urllib.request.Request("http://8.8.8.8/")
+        self.assertIsNone(handler.redirect_request(req, None, 302, "Found", {}, "http://127.0.0.1/admin"))
+
+
+class TechSignals(unittest.TestCase):
+    def test_detects_pixel_platform_viewport(self):
+        html = ('<script src="https://connect.facebook.net/en_US/fbevents.js"></script>'
+                '<meta name="viewport" content="width=device-width"><link href="/wp-content/a.css">'
+                "<script>gtag('config','AW-123456789')</script>")
+        self.assertEqual(scrape._find_tech(html), {"fb_pixel": "yes", "google_ads_tag": "yes",
+                         "analytics": "yes", "cms": "wordpress", "mobile_friendly": "yes"})
+
+    def test_unreachable_site_is_unknown_not_no(self):
+        self.assertEqual(set(scrape._find_tech("").values()), {""})
+
+    def test_intent_score(self):
+        hot = {"fb_pixel": "yes", "google_ads_tag": "yes", "analytics": "yes",
+               "review_count": "1,204", "review_rating": "4.6", "emails": "a@b.com"}
+        self.assertEqual(scrape.intent_score(hot), 100)
+        self.assertEqual(scrape.intent_score({}), 0)
+        self.assertEqual(scrape.intent_score({"review_count": "12", "review_rating": "n/a"}), 8)
+
 
 class CleanEngineEmails(unittest.TestCase):
     def test_drops_placeholders_keeps_real(self):
