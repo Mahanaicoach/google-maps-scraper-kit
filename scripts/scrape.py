@@ -60,7 +60,7 @@ KEY = os.environ.get("SCRAPER_API_KEY", "")
 # The 8 lead fields: what you use to contact and qualify a lead.
 # Everything else (geo coordinates, IDs, hours, images, review blobs) is dropped by default.
 LEAD = ["title", "phone", "emails", "website", "category", "address", "review_rating", "review_count"]
-UA = "google-maps-scraper-kit/1.5 (https://github.com/Mahanaicoach/google-maps-scraper-kit)"
+UA = "google-maps-scraper-kit/1.6 (https://github.com/Mahanaicoach/google-maps-scraper-kit)"
 # Business websites fetched at once by the email crawl, --socials and --tech. They are many
 # different small sites, not Google, so this does not raise the rate-limit risk.
 SITE_WORKERS = 16
@@ -174,13 +174,23 @@ def engine_run_ended(since):
     return "scrapemate exited" in out.stdout + out.stderr
 
 def restart_engine():
+    """Restart the local engine and wait until its API answers again. Without the wait, the next
+    grid tile hit the proxy while the engine was still starting and failed with HTTP 502."""
     if not _local_docker():
         return False
     try:
-        return subprocess.run(["docker", "restart", ENGINE_CONTAINER],
-                              capture_output=True, timeout=90).returncode == 0
+        if subprocess.run(["docker", "restart", ENGINE_CONTAINER],
+                          capture_output=True, timeout=90).returncode != 0:
+            return False
     except (OSError, subprocess.SubprocessError):
         return False
+    for _ in range(30):  # up to a minute; it usually answers within a few seconds
+        try:
+            req("GET", "/api/v1/jobs")
+            return True
+        except Exception:
+            time.sleep(2)
+    return False
 
 def recover_stuck_job(job_id):
     """Engine v1.18.x can finish a job, rows written, without marking it done, and then holds every
@@ -437,9 +447,9 @@ def intent_score(r):
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 MAILTO_RE = re.compile(r"mailto:([^\"'>\s?]+)", re.I)
 HREF_RE = re.compile(r"<a\s[^>]*?href\s*=\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", re.I | re.S)
-_JUNK_EXT = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".css", ".js")
+_JUNK_EXT = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".avif", ".css", ".js")
 _JUNK_DOMAIN = ("example", "sentry", "wixpress", "wix.com", "godaddy", "squarespace", "wordpress",
-                "domain.com", "email.com", "yourdomain", "schema.org", "w3.org", "sentry.io")
+                "domain.com", "email.com", "yourdomain", "mysite.com", "schema.org", "w3.org", "sentry.io")
 _JUNK_LOCAL = {"name", "email", "user", "you", "someone", "example", "username",
                "youremail", "yourname", "firstname", "lastname", "sample"}
 # A JSON-escaped <, >, ", ' or & glued to the address (">orders@x.com" in page source),
@@ -614,6 +624,7 @@ def main():
             # most of each job and found fewer emails than the crawl below (OpenLeadFinder's
             # approach), so the engine only reads Google Maps.
             "depth": a.depth, "email": False, "max_time": a.max_time}
+    skipped = []  # grid tiles that failed
     if not a.grid:
         print(f"▶ Creating job: {len(keywords)} keyword(s) @ {lat},{lon} depth={a.depth}")
         for k in keywords:
@@ -634,6 +645,7 @@ def main():
                 jid, cell_rows = run_job(dict(body, **cell))
             except Exception as e:
                 print(f"\n  ⚠ cell {i}/{len(cells)} skipped: {str(e).strip()}")
+                skipped.append(i)
                 continue
             job_id = job_id or jid
             rows = dedupe(rows + cell_rows)
@@ -651,6 +663,9 @@ def main():
     else:
         fields = LEAD
     print(f"✓ Done — {len(rows)} businesses (fields: {', '.join(fields)}).")
+    if skipped:
+        print(f"⚠ Incomplete: {len(skipped)} of {len(cells)} tiles failed (cells "
+              f"{', '.join(map(str, skipped))}), so those parts of the city are missing. Rerun later.")
 
     if a.email and "emails" in fields:  # on the raw rows, so --fields without website still works
         pages = "homepage, then contact and about pages" if a.deep_emails else "homepage only"

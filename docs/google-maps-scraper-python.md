@@ -35,6 +35,7 @@ On Windows, run the same commands with `py` or `python3`. Python is only the cli
 | `--socials` | Adds Instagram, Facebook and LinkedIn from each website. Slower. Zero AI tokens. |
 | `--tech` | Adds `fb_pixel`, `google_ads_tag`, `analytics` (yes/no, blank if the site did not load), `cms`, `mobile_friendly` and a 0-100 `intent_score`, and sorts by that score. Shares the homepage fetch with `--socials`. Zero AI tokens. |
 | `--keyword` | Adds an extra keyword to the same job. Repeatable. |
+| `--lang` | Two-letter language the engine asks Google for, e.g. `pt`, `es`, `de`. Default `en`. Use the market's language so category names come back in it. |
 | `--keywords-file` | Reads one keyword per line from a file. One job, one CSV. |
 
 The script creates the job, polls until it finishes, downloads the CSV and keeps the 8 lead fields. It prints a short preview and saves the full results to a file.
