@@ -134,7 +134,50 @@ class StuckJob(unittest.TestCase):
     def test_remote_engine_is_never_restarted(self):
         with mock.patch.object(scrape, "BASE", "http://scraper.example:8080"):
             self.assertFalse(scrape.engine_run_ended("2026-01-01T00:00:00Z"))
+            self.assertFalse(scrape.engine_idle())
             self.assertFalse(scrape.restart_engine())
+
+
+class PendingAndFailed(unittest.TestCase):
+    def run_statuses(self, statuses, idle=True):
+        """Drive run_job through a status sequence; count job creations and engine restarts."""
+        posts, it = [], iter(statuses)
+        def fake_req(method, path, body=None):
+            if method == "POST":
+                posts.append(body)
+                return 201, b'{"id":"j%d"}' % len(posts)
+            if path.endswith("/download"):
+                return 200, b"title\nA\n"
+            return 200, json.dumps({"Status": next(it)}).encode()
+        with mock.patch.object(scrape, "req", fake_req), mock.patch.object(scrape.time, "sleep") as slept, \
+             mock.patch.object(scrape, "poll_attempts", return_value=50), \
+             mock.patch.object(scrape, "engine_run_ended", return_value=False), \
+             mock.patch.object(scrape, "engine_idle", return_value=idle), \
+             mock.patch.object(scrape, "restart_engine", return_value=True) as restart, \
+             redirect_stdout(io.StringIO()):
+            job_id, rows = scrape.run_job({"max_time": 1})
+        return job_id, rows, len(posts), restart.call_count, slept
+
+    def test_pending_on_idle_engine_restarts_once(self):
+        # An earlier web UI job wedged the engine: our job never leaves "pending" until a restart.
+        statuses = ["pending"] * (scrape.PENDING_RESTART_AFTER + 3) + ["working", "ok"]
+        _, rows, posts, restarts, _ = self.run_statuses(statuses)
+        self.assertEqual((posts, restarts), (1, 1))
+        self.assertEqual([r["title"] for r in rows], ["A"])
+
+    def test_pending_on_busy_engine_waits(self):
+        # The engine is still running someone else's job: pending is normal, never restart.
+        statuses = ["pending"] * (scrape.PENDING_RESTART_AFTER + 3) + ["ok"]
+        _, _, posts, restarts, _ = self.run_statuses(statuses, idle=False)
+        self.assertEqual((posts, restarts), (1, 0))
+
+    def test_failed_job_is_retried_once(self):
+        job_id, rows, posts, _, slept = self.run_statuses(["failed", "working", "ok"])
+        self.assertEqual((job_id, posts), ("j2", 2))
+        slept.assert_any_call(scrape.FAILED_RETRY_WAIT)
+        self.assertEqual([r["title"] for r in rows], ["A"])
+        with self.assertRaises(RuntimeError):
+            self.run_statuses(["failed", "failed"])
 
     def test_restart_waits_until_engine_answers(self):
         # Right after `docker restart` the proxy answers 502 for a few seconds; the next grid tile
@@ -330,8 +373,8 @@ def _row(pid, lat="30.2"):
 
 CELL_ROWS = {"job-1": [_row("A"), _row("B"), _row("C")],
              "job-2": [_row("C"), _row("D")],
-             "job-3": None,  # this cell fails
-             "job-4": [_row("A"), _row("E"), _row("F", lat="40.0")]}  # F is outside the city box
+             "job-3": None, "job-4": None,  # this cell fails, and so does its one retry
+             "job-5": [_row("A"), _row("E"), _row("F", lat="40.0")]}  # F is outside the city box
 
 
 class MockEngine(BaseHTTPRequestHandler):
@@ -370,6 +413,7 @@ class MockEngine(BaseHTTPRequestHandler):
 
 class EndToEnd(unittest.TestCase):
     def test_grid_run(self):
+        MockEngine.created, MockEngine.polls = 0, {}
         srv = ThreadingHTTPServer(("127.0.0.1", 0), MockEngine)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         out = os.path.join(tempfile.mkdtemp(), "leads.csv")

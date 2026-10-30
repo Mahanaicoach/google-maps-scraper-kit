@@ -210,8 +210,42 @@ def recover_stuck_job(job_id):
         print("  If the next scrape stays \"pending\", run: docker restart " + ENGINE_CONTAINER)
     return rows
 
+PENDING_RESTART_AFTER = 6  # polls (~48 s) a new job may sit on "pending" before an idle engine is judged stuck
+FAILED_RETRY_WAIT = 60     # seconds before the one retry of a "failed" job (usually a passing Google block)
+
+
+def engine_idle(seconds=45):
+    """True if the local engine logged no scraper activity in the last `seconds`. A job that stays
+    "pending" on an idle engine means an earlier job (web UI, raw API) left it wedged
+    (gosom/google-maps-scraper#346); a busy engine is just finishing another job first."""
+    if not _local_docker():
+        return False
+    try:
+        out = subprocess.run(["docker", "logs", "--since", f"{seconds}s", ENGINE_CONTAINER],
+                             capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "scrapemate" not in out.stdout + out.stderr
+
+
+class JobFailed(RuntimeError):
+    pass
+
+
 def run_job(body):
-    """Create one engine job, poll it, download it -> (job_id, raw CSV rows). Raises RuntimeError."""
+    """Create one engine job, poll it, download it -> (job_id, raw CSV rows). A job the engine marks
+    "failed" (usually a passing Google block) is retried once after a pause. Raises RuntimeError."""
+    for attempt in (1, 2):
+        try:
+            return _run_job_once(body)
+        except JobFailed:
+            if attempt == 2:
+                raise RuntimeError("\n✗ Job failed twice. You may be rate-limited — wait or add proxies.")
+            print(f"\n⚠ Job failed; Google may be throttling this IP. Waiting {FAILED_RETRY_WAIT} s, then retrying once…")
+            time.sleep(FAILED_RETRY_WAIT)
+
+
+def _run_job_once(body):
     since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     try:
         _, raw = req("POST", "/api/v1/jobs", body)
@@ -224,19 +258,31 @@ def run_job(body):
 
     attempts = poll_attempts(body.get("max_time"))
     print(f"▶ Polling (up to ~{attempts * POLL_EVERY // 60} min)…")
-    status, ended = None, 0
+    status, ended, pending = None, 0, 0
     for i in range(attempts):
         _, raw = req("GET", f"/api/v1/jobs/{job_id}")
         status = json.loads(raw).get("Status")
-        print(f"\r  status: {str(status):<10} (attempt {i + 1})", end="", flush=True)
+        progress = ""
+        if status == "working":  # the engine writes rows as it goes, so the download shows progress
+            try:
+                progress = f", {len(download_rows(job_id))} rows so far"
+            except Exception:
+                pass
+        print(f"\r  status: {str(status):<10} (attempt {i + 1}{progress})", end="", flush=True)
         if status == "ok":
             print(); break
         if status == "failed":
-            raise RuntimeError("\n✗ Job failed. If this keeps happening you may be rate-limited — wait or add proxies.")
+            raise JobFailed("job failed")
         if status == "working" and engine_run_ended(since):
             ended += 1
             if ended > 2:  # the status normally flips within seconds of the run ending
                 return job_id, recover_stuck_job(job_id)
+        if status == "pending":
+            pending += 1
+            if pending == PENDING_RESTART_AFTER and engine_idle():
+                print("\n⚠ The engine has not started this job and shows no activity: an earlier job left it "
+                      "stuck (gosom/google-maps-scraper#346). Restarting it; it picks the pending job up itself.")
+                restart_engine()
         time.sleep(POLL_EVERY)
     else:
         # The engine writes rows as it goes, and v1.18.x can leave a finished job stuck on
@@ -273,12 +319,7 @@ def collect_keywords(a):
                 kws.extend(line.strip() for line in f if line.strip() and not line.startswith("#"))
         except OSError as e:
             sys.exit(f"✗ Cannot read --keywords-file {a.keywords_file}: {e.strerror}")
-    # de-dupe, keep order
-    seen, out = set(), []
-    for k in kws:
-        if k not in seen:
-            seen.add(k); out.append(k)
-    return out
+    return list(dict.fromkeys(kws))  # de-dupe, keep order
 
 
 # ── Optional social enrichment (Instagram / Facebook / LinkedIn) ──────────────
@@ -389,20 +430,22 @@ def _find_socials(html):
             break
     return out
 
-def enrich_sites(results, find, fields, label, workers=None):
-    """Merge find(homepage html) into every lead that has a website. Zero LLM tokens."""
-    for r in results:                       # make sure every row has the keys
-        for k in fields:
-            r.setdefault(k, "")
-    todo = [r for r in results if r.get("website")]
+def _each_site(todo, work, label, workers=None):
+    """Run work(row) over the rows, SITE_WORKERS at a time, with one progress line."""
     done = 0
-    def work(r):
-        r.update(find(_fetch_cached(r["website"])))
     with ThreadPoolExecutor(max_workers=workers or SITE_WORKERS) as ex:
         for _ in ex.map(work, todo):
             done += 1
             print(f"\r  {label}: {done}/{len(todo)} sites checked", end="", flush=True)
     print()
+
+def enrich_sites(results, find, fields, label, workers=None):
+    """Merge find(homepage html) into every lead that has a website. Zero LLM tokens."""
+    for r in results:                       # make sure every row has the keys
+        for k in fields:
+            r.setdefault(k, "")
+    _each_site([r for r in results if r.get("website")],
+               lambda r: r.update(find(_fetch_cached(r["website"]))), label, workers)
 
 
 # ── Optional ad and tech signals (--tech): who already spends on marketing ──────
@@ -538,8 +581,6 @@ def contact_links(html, base_url):
 
 def enrich_emails(results, deep=True, workers=None):
     """Fill empty `emails` from the homepage, then (deep) up to 3 contact/about pages. Zero LLM tokens."""
-    todo = [r for r in results if r.get("website") and not r.get("emails")]
-    done = 0
     def work(r):
         site = r["website"]
         home = _fetch_cached(site)
@@ -548,11 +589,7 @@ def enrich_emails(results, deep=True, workers=None):
             pages = "\n".join(_fetch_html(u, timeout=8) for u in contact_links(home, site))
             found = extract_emails(pages, site)
         r["emails"] = ", ".join(found)
-    with ThreadPoolExecutor(max_workers=workers or SITE_WORKERS) as ex:
-        for _ in ex.map(work, todo):
-            done += 1
-            print(f"\r  emails: {done}/{len(todo)} sites checked", end="", flush=True)
-    print()
+    _each_site([r for r in results if r.get("website") and not r.get("emails")], work, "emails", workers)
 
 
 def main():
@@ -573,8 +610,7 @@ def main():
                          "(default: en; use the local language, e.g. pt, es, de)")
     # Emails are ON by default (they're the most valuable lead field): the script crawls each
     # business website after the Maps job. --no-email skips the crawl.
-    ap.add_argument("--email", dest="email", action="store_true", default=True, help=argparse.SUPPRESS)
-    ap.add_argument("--no-email", dest="email", action="store_false",
+    ap.add_argument("--no-email", dest="email", action="store_false", default=True,
                     help="skip the website crawl for emails (emails are on by default)")
     ap.add_argument("--no-deep-emails", dest="deep_emails", action="store_false",
                     help="check homepages only, not contact and about pages")

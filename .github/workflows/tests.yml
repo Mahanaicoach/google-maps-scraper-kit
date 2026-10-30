@@ -1,0 +1,18 @@
+# Offline checks only: no Docker engine, no Google, no network beyond the GitHub runner itself.
+name: tests
+on:
+  push:
+    branches: [master]
+  pull_request:
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python3 scripts/test_scrape.py
+      - run: bash -n scripts/scrape.sh
+      - run: python3 -c "import json; json.load(open('.claude/settings.json'))"
+      - run: docker compose config -q
