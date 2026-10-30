@@ -1,0 +1,17 @@
+{
+  "_comment": "Premium sponsors. The web UI's sponsor box shows the ones with \"ui\": true, in this order, four at most; set \"ui\": false to keep a sponsor in the README only. Edit this file and push: every installed copy's web UI reads it from GitHub in the browser (a static file, cached for a day, no tracking). Fields: name (the link text), url (https only), tagline (one short line), ui (true or false).",
+  "sponsors": [
+    {
+      "name": "Swiftproxy",
+      "url": "https://www.swiftproxy.net/?ref=googlemapsscraperkit",
+      "tagline": "residential proxies for Google Maps scraping, code PROXY90 for 10% off",
+      "ui": true
+    },
+    {
+      "name": "SerpApi",
+      "url": "https://serpapi.com/maps-scraper-kit-github",
+      "tagline": "Google Maps API in JSON and Markdown",
+      "ui": true
+    }
+  ]
+}

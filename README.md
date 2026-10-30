@@ -55,7 +55,7 @@ Access Google Maps listings, reviews, directions, and other public search data w
 Maps API, delivered as clean, structured JSON and Markdown.
 [**Try SerpApi →**](https://serpapi.com/maps-scraper-kit-github)
 
-<p align="center"><sub><a href="https://github.com/sponsors/Mahanaicoach">Become a sponsor</a></sub></p>
+<p align="center"><sub><a href="https://github.com/sponsors/Mahanaicoach">Become a sponsor</a> · Sponsors also appear in the sponsor box of every installed copy's web UI, read from <a href="assets/sponsors/sponsors.json">assets/sponsors/sponsors.json</a>.</sub></p>
 
 ---
 
@@ -198,8 +198,9 @@ One keyword per line. One job. One CSV.
 - **The web UI is the engine's own page.** It downloads the raw 36-column CSV and uses the engine's
   slower email option, whose `emails` column can keep junk such as `sentry.wixpress.com` and image
   names. For a clean outreach list, use the scripts. The page also loads its scripts,
-  fonts and map tiles from public CDNs and OpenStreetMap, so it needs internet. Scraped data stays on
-  your machine.
+  fonts and map tiles from public CDNs and OpenStreetMap, and its sponsor box from this repo on
+  GitHub (`assets/sponsors/sponsors.json`, a static file, no tracking), so it needs internet.
+  Scraped data stays on your machine.
 - **Apple Silicon runs natively from v1.18.0 on.** The image publishes arm64 builds, so M-series
   Macs need no emulation. Older tags are amd64 only and run under emulation.
 
