@@ -68,6 +68,49 @@ class InBbox(unittest.TestCase):
         self.assertTrue(scrape.in_bbox({}, BBOX))
 
 
+class PollAttempts(unittest.TestCase):
+    def test_follows_max_time(self):
+        # The budget tracks max_time instead of the old fixed 120 attempts (960s), which
+        # gave up on a batch the engine was still working through.
+        self.assertEqual(scrape.poll_attempts(600), (600 + 120) // 8)      # 90
+        self.assertEqual(scrape.poll_attempts(3600), (3600 + 120) // 8)    # 465, was 120
+        self.assertGreater(scrape.poll_attempts(3600), 120)
+
+    def test_floors_at_engine_minimum(self):
+        # The engine runs a job for at least 180s however small max_time is, so waiting
+        # only max_time would abandon it.
+        for tiny in (1, 60, 179, 180):
+            self.assertEqual(scrape.poll_attempts(tiny), (180 + 120) // 8)
+        self.assertEqual(scrape.poll_attempts(0), (180 + 120) // 8)
+        self.assertEqual(scrape.poll_attempts(None), (180 + 120) // 8)
+
+    def test_ceiling_and_never_zero(self):
+        self.assertEqual(scrape.poll_attempts(10 ** 9), 7200 // 8)         # clamped at 2h
+        self.assertGreaterEqual(scrape.poll_attempts(-5), 1)
+
+
+class StuckJob(unittest.TestCase):
+    """A job the engine never flips to "ok" (gosom/google-maps-scraper#346) keeps its written rows."""
+    def run_stuck(self, csv_body):
+        def fake_req(method, path, body=None):
+            if method == "POST":
+                return 201, b'{"id":"stuck"}'
+            if path.endswith("/download"):
+                return 200, csv_body
+            return 200, b'{"Status":"working"}'
+        with mock.patch.object(scrape, "req", fake_req), mock.patch.object(scrape.time, "sleep"), \
+             mock.patch.object(scrape, "poll_attempts", return_value=2), redirect_stdout(io.StringIO()):
+            return scrape.run_job({"max_time": 1})
+
+    def test_keeps_written_rows(self):
+        _, rows = self.run_stuck(b"title,phone\nA,1\nB,2\n")
+        self.assertEqual([r["title"] for r in rows], ["A", "B"])
+
+    def test_no_rows_still_errors(self):
+        with self.assertRaises(RuntimeError):
+            self.run_stuck(b"")
+
+
 class ExtractEmails(unittest.TestCase):
     def test_mailto_regex_junk_preference_cap(self):
         html = """
@@ -83,6 +126,34 @@ class ExtractEmails(unittest.TestCase):
     def test_empty(self):
         self.assertEqual(scrape.extract_emails("", "x.com"), [])
         self.assertEqual(scrape.extract_emails("no emails here", "x.com"), [])
+
+
+class CleanEngineEmails(unittest.TestCase):
+    def test_drops_placeholders_keeps_real(self):
+        # The left column is what the engine actually returned on a depth 1 Austin scrape.
+        rows = [{"emails": "user@domain.com"},
+                {"emails": "user@domain.com, hello@funkysolcoffee.com"},
+                {"emails": "orders@desnudo.com, example@gmail.com, u003eorders@desnudo.com"},
+                {"emails": "office@afugacoffee.com"},
+                {"emails": ""}]
+        changed = scrape.clean_engine_emails(rows)
+        self.assertEqual([r["emails"] for r in rows],
+                         ["", "hello@funkysolcoffee.com", "orders@desnudo.com",
+                          "office@afugacoffee.com", ""])
+        self.assertEqual(changed, 3)  # untouched rows are not counted
+
+    def test_missing_column_is_not_an_error(self):
+        rows = [{"title": "no emails field"}]
+        self.assertEqual(scrape.clean_engine_emails(rows), 0)
+
+
+class IsRealEmail(unittest.TestCase):
+    def test_placeholders_and_vendors(self):
+        for e in ("user@domain.com", "example@gmail.com", "youremail@yourdomain.com",
+                  "name@company.org", "a@b.wixpress.com", "logo@2x.png"):
+            self.assertFalse(scrape.is_real_email(e), e)
+        for e in ("info@acmeplumbing.com", "owner@gmail.com", "hello@funkysol.co.uk"):
+            self.assertTrue(scrape.is_real_email(e), e)
 
 
 class ContactLinks(unittest.TestCase):

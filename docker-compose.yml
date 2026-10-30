@@ -10,17 +10,24 @@ services:
     # Bumped from v1.15.0 on 2026-09-23: that build's embedded Playwright driver (1.57.0)
     # returns 404 from Microsoft's CDN, which purges old driver builds. v1.18.1 ships a driver
     # version that is still hosted.
-    # The published image is linux/amd64. On Apple Silicon (M1/M2/M3) it runs under emulation.
-    # If the container won't start there, uncomment the 'platform' line below. Default: commented out.
+    # v1.18.1 publishes both amd64 and arm64, so Apple Silicon (M1/M2/M3) runs it natively.
+    # Only older tags are amd64 and need the 'platform' line below. Default: commented out.
     image: gosom/google-maps-scraper:v1.18.1
     # platform: linux/amd64
     container_name: gmaps-scraper
     restart: unless-stopped
-    command: ["-web", "-data-folder", "/gmapsdata"]
+    # -c: parallel workers. The engine's own default resolves to 1 in this image, so a depth 5 job
+    # with emails visits every listing and website one at a time (~8 min). Most of that is business
+    # websites, not Google. Lower it if Google starts throttling you; raise it with proxies.
+    command: ["-web", "-data-folder", "/gmapsdata", "-c", "4"]
     # No published port: the engine is reached only through the ui service below.
     volumes:
-      - gmaps_data:/gmapsdata    # job results; they persist until you delete the job or the volume
-      - gmaps_cache:/opt         # Playwright browser cache, so restarts skip the download
+      # Only job results. Do not mount a named volume over /opt: the image already ships Chromium at
+      # /opt/browsers and the Playwright driver at /opt/ms-playwright-go, so a volume there shadows
+      # both, and after an image bump it keeps serving the OLD browsers from the volume — which is
+      # how the driver-mismatch failures mentioned above come back. Restarts download nothing
+      # either way: the browsers are baked into the image.
+      - gmaps_data:/gmapsdata
 
   # Serves the engine's UI and API with the kit's own GitHub and sponsor links (ui-branding.conf).
   ui:
@@ -37,4 +44,3 @@ services:
 
 volumes:
   gmaps_data:
-  gmaps_cache:

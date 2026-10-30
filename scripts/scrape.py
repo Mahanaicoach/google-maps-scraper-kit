@@ -26,6 +26,16 @@ Notes:
 import argparse, csv, functools, io, json, math, os, re, sys, time, urllib.request, urllib.parse, urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
+# The status lines below use ▶ ✓ ℹ •, and every file this script writes can hold accented business
+# names. Windows picks cp1252 for both, so without this the first print raises UnicodeEncodeError
+# before any work happens, and a CSV of scraped names lands in cp1252 instead of UTF-8.
+# errors="replace" keeps a terminal that still cannot render a glyph from killing a finished run.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):   # not a reconfigurable stream (pytest capture, a pipe wrapper)
+        pass
+
 ENV_KEYS = ("SCRAPER_BASE_URL", "SCRAPER_PORT", "SCRAPER_API_KEY")
 
 
@@ -49,7 +59,24 @@ KEY = os.environ.get("SCRAPER_API_KEY", "")
 # The 8 lead fields: what you use to contact and qualify a lead.
 # Everything else (geo coordinates, IDs, hours, images, review blobs) is dropped by default.
 LEAD = ["title", "phone", "emails", "website", "category", "address", "review_rating", "review_count"]
-UA = "google-maps-scraper-kit/1.1 (https://github.com/Mahanaicoach/google-maps-scraper-kit)"
+UA = "google-maps-scraper-kit/1.2 (https://github.com/Mahanaicoach/google-maps-scraper-kit)"
+
+POLL_EVERY = 8            # seconds between status checks
+POLL_GRACE = 120          # the engine still has to flush results and flip the status
+POLL_CEILING = 7200       # never wait longer than 2h, whatever --max-time asked for
+ENGINE_MIN_RUNTIME = 180  # the engine floors anything below this (runner/webrunner)
+
+
+def poll_attempts(max_time):
+    """How many status checks to make before giving up on a job.
+
+    Derived from the job's own max_time, because that is how long the engine is allowed to
+    work: waiting any less abandons a job that is still running normally. The engine floors
+    max_time at ENGINE_MIN_RUNTIME, so even a tiny --max-time needs that much patience, and
+    POLL_CEILING stops an absurd value from parking the script for a day."""
+    engine_runtime = max(ENGINE_MIN_RUNTIME, int(max_time or 0))
+    budget = min(POLL_CEILING, engine_runtime + POLL_GRACE)
+    return max(1, budget // POLL_EVERY)
 
 
 def req(method, path, body=None):
@@ -136,9 +163,10 @@ def run_job(body):
         raise RuntimeError("✗ No job id returned.")
     print(f"  job id: {job_id}")
 
-    print("▶ Polling…")
+    attempts = poll_attempts(body.get("max_time"))
+    print(f"▶ Polling (up to ~{attempts * POLL_EVERY // 60} min)…")
     status = None
-    for i in range(120):
+    for i in range(attempts):
         _, raw = req("GET", f"/api/v1/jobs/{job_id}")
         status = json.loads(raw).get("Status")
         print(f"\r  status: {str(status):<10} (attempt {i + 1})", end="", flush=True)
@@ -146,12 +174,28 @@ def run_job(body):
             print(); break
         if status == "failed":
             raise RuntimeError("\n✗ Job failed. If this keeps happening you may be rate-limited — wait or add proxies.")
-        time.sleep(8)
+        time.sleep(POLL_EVERY)
     else:
-        raise RuntimeError("\n✗ Timed out.")
+        # The engine writes rows as it goes, and v1.18.x can leave a finished job stuck on
+        # "working" (gosom/google-maps-scraper#346), so take whatever is on disk.
+        rows = download_rows(job_id)
+        if not rows:
+            raise RuntimeError(
+                f"\n✗ Gave up waiting after ~{attempts * POLL_EVERY // 60} min with no rows yet. The "
+                f"engine keeps the job, so check it later:\n"
+                f"    curl {BASE}/api/v1/jobs/{job_id}\n"
+                f"  and once its Status is \"ok\", download the CSV with\n"
+                f"    curl -o results.csv {BASE}/api/v1/jobs/{job_id}/download")
+        print(f"\n⚠ Job still \"{status}\" after ~{attempts * POLL_EVERY // 60} min; "
+              f"keeping the {len(rows)} rows it has written.")
+        return job_id, rows
 
+    return job_id, download_rows(job_id)
+
+
+def download_rows(job_id):
     _, raw = req("GET", f"/api/v1/jobs/{job_id}/download")
-    return job_id, list(csv.DictReader(io.StringIO(raw.decode("utf-8", "replace"))))
+    return list(csv.DictReader(io.StringIO(raw.decode("utf-8", "replace"))))
 
 
 def collect_keywords(a):
@@ -236,7 +280,11 @@ HREF_RE = re.compile(r"<a\s[^>]*?href\s*=\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</a>",
 _JUNK_EXT = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".css", ".js")
 _JUNK_DOMAIN = ("example", "sentry", "wixpress", "wix.com", "godaddy", "squarespace", "wordpress",
                 "domain.com", "email.com", "yourdomain", "schema.org", "w3.org", "sentry.io")
-_JUNK_LOCAL = {"name", "email", "user", "you", "someone"}
+_JUNK_LOCAL = {"name", "email", "user", "you", "someone", "example", "username",
+               "youremail", "yourname", "firstname", "lastname", "sample"}
+# A JSON-escaped <, >, ", ' or & glued to the address (">orders@x.com" in page source),
+# which the regex reads as part of the local part: u003eorders@x.com.
+_ESCAPE_PREFIX = re.compile(r"^(?:u00(?:3c|3e|22|27|26))+")
 
 def _host(url):
     if not url.startswith(("http://", "https://")):
@@ -244,15 +292,40 @@ def _host(url):
     h = (urllib.parse.urlparse(url).hostname or "").lower()
     return h[4:] if h.startswith("www.") else h
 
+def is_real_email(e):
+    """False for anything not worth sending to: a template placeholder (user@domain.com,
+    example@gmail.com), a vendor/boilerplate domain, or an image path that parsed as an address."""
+    local, _, dom = e.rpartition("@")
+    if not EMAIL_RE.fullmatch(e) or e.endswith(_JUNK_EXT):
+        return False
+    return local not in _JUNK_LOCAL and not any(j in dom for j in _JUNK_DOMAIN)
+
+
+def clean_engine_emails(results):
+    """Re-filter the engine's own `emails` column through is_real_email.
+
+    The engine copies whatever it finds on the page, placeholders included, and until now only the
+    addresses this script scraped itself were filtered. That let user@domain.com through and counted
+    it as a hit, so the found rate printed below overstated how many leads were reachable.
+    Returns the number of rows changed; a row left empty here still gets the deep pass."""
+    changed = 0
+    for r in results:
+        raw = [e.strip().lower() for e in (r.get("emails") or "").split(",") if e.strip()]
+        fixed = (_ESCAPE_PREFIX.sub("", e) for e in raw)
+        kept = list(dict.fromkeys(e for e in fixed if is_real_email(e)))
+        if kept != raw:
+            r["emails"] = ", ".join(kept)
+            changed += 1
+    return changed
+
+
 def extract_emails(html, site_host):
     """Emails from mailto: links and plain text, junk dropped, site-domain first, max 3."""
     site = _host(site_host or "")
     found = []
     for e in MAILTO_RE.findall(html or "") + EMAIL_RE.findall(html or ""):
-        e = urllib.parse.unquote(e).strip().lower()
-        local, _, dom = e.rpartition("@")
-        if (not EMAIL_RE.fullmatch(e) or e.endswith(_JUNK_EXT) or local in _JUNK_LOCAL
-                or any(j in dom for j in _JUNK_DOMAIN) or e in found):
+        e = _ESCAPE_PREFIX.sub("", urllib.parse.unquote(e).strip().lower())
+        if not is_real_email(e) or e in found:
             continue
         found.append(e)
     on_site = lambda e: site and (e.endswith("@" + site) or e.endswith("." + site))
@@ -303,6 +376,13 @@ def main():
     ap.add_argument("--keywords-file", help="file with one keyword per line (batch)")
     ap.add_argument("--city", help="city/place to auto-geocode for lat/lon")
     ap.add_argument("--depth", type=int, default=5)
+    # The engine passes this to Google as the interface language, which decides the language of
+    # the category names it returns (and nudges which listings come back). It has to match the
+    # market you are scraping: "en" on a Brazilian city labels every row "Bakery" instead of
+    # "Padaria". The engine validates it as exactly 2 characters.
+    ap.add_argument("--lang", default="en", metavar="XX",
+                    help="interface language the engine asks Google for, 2 letters "
+                         "(default: en; use the local language, e.g. pt, es, de)")
     # Emails are ON by default (they're the most valuable lead field). Visits each business
     # website to find an address — a bit slower. Use --no-email to skip for a fast run.
     ap.add_argument("--email", dest="email", action="store_true", default=True, help=argparse.SUPPRESS)
@@ -313,7 +393,9 @@ def main():
     ap.add_argument("--grid", type=int, metavar="N",
                     help="split the --city area into N x N map tiles, one job each, deduped "
                          "(breaks Google's ~120 per search cap; max 10)")
-    ap.add_argument("--max-time", type=int, default=600, help="job time limit in SECONDS")
+    ap.add_argument("--max-time", type=int, default=600,
+                    help="job time limit in SECONDS; the script waits that long for the "
+                         "engine, plus a short grace (default: 600)")
     ap.add_argument("--out", default=None, help="output file path (default: results-<id>.csv). "
                     "The extension picks the format: .csv (default) or .json")
     ap.add_argument("--json", action="store_true", help="write JSON instead of the default CSV")
@@ -326,6 +408,9 @@ def main():
     keywords = collect_keywords(a)
     if not keywords:
         sys.exit("✗ No keywords. Pass a keyword, --keyword, or --keywords-file.")
+
+    if len(a.lang) != 2 or not a.lang.isalpha():
+        sys.exit(f"✗ --lang must be a 2-letter code (got {a.lang!r}); the engine rejects anything else.")
 
     if a.grid is not None:
         if not a.city:
@@ -370,7 +455,7 @@ def main():
     except Exception as e:
         sys.exit(f"✗ Scraper not reachable at {BASE} — run 'docker compose up -d' first.\n  ({e})")
 
-    body = {"name": "scrape-py", "keywords": keywords, "lang": "en", "zoom": 15,
+    body = {"name": "scrape-py", "keywords": keywords, "lang": a.lang, "zoom": 15,
             "lat": str(lat), "lon": str(lon), "fast_mode": False, "radius": 10000,
             "depth": a.depth, "email": a.email, "max_time": a.max_time}
     if not a.grid:
@@ -412,6 +497,11 @@ def main():
     results = [{k: r.get(k, "") for k in fields} for r in rows]
     print(f"✓ Done — {len(results)} businesses (fields: {', '.join(fields)}).")
 
+    if "emails" in fields:
+        dropped = clean_engine_emails(results)
+        if dropped:
+            print(f"  dropped placeholder emails (user@domain.com and the like) on {dropped} row(s)")
+
     if a.email and a.deep_emails and "emails" in fields:
         print("▶ Deep email pass: checking contact/about pages for rows with no email…")
         engine = sum(1 for r in results if r.get("emails"))
@@ -434,10 +524,10 @@ def main():
     as_json = a.json or (a.out and a.out.lower().endswith(".json"))
     out = a.out or f"results-{job_id[:8]}.{'json' if as_json else 'csv'}"
     if as_json:
-        with open(out, "w") as f:
+        with open(out, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
     else:
-        with open(out, "w", newline="") as f:
+        with open(out, "w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=fields)
             w.writeheader()
             w.writerows(results)
