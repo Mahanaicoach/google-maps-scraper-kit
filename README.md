@@ -91,7 +91,7 @@ python3 scripts/scrape.py "dentists in Denver CO" --city "Denver, CO" --grid 3
 | Example Roasters | +1 512-555-0101 | hello@example.com | example.com | Coffee shop | 100 Congress Ave, Austin, TX | 4.7 | 812 |
 | Sample Espresso Bar | +1 512-555-0102 | info@example.org | example.org | Cafe | 200 S Lamar Blvd, Austin, TX | 4.5 | 356 |
 
-`--socials` adds `instagram`, `facebook` and `linkedin` columns. `--full` keeps all ~34 raw fields,
+`--socials` adds `instagram`, `facebook` and `linkedin` columns. `--full` keeps all 36 raw fields,
 including opening hours, coordinates, price range and reviews.
 
 Full walkthrough, platform notes and troubleshooting: [SETUP.md](SETUP.md).
@@ -140,7 +140,7 @@ scrapes Google Maps business listings only. It does not scrape social platforms 
 
 | | |
 |---|---|
-| **8 lead fields by default** | name, phone, email, website, category, address, rating, review count. The engine captures ~34 raw fields; `--full` keeps them all. |
+| **8 lead fields by default** | name, phone, email, website, category, address, rating, review count. The engine captures 36 raw fields; `--full` keeps them all. |
 | **Email extraction, on by default** | Visits each business website and pulls published contact emails. A second pass checks the contact and about pages of rows still missing one, then prints your found rate. |
 | **Beyond the 120 cap** | `--grid 3` splits the city into 3 x 3 map tiles, runs them one at a time and dedupes on `place_id`. |
 | **Social enrichment** | `--socials` finds Instagram, Facebook and LinkedIn profiles in code (HTTP + regex). Zero AI tokens. |
@@ -175,8 +175,8 @@ One keyword per line. One job. One CSV.
   rows, not all of them.
 - **Rate limits are real.** Heavy use without proxies can get your IP temporarily rate-limited by
   Google for minutes to hours. Your Google account is not affected. See [Responsible use](#responsible-use).
-- **Apple Silicon runs the engine under amd64 emulation.** It works. It is slower than native.
-  [SETUP.md](SETUP.md) has the native fallback.
+- **Apple Silicon runs natively from v1.18.0 on.** The image publishes arm64 builds, so M-series
+  Macs need no emulation. Older tags are amd64 only and run under emulation.
 
 ---
 
@@ -236,7 +236,7 @@ Skills-compatible tool. The `/scrape` slash commands are Claude Code only.
 
 **What data do I get for each business?**
 Name, phone, email, website, category, address, rating and review count by default. Add `--socials`
-for Instagram, Facebook and LinkedIn, or `--full` for all ~34 raw fields.
+for Instagram, Facebook and LinkedIn, or `--full` for all 36 raw fields.
 
 **How many leads can I scrape?**
 Up to about 120 per search. Add `--grid 3` to split the city into 9 map tiles and get past that cap,
@@ -249,7 +249,8 @@ Bash. [SETUP.md](SETUP.md) covers the Apple Silicon note.
 
 **Is scraping Google Maps legal?**
 It is against Google's Terms of Service, and phones and emails are personal data. Read
-[Responsible use](#responsible-use) and follow GDPR, CCPA and CAN-SPAM. This is not legal advice.
+[Responsible use](#responsible-use) and follow the law where the data is used: GDPR and CCPA
+abroad, and LGPD in Brazil. This is not legal advice.
 
 ---
 
@@ -266,7 +267,8 @@ your IP **temporarily rate-limited** (minutes to hours). Your Google account is 
   "proxies": ["socks5://user:pass@host:port", "http://host2:port2"]
   ```
 - Treat output as leads to verify, not a dataset to resell. Phones and emails are personal data:
-  follow GDPR, CCPA and CAN-SPAM.
+  follow GDPR, CCPA, CAN-SPAM and, in Brazil, LGPD — including the lawful basis, the purpose and an
+  opt-out before any outreach.
 
 For large requests, the agent flags the risk and suggests proxies, then proceeds. It refuses only
 clearly abusive use.

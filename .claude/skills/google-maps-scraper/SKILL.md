@@ -1,6 +1,6 @@
 ---
 name: google-maps-scraper
-description: Google Maps scraper for lead generation. Turns a business type and a place into a clean CSV of local businesses by driving the gosom/google-maps-scraper engine, running locally in Docker as a REST API on localhost:8080. Returns 8 lead fields by default (name, phone, email, website, category, address, rating and review count), plus optional Instagram, Facebook and LinkedIn profiles or all ~34 raw fields. Use when the user wants a lead list, "a list of [businesses] in [place]", local business data, contact enrichment for places (emails, phones, socials), or a whole-city run past Google's ~120 results per search. Do not use for scraping Instagram, TikTok, YouTube, X or any other social media platform directly.
+description: Google Maps scraper for lead generation. Turns a business type and a place into a clean CSV of local businesses by driving the gosom/google-maps-scraper engine, running locally in Docker as a REST API on localhost:8080. Returns 8 lead fields by default (name, phone, email, website, category, address, rating and review count), plus optional Instagram, Facebook and LinkedIn profiles or all 36 raw fields. Use when the user wants a lead list, "a list of [businesses] in [place]", local business data, contact enrichment for places (emails, phones, socials), or a whole-city run past Google's ~120 results per search. Do not use for scraping Instagram, TikTok, YouTube, X or any other social media platform directly.
 ---
 
 # Google Maps Scraper
@@ -11,7 +11,7 @@ Turn a business type and a location into clean lead rows by driving the local en
 The engine (gosom/google-maps-scraper) runs as a local Docker container with a REST API at
 `http://localhost:8080`. It has no auth, so it stays bound to localhost. A scrape is an **async job**:
 create it, poll until it is done, then download a CSV. One job can run many keywords. Each result has
-up to **34 raw fields**.
+up to **36 raw fields**.
 
 ## Step 0: Check the engine is running
 ```bash
@@ -71,13 +71,14 @@ done
 ```bash
 curl -s "http://localhost:8080/api/v1/jobs/$ID/download" -o results.csv
 ```
-CSV columns (34): `input_id, link, title, category, address, open_hours, popular_times, website, phone,
+CSV columns (36): `input_id, link, title, category, address, open_hours, popular_times, website, phone,
 plus_code, review_count, review_rating, reviews_per_rating, latitude, longitude, cid, status,
-descriptions, reviews_link, thumbnail, timezone, price_range, data_id, place_id, images, reservations,
-order_online, menu, owner, complete_address, about, user_reviews, user_reviews_extended, emails`.
+descriptions, reviews_link, thumbnail, timezone, price_range, data_id, street_view_url, place_id,
+images, reservations, order_online, menu, owner, complete_address, credit_cards_accepted, about,
+user_reviews, user_reviews_extended, emails`. Multiple emails arrive in one cell, joined by `, `.
 
 ### Return only the 8 lead fields (default)
-The raw CSV has 34 columns and most are noise for outreach. **By default, return only the 8 lead
+The raw CSV has 36 columns and most are noise for outreach. **By default, return only the 8 lead
 fields**, the data used to contact and qualify a lead, and **drop everything else**:
 
 > `title` (name), `phone`, `emails`, `website`, `category`, `address`, `review_rating`, `review_count`
@@ -91,7 +92,7 @@ outreach), `link`, `plus_code`, `cid`, `data_id`, `place_id`, `open_hours`, `pop
 `scripts/scrape.py` already returns exactly the 8 lead fields. Use `--full` to keep all columns, or
 `--fields "a,b,c"` to choose your own. It **saves a CSV file by default** (`results-<id>.csv`); pass
 `--json` for JSON. If you call the API directly, **strip to the lead fields yourself** before
-presenting. Never dump the full 34-column row at the user.
+presenting. Never dump the full 36-column row at the user.
 
 ### Social profiles: always ask the user (Instagram, Facebook, LinkedIn)
 Google Maps has no social links, so socials are an enrichment step: visit each business `website` and
