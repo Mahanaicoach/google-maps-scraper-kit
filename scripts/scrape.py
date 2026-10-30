@@ -361,6 +361,13 @@ def main():
     ap.add_argument("--keywords-file", help="file with one keyword per line (batch)")
     ap.add_argument("--city", help="city/place to auto-geocode for lat/lon")
     ap.add_argument("--depth", type=int, default=5)
+    # The engine passes this to Google as the interface language, which decides the language of
+    # the category names it returns (and nudges which listings come back). It has to match the
+    # market you are scraping: "en" on a Brazilian city labels every row "Bakery" instead of
+    # "Padaria". The engine validates it as exactly 2 characters.
+    ap.add_argument("--lang", default="en", metavar="XX",
+                    help="interface language the engine asks Google for, 2 letters "
+                         "(default: en; use the local language, e.g. pt, es, de)")
     # Emails are ON by default (they're the most valuable lead field). Visits each business
     # website to find an address — a bit slower. Use --no-email to skip for a fast run.
     ap.add_argument("--email", dest="email", action="store_true", default=True, help=argparse.SUPPRESS)
@@ -386,6 +393,9 @@ def main():
     keywords = collect_keywords(a)
     if not keywords:
         sys.exit("✗ No keywords. Pass a keyword, --keyword, or --keywords-file.")
+
+    if len(a.lang) != 2 or not a.lang.isalpha():
+        sys.exit(f"✗ --lang must be a 2-letter code (got {a.lang!r}); the engine rejects anything else.")
 
     if a.grid is not None:
         if not a.city:
@@ -430,7 +440,7 @@ def main():
     except Exception as e:
         sys.exit(f"✗ Scraper not reachable at {BASE} — run 'docker compose up -d' first.\n  ({e})")
 
-    body = {"name": "scrape-py", "keywords": keywords, "lang": "en", "zoom": 15,
+    body = {"name": "scrape-py", "keywords": keywords, "lang": a.lang, "zoom": 15,
             "lat": str(lat), "lon": str(lon), "fast_mode": False, "radius": 10000,
             "depth": a.depth, "email": a.email, "max_time": a.max_time}
     if not a.grid:
