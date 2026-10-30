@@ -688,6 +688,28 @@ class EnvFile(unittest.TestCase):
                 if v is not None:
                     os.environ[k] = v
 
+    def test_repeated_key_takes_the_last_value_like_compose(self):
+        # Uncommenting .env.example's second-copy block leaves a second SCRAPER_PORT line below the
+        # default one. Compose takes the last value, so the scripts must too, or they create jobs
+        # on the other copy's engine.
+        d = tempfile.mkdtemp(); os.mkdir(os.path.join(d, "scripts"))
+        with open(os.path.join(d, ".env"), "w") as f:
+            f.write("SCRAPER_PORT=8080\nCOMPOSE_PROJECT_NAME=x\nSCRAPER_PORT=8081\n")
+        saved = {k: os.environ.pop(k, None) for k in scrape.ENV_KEYS}
+        try:
+            with mock.patch.object(scrape, "__file__", os.path.join(d, "scripts", "scrape.py")):
+                scrape.load_env_file()
+            self.assertEqual(os.environ.get("SCRAPER_PORT"), "8081")
+            os.environ["SCRAPER_PORT"] = "9000"  # a real environment variable still beats the file
+            with mock.patch.object(scrape, "__file__", os.path.join(d, "scripts", "scrape.py")):
+                scrape.load_env_file()
+            self.assertEqual(os.environ.get("SCRAPER_PORT"), "9000")
+        finally:
+            for k, v in saved.items():
+                os.environ.pop(k, None)
+                if v is not None:
+                    os.environ[k] = v
+
     def test_base_url_has_no_trailing_slash(self):
         # "http://host/" + "/api/..." would be "//api/...", which the proxy answers with a 307 that
         # urllib will not follow for a POST.

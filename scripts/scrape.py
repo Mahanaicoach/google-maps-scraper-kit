@@ -42,8 +42,11 @@ ENV_KEYS = ("SCRAPER_BASE_URL", "SCRAPER_PORT", "SCRAPER_API_KEY", "SCRAPER_CONT
 
 def load_env_file():
     """Read SCRAPER_* from the kit's .env, the same file docker compose reads, so a remapped
-    port needs one edit. Variables already set in the environment win over the file."""
+    port needs one edit. Variables already set in the environment win over the file. A key
+    repeated in the file takes its last value, as Compose does, so uncommenting the second-copy
+    block in .env.example below a SCRAPER_PORT line leaves scripts and Compose on the same port."""
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, ".env")
+    from_file = set()
     try:
         with open(path, encoding="utf-8-sig", errors="replace") as f:
             for line in f:
@@ -52,8 +55,9 @@ def load_env_file():
                     line = line[7:]
                 k, sep, v = line.partition("=")
                 k, v = k.strip(), v.split(" #", 1)[0].strip().strip("\"'")  # drop a trailing comment
-                if sep and k in ENV_KEYS and k not in os.environ:
+                if sep and k in ENV_KEYS and (k in from_file or k not in os.environ):
                     os.environ[k] = v
+                    from_file.add(k)
     except OSError:
         pass
 
