@@ -68,6 +68,27 @@ class InBbox(unittest.TestCase):
         self.assertTrue(scrape.in_bbox({}, BBOX))
 
 
+class PollAttempts(unittest.TestCase):
+    def test_follows_max_time(self):
+        # The budget tracks max_time instead of the old fixed 120 attempts (960s), which
+        # gave up on a batch the engine was still working through.
+        self.assertEqual(scrape.poll_attempts(600), (600 + 120) // 8)      # 90
+        self.assertEqual(scrape.poll_attempts(3600), (3600 + 120) // 8)    # 465, was 120
+        self.assertGreater(scrape.poll_attempts(3600), 120)
+
+    def test_floors_at_engine_minimum(self):
+        # The engine runs a job for at least 180s however small max_time is, so waiting
+        # only max_time would abandon it.
+        for tiny in (1, 60, 179, 180):
+            self.assertEqual(scrape.poll_attempts(tiny), (180 + 120) // 8)
+        self.assertEqual(scrape.poll_attempts(0), (180 + 120) // 8)
+        self.assertEqual(scrape.poll_attempts(None), (180 + 120) // 8)
+
+    def test_ceiling_and_never_zero(self):
+        self.assertEqual(scrape.poll_attempts(10 ** 9), 7200 // 8)         # clamped at 2h
+        self.assertGreaterEqual(scrape.poll_attempts(-5), 1)
+
+
 class ExtractEmails(unittest.TestCase):
     def test_mailto_regex_junk_preference_cap(self):
         html = """
