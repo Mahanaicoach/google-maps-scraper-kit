@@ -292,6 +292,7 @@ If this kit saved you an afternoon of copy-pasting, a star helps the next person
 ```
 google-maps-scraper-kit/
 ├── docker-compose.yml      local engine on 127.0.0.1:8080
+├── ui-branding.conf        nginx proxy: web UI links to this kit and its sponsors
 ├── .env.example            config template
 ├── scripts/
 │   ├── scrape.py           Python CLI: single, batch, geocoding, socials, CSV

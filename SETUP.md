@@ -194,7 +194,8 @@ curl -X DELETE http://localhost:8080/api/v1/jobs/<job-id>
 
 ### No Compose? Run the same container with `docker run`
 
-`docker-compose.yml` is thin. This command is the exact equivalent, including the localhost binding:
+This command runs the engine alone, with the localhost binding. It skips the `ui` proxy from
+`docker-compose.yml`, so the web UI shows upstream's GitHub and sponsor links; the API is the same:
 
 ```bash
 docker run -d --name gmaps-scraper --restart unless-stopped \
