@@ -291,7 +291,6 @@ clearly abusive use.
 ## Featured in
 
 - [Best Google Maps Scrapers on GitHub in 2026 (Tested)](https://scrap.io/google-maps-scraper-github-open-source-guide) by Scrap.io
-- [skills.sh](https://skills.sh/mahanaicoach/google-maps-scraper-kit), the Agent Skills directory
 
 ## Star history
 
