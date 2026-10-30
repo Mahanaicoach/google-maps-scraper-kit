@@ -22,7 +22,7 @@ On Windows, run the same commands with `py` or `python3`. Python is only the cli
 |---|---|
 | `keyword` | The search, with the place baked in, e.g. `"coffee shops in Austin TX"`. |
 | `lat`, `lon` | Coordinates. Optional when you pass `--city`. |
-| `--city` | Geocodes a city name to coordinates via OpenStreetMap. |
+| `--city` | Geocodes a city name to coordinates via OpenStreetMap. Repeat it to run several cities, one after another, into one deduped file. |
 | `--depth` | How far to scroll each search. Default `5`. Higher is slower and more likely to be blocked. |
 | `--no-email` | Skips email extraction for a faster run. Emails are on by default. |
 | `--no-deep-emails` | Checks homepages only for emails, not contact and about pages. |
@@ -32,11 +32,18 @@ On Windows, run the same commands with `py` or `python3`. Python is only the cli
 | `--json` | Writes JSON instead of CSV. |
 | `--full` | Keeps all 36 raw columns instead of the 8 lead fields. |
 | `--fields` | Comma-separated columns to keep, overriding the lead fields. |
-| `--socials` | Adds Instagram, Facebook and LinkedIn from each website. Slower. Zero AI tokens. |
-| `--tech` | Adds `fb_pixel`, `google_ads_tag`, `analytics` (yes/no, blank if the site did not load), `cms`, `mobile_friendly` and a 0-100 `intent_score`, and sorts by that score. Shares the homepage fetch with `--socials`. Zero AI tokens. |
+| `--socials` | Adds Instagram, Facebook, LinkedIn, TikTok, YouTube and X from each website. Slower. Zero AI tokens. |
+| `--tech` | Adds `fb_pixel`, `google_ads_tag`, `analytics`, `bing_ads`, `linkedin_insight`, `tiktok_pixel` (yes/no, blank if the site did not load), `cms`, `mobile_friendly` and a 0-100 `intent_score`, and sorts by that score. Shares the homepage fetch with `--socials`. Zero AI tokens. |
 | `--keyword` | Adds an extra keyword to the same job. Repeatable. |
 | `--lang` | Two-letter language the engine asks Google for, e.g. `pt`, `es`, `de`. Default `en`. Use the market's language so category names come back in it. |
 | `--keywords-file` | Reads one keyword per line from a file. One job, one CSV. |
+| `--proxy` | Proxy URL for the engine, repeatable: `socks5://`, `socks5h://`, `http://` or `https://`, `user:pass@` allowed. The engine rotates them. |
+| `--min-rating`, `--min-reviews` | Keep rows rated X or higher, or with N or more reviews. Unrated rows drop. |
+| `--no-website` | Keep only businesses without a website: the classic web-design prospect list. |
+| `--has-phone`, `--has-email` | Keep only rows with a phone, or rows where an email was found. |
+| `--exclude FILE` | Drop places already in an earlier results file (`.csv` or `.json`), repeatable. Matches on `place_id`, `cid`, link, or name plus address, so the lean 8-column CSV works. |
+| `--limit N` | Stop at N rows after filtering. |
+| `--verify-emails` | Checks each email domain's MX record over DNS (dns.google, no key). Drops addresses on domains that do not exist and adds `email_host`: `google_workspace`, `microsoft_365`, `other` or `none`. |
 
 The script creates the job, polls until it finishes, downloads the CSV and keeps the 8 lead fields. It prints a short preview and saves the full results to a file.
 

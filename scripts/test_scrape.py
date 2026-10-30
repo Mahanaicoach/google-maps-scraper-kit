@@ -134,7 +134,54 @@ class StuckJob(unittest.TestCase):
     def test_remote_engine_is_never_restarted(self):
         with mock.patch.object(scrape, "BASE", "http://scraper.example:8080"):
             self.assertFalse(scrape.engine_run_ended("2026-01-01T00:00:00Z"))
+            self.assertFalse(scrape.engine_idle())
             self.assertFalse(scrape.restart_engine())
+
+
+class PendingAndFailed(unittest.TestCase):
+    def run_statuses(self, statuses, idle=True):
+        """Drive run_job through a status sequence; count job creations and engine restarts."""
+        posts, deleted, it = [], [], iter(statuses)
+        def fake_req(method, path, body=None):
+            if method == "POST":
+                posts.append(body)
+                return 201, b'{"id":"j%d"}' % len(posts)
+            if method == "DELETE":
+                deleted.append(path)
+                return 200, b""
+            if path.endswith("/download"):
+                return 200, b"title\nA\n"
+            return 200, json.dumps({"Status": next(it)}).encode()
+        with mock.patch.object(scrape, "req", fake_req), mock.patch.object(scrape.time, "sleep") as slept, \
+             mock.patch.object(scrape, "poll_attempts", return_value=50), \
+             mock.patch.object(scrape, "engine_run_ended", return_value=False), \
+             mock.patch.object(scrape, "engine_idle", return_value=idle), \
+             mock.patch.object(scrape, "restart_engine", return_value=True) as restart, \
+             redirect_stdout(io.StringIO()):
+            job_id, rows = scrape.run_job({"max_time": 1})
+        return job_id, rows, len(posts), restart.call_count, slept, deleted
+
+    def test_pending_on_idle_engine_restarts_once(self):
+        # An earlier web UI job wedged the engine: our job never leaves "pending". Delete it, restart,
+        # create it again, and never loop on a second pending streak.
+        statuses = ["pending"] * scrape.PENDING_RESTART_AFTER + ["pending"] * (scrape.PENDING_RESTART_AFTER + 2) + ["working", "ok"]
+        job_id, rows, posts, restarts, _, deleted = self.run_statuses(statuses)
+        self.assertEqual((job_id, posts, restarts, deleted), ("j2", 2, 1, ["/api/v1/jobs/j1"]))
+        self.assertEqual([r["title"] for r in rows], ["A"])
+
+    def test_pending_on_busy_engine_waits(self):
+        # The engine is still running someone else's job: pending is normal, never restart.
+        statuses = ["pending"] * (scrape.PENDING_RESTART_AFTER + 3) + ["ok"]
+        _, _, posts, restarts, _, _ = self.run_statuses(statuses, idle=False)
+        self.assertEqual((posts, restarts), (1, 0))
+
+    def test_failed_job_is_retried_once(self):
+        job_id, rows, posts, _, slept, _ = self.run_statuses(["failed", "working", "ok"])
+        self.assertEqual((job_id, posts), ("j2", 2))
+        slept.assert_any_call(scrape.FAILED_RETRY_WAIT)
+        self.assertEqual([r["title"] for r in rows], ["A"])
+        with self.assertRaises(RuntimeError):
+            self.run_statuses(["failed", "failed"])
 
     def test_restart_waits_until_engine_answers(self):
         # Right after `docker restart` the proxy answers 502 for a few seconds; the next grid tile
@@ -223,7 +270,19 @@ class TechSignals(unittest.TestCase):
                 '<meta name="viewport" content="width=device-width"><link href="/wp-content/a.css">'
                 "<script>gtag('config','AW-123456789')</script>")
         self.assertEqual(scrape._find_tech(html), {"fb_pixel": "yes", "google_ads_tag": "yes",
-                         "analytics": "yes", "cms": "wordpress", "mobile_friendly": "yes"})
+                         "analytics": "yes", "bing_ads": "no", "linkedin_insight": "no",
+                         "tiktok_pixel": "no", "cms": "wordpress", "mobile_friendly": "yes"})
+        more = '<script src="https://bat.bing.com/bat.js"></script><script>ttq.load("X"); _linkedin_partner_id="1"</script>'
+        self.assertEqual({k: v for k, v in scrape._find_tech(more).items() if v == "yes"},
+                         {"bing_ads": "yes", "linkedin_insight": "yes", "tiktok_pixel": "yes"})
+
+    def test_more_socials(self):
+        html = ('<a href="https://www.tiktok.com/@acme.shop">t</a> <a href="https://youtube.com/@AcmeTV">y</a>'
+                ' <a href="https://x.com/acme_inc">x</a> <a href="https://twitter.com/intent/tweet">no</a>')
+        out = scrape._find_socials(html)
+        self.assertEqual((out["tiktok"], out["youtube"], out["x"]),
+                         ("https://www.tiktok.com/@acme.shop", "https://youtube.com/@AcmeTV", "https://x.com/acme_inc"))
+        self.assertEqual(scrape._find_socials('<a href="https://twitter.com/intent/tweet">no</a>')["x"], "")
 
     def test_unreachable_site_is_unknown_not_no(self):
         self.assertEqual(set(scrape._find_tech("").values()), {""})
@@ -330,8 +389,8 @@ def _row(pid, lat="30.2"):
 
 CELL_ROWS = {"job-1": [_row("A"), _row("B"), _row("C")],
              "job-2": [_row("C"), _row("D")],
-             "job-3": None,  # this cell fails
-             "job-4": [_row("A"), _row("E"), _row("F", lat="40.0")]}  # F is outside the city box
+             "job-3": None, "job-4": None,  # this cell fails, and so does its one retry
+             "job-5": [_row("A"), _row("E"), _row("F", lat="40.0")]}  # F is outside the city box
 
 
 class MockEngine(BaseHTTPRequestHandler):
@@ -370,6 +429,7 @@ class MockEngine(BaseHTTPRequestHandler):
 
 class EndToEnd(unittest.TestCase):
     def test_grid_run(self):
+        MockEngine.created, MockEngine.polls = 0, {}
         srv = ThreadingHTTPServer(("127.0.0.1", 0), MockEngine)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         out = os.path.join(tempfile.mkdtemp(), "leads.csv")
@@ -387,12 +447,88 @@ class EndToEnd(unittest.TestCase):
         text = log.getvalue()
         self.assertIn("cell 4/4: 3 rows, 6 unique so far", text)
         self.assertIn("cell 3/4 skipped", text)
-        self.assertIn("Incomplete: 1 of 4 tiles failed (cells 3)", text)
+        self.assertIn("Incomplete: 1 of 4 tiles failed", text)
         self.assertIn("dropped 1 rows outside the city box", text)
         with open(out, newline="") as f:
             rows = list(csv.reader(f))
         self.assertEqual(rows[0], scrape.LEAD)
         self.assertEqual([r[0] for r in rows[1:]], ["Biz A", "Biz B", "Biz C", "Biz D", "Biz E"])
+
+    def test_two_cities_filters_exclude_limit(self):
+        # --city twice = two jobs into one deduped file; --exclude drops a place from an earlier lean
+        # CSV (title+address only); --min-reviews and --limit trim the rest.
+        MockEngine.created, MockEngine.polls = 0, {}
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), MockEngine)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        d = tempfile.mkdtemp()
+        out, earlier = os.path.join(d, "leads.csv"), os.path.join(d, "earlier.csv")
+        with open(earlier, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=scrape.LEAD); w.writeheader()
+            w.writerow({"title": "Biz A", "address": ""})
+        argv = ["scrape.py", "plumbers", "--city", "Austin, TX", "--city", "Round Rock, TX", "--no-email",
+                "--exclude", earlier, "--limit", "2", "--out", out]
+        log = io.StringIO()
+        try:
+            with mock.patch.object(scrape, "BASE", f"http://127.0.0.1:{srv.server_port}"), \
+                 mock.patch.object(scrape, "geocode", return_value=("30.25", "-97.75")) as geo, \
+                 mock.patch.object(scrape.time, "sleep"), \
+                 mock.patch.object(sys, "argv", argv), redirect_stdout(log):
+                scrape.main()
+        finally:
+            srv.shutdown(); srv.server_close()
+        self.assertEqual(geo.call_count, 2)
+        self.assertIn("kept 3 of 4 rows", log.getvalue())  # A, B, C + C, D -> 4 unique, minus excluded A
+        with open(out, newline="") as f:
+            rows = list(csv.DictReader(f))
+        self.assertEqual([r["title"] for r in rows], ["Biz B", "Biz C"])  # --limit 2
+
+
+class Filters(unittest.TestCase):
+    def test_keep_row(self):
+        a = mock.Mock(min_rating=4.5, min_reviews=10, no_website=False, has_phone=True)
+        self.assertTrue(scrape.keep_row({"review_rating": "4.6", "review_count": "1,204", "phone": "+1"}, a))
+        self.assertFalse(scrape.keep_row({"review_rating": "4.4", "review_count": "50", "phone": "+1"}, a))
+        self.assertFalse(scrape.keep_row({"review_rating": "4.9", "review_count": "9", "phone": "+1"}, a))
+        self.assertFalse(scrape.keep_row({"review_rating": "4.9", "review_count": "99", "phone": ""}, a))
+        self.assertFalse(scrape.keep_row({"review_rating": "", "review_count": "99", "phone": "+1"}, a))  # unrated
+        nw = mock.Mock(min_rating=None, min_reviews=None, no_website=True, has_phone=False)
+        self.assertTrue(scrape.keep_row({"website": ""}, nw))
+        self.assertFalse(scrape.keep_row({"website": "http://x.com"}, nw))
+
+    def test_exclude_matches_lean_rows(self):
+        new = [{"place_id": "P1", "title": "Joe's", "address": "1 Main"}, {"place_id": "P2", "title": "Ann's"}]
+        self.assertEqual(scrape.dedupe(new, exclude=[{"title": "Joe's", "address": "1 Main"}]), new[1:])
+        self.assertEqual(scrape.dedupe(new, exclude=[{"place_id": "P2"}]), new[:1])
+
+    def test_load_rows_csv_and_json(self):
+        d = tempfile.mkdtemp()
+        j = os.path.join(d, "a.json"); open(j, "w").write('[{"title": "A"}]')
+        c = os.path.join(d, "a.csv"); open(c, "w").write("title,phone\nB,1\n")
+        self.assertEqual(scrape.load_rows(j), [{"title": "A"}])
+        self.assertEqual(scrape.load_rows(c), [{"title": "B", "phone": "1"}])
+
+
+class VerifyEmails(unittest.TestCase):
+    def test_mx_host_labels_and_drops_dead_domains(self):
+        answers = {
+            "gws.com":  {"Status": 0, "Answer": [{"type": 15, "data": "10 aspmx.l.google.com."}]},
+            "m365.com": {"Status": 0, "Answer": [{"type": 15, "data": "0 m365-com.mail.protection.outlook.com."}]},
+            "own.com":  {"Status": 0, "Answer": [{"type": 15, "data": "10 mail.own.com."}]},
+            "nomx.com": {"Status": 0},
+            "dead.com": {"Status": 3},
+        }
+        scrape.mx_host.cache_clear()
+        rows = [{"emails": "a@gws.com, b@dead.com"}, {"emails": "c@m365.com"}, {"emails": "d@own.com"},
+                {"emails": "e@nomx.com"}, {"emails": "f@dead.com"}, {"emails": ""}]
+        with mock.patch.object(scrape, "_doh_mx", side_effect=lambda dom: answers[dom]), \
+             redirect_stdout(io.StringIO()):
+            scrape.verify_emails(rows)
+        self.assertEqual([(r["emails"], r.get("email_host", "-")) for r in rows],
+                         [("a@gws.com", "google_workspace"), ("c@m365.com", "microsoft_365"),
+                          ("d@own.com", "other"), ("e@nomx.com", "none"), ("", ""), ("", "-")])
+        scrape.mx_host.cache_clear()
+        with mock.patch.object(scrape, "_doh_mx", side_effect=OSError("offline")):
+            self.assertEqual(scrape.mx_host("x.com"), "")  # lookup failed: keep the address, no label
 
 
 if __name__ == "__main__":

@@ -1,0 +1,47 @@
+# Two jobs, no Google traffic. "offline" is the Python client on the three desktop platforms a new
+# user installs on. "fresh-install" is a new user's first ten minutes on Linux minus the scrape:
+# clone, docker compose up, the health check, the patched web UI and API docs, the proxy's checks.
+name: tests
+on:
+  push:
+    branches: [master]
+  pull_request:
+jobs:
+  offline:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python scripts/test_scrape.py
+      - run: bash -n scripts/scrape.sh
+      - run: python -c "import json; json.load(open('.claude/settings.json'))"
+  fresh-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose config -q
+      - run: docker compose up -d
+      - name: health check prints null, as SETUP.md says
+        run: |
+          for i in $(seq 1 45); do curl -sf http://localhost:8080/api/v1/jobs >/dev/null && break; sleep 2; done
+          test "$(curl -s http://localhost:8080/api/v1/jobs)" = null
+      - name: web UI is patched (kit links, emails on, Redoc pinned)
+        run: |
+          curl -s http://localhost:8080/ | grep -q 'github.com/Mahanaicoach/google-maps-scraper-kit'
+          curl -s http://localhost:8080/ | grep -q 'id="email" name="email" checked'
+          curl -s http://localhost:8080/api/docs | grep -q 'redoc/v2.5.0/'
+      - name: proxy refuses other hosts and other sites
+        run: |
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.com' http://localhost:8080/api/v1/jobs)" = 421
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Origin: https://evil.com' http://localhost:8080/api/v1/jobs)" = 403
+      - name: engine validates a job body through the proxy
+        run: |
+          curl -s -X POST -H 'Content-Type: application/json' -d '{}' http://localhost:8080/api/v1/jobs | grep -q 'missing name'
+      - if: always()
+        run: docker compose down -v
