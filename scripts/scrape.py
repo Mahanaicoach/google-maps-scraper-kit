@@ -45,17 +45,21 @@ def load_env_file():
     port needs one edit. Variables already set in the environment win over the file."""
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, ".env")
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8-sig", errors="replace") as f:
             for line in f:
-                k, sep, v = line.strip().partition("=")
+                line = line.strip()
+                if line.startswith("export "):  # shell-style .env files
+                    line = line[7:]
+                k, sep, v = line.partition("=")
+                k, v = k.strip(), v.split(" #", 1)[0].strip().strip("\"'")  # drop a trailing comment
                 if sep and k in ENV_KEYS and k not in os.environ:
-                    os.environ[k] = v.strip().strip("\"'")
+                    os.environ[k] = v
     except OSError:
         pass
 
 
 load_env_file()
-BASE = os.environ.get("SCRAPER_BASE_URL") or f"http://localhost:{os.environ.get('SCRAPER_PORT') or '8080'}"
+BASE = (os.environ.get("SCRAPER_BASE_URL") or f"http://localhost:{os.environ.get('SCRAPER_PORT') or '8080'}").rstrip("/")
 KEY = os.environ.get("SCRAPER_API_KEY", "")
 # The 8 lead fields: what you use to contact and qualify a lead.
 # Everything else (geo coordinates, IDs, hours, images, review blobs) is dropped by default.
@@ -148,31 +152,36 @@ def in_bbox(row, bbox, margin=0.10):
     return s - my <= lat <= n + my and w - mx <= lon <= e + mx
 
 
-def _keys(r):
-    """Every identity a row carries: place_id, cid, link and title+address. A lean 8-column CSV
-    from an earlier run has only the last one, so matching on any key lets --exclude use it."""
+def _keys(r, weak=False):
+    """The identities a row carries: place_id, cid, link, name+address. With weak=True also
+    name+phone and name+website, which a --fields results file may be the only thing to match on.
+    They are weak because two branches of a chain share a website and sometimes a phone, so they
+    never dedupe rows within a run, only match an exclusion list."""
     ks = [f"{k}:{r[k]}" for k in ("place_id", "cid", "link") if r.get(k)]
     t = r.get("title")
-    if t:  # name plus address, and name plus phone or website: a --fields file may lack the address
+    if t:
         ks.append(f"ta:{t}|{r.get('address', '')}")
-        ks += [f"t{c[0]}:{t}|{r[c]}" for c in ("phone", "website") if r.get(c)]
+        if weak:
+            ks += [f"t{c[0]}:{t}|{r[c]}" for c in ("phone", "website") if r.get(c)]
     return ks
 
 
 def dedupe(rows, exclude=()):
     """Keep the first row per place; drop rows already present in `exclude` (an earlier run)."""
-    seen, out = {k for r in exclude for k in _keys(r)}, []
+    seen, out = {k for r in exclude for k in _keys(r, weak=True)}, []
     for r in rows:
-        ks = _keys(r)
-        if not any(k in seen for k in ks):
-            seen.update(ks); out.append(r)
+        if not any(k in seen for k in _keys(r, weak=True)):
+            seen.update(_keys(r)); out.append(r)
     return out
 
 
 def load_rows(path):
     """Rows from an earlier results file, .csv or .json."""
     with open(path, encoding="utf-8-sig", newline="") as f:  # -sig: also reads the kit's own CSVs
-        return json.load(f) if path.lower().endswith(".json") else list(csv.DictReader(f))
+        rows = json.load(f) if path.lower().endswith(".json") else list(csv.DictReader(f))
+    if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
+        raise ValueError(f"{path} is not a results file (expected a list of rows)")
+    return rows
 
 
 def _local_docker():
@@ -186,10 +195,10 @@ def engine_run_ended(since):
         return False
     try:
         out = subprocess.run(["docker", "logs", "--since", since, ENGINE_CONTAINER],
-                             capture_output=True, text=True, timeout=15)
+                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
     except (OSError, subprocess.SubprocessError):
         return False
-    return "scrapemate exited" in out.stdout + out.stderr
+    return out.returncode == 0 and "scrapemate exited" in out.stdout + out.stderr
 
 def restart_engine():
     """Restart the local engine and wait until its API answers again. Without the wait, the next
@@ -240,10 +249,11 @@ def engine_idle(seconds=45):
         return False
     try:
         out = subprocess.run(["docker", "logs", "--since", f"{seconds}s", ENGINE_CONTAINER],
-                             capture_output=True, text=True, timeout=15)
+                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
     except (OSError, subprocess.SubprocessError):
         return False
-    return "scrapemate" not in out.stdout + out.stderr
+    # A failing `docker logs` (wrong container name, daemon down) must not read as "idle".
+    return out.returncode == 0 and "scrapemate" not in out.stdout + out.stderr
 
 
 class JobFailed(RuntimeError):
@@ -263,6 +273,20 @@ def run_job(body):
             time.sleep(FAILED_RETRY_WAIT)
 
 
+def _get(path):
+    """GET with three tries: a poll or a download must survive a passing 502 or timeout."""
+    for attempt in range(3):
+        try:
+            return req("GET", path)
+        except urllib.error.HTTPError as e:
+            if e.code < 500 or attempt == 2:
+                raise
+        except OSError:
+            if attempt == 2:
+                raise
+        time.sleep(3)
+
+
 def _run_job_once(body, restarted=False):
     since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     try:
@@ -276,14 +300,15 @@ def _run_job_once(body, restarted=False):
 
     attempts = poll_attempts(body.get("max_time"))
     print(f"▶ Polling (up to ~{attempts * POLL_EVERY // 60} min)…")
-    status, ended, pending = None, 0, 0
+    status, ended, pending, n_rows, last_rows = None, 0, 0, None, None
     for i in range(attempts):
-        _, raw = req("GET", f"/api/v1/jobs/{job_id}")
+        _, raw = _get(f"/api/v1/jobs/{job_id}")
         status = json.loads(raw).get("Status")
         progress = ""
         if status == "working":  # the engine writes rows as it goes, so the download shows progress
             try:
-                progress = f", {len(download_rows(job_id))} rows so far"
+                n_rows = len(download_rows(job_id))
+                progress = f", {n_rows} rows so far"
             except Exception:
                 pass
         print(f"\r  status: {str(status):<10} (attempt {i + 1}{progress})", end="", flush=True)
@@ -291,13 +316,16 @@ def _run_job_once(body, restarted=False):
             print(); break
         if status == "failed":
             raise JobFailed("job failed")
-        if status == "working" and engine_run_ended(since):
+        # Stuck (gosom#346): the engine log says the run ended and the row count has stopped moving.
+        # The second condition guards against a Docker VM clock that runs ahead of the host.
+        if status == "working" and n_rows == last_rows and engine_run_ended(since):
             ended += 1
             if ended > 2:  # the status normally flips within seconds of the run ending
                 return job_id, recover_stuck_job(job_id)
+        last_rows = n_rows
         if status == "pending":
             pending += 1
-            if pending == PENDING_RESTART_AFTER and not restarted and engine_idle():
+            if pending % PENDING_RESTART_AFTER == 0 and not restarted and engine_idle():
                 # Delete the pending job first, or the restarted engine runs it as well as the new one.
                 print("\n⚠ The engine has not started this job and shows no activity: an earlier job left it "
                       "stuck (gosom/google-maps-scraper#346). Restarting the engine and re-creating the job…")
@@ -305,8 +333,10 @@ def _run_job_once(body, restarted=False):
                     req("DELETE", f"/api/v1/jobs/{job_id}")
                 except Exception:
                     pass
-                if restart_engine():
-                    return _run_job_once(body, restarted=True)
+                if not restart_engine():
+                    raise RuntimeError(f"\n✗ The engine never started this job and could not be restarted. "
+                                       f"Run: docker restart {ENGINE_CONTAINER}")
+                return _run_job_once(body, restarted=True)
         time.sleep(POLL_EVERY)
     else:
         # The engine writes rows as it goes, and v1.18.x can leave a finished job stuck on
@@ -328,7 +358,7 @@ def _run_job_once(body, restarted=False):
 
 
 def download_rows(job_id):
-    _, raw = req("GET", f"/api/v1/jobs/{job_id}/download")
+    _, raw = _get(f"/api/v1/jobs/{job_id}/download")
     return list(csv.DictReader(io.StringIO(raw.decode("utf-8", "replace"))))
 
 
@@ -339,10 +369,11 @@ def collect_keywords(a):
     kws.extend(a.also or [])
     if a.keywords_file:
         try:
-            with open(a.keywords_file) as f:
-                kws.extend(line.strip() for line in f if line.strip() and not line.startswith("#"))
-        except OSError as e:
-            sys.exit(f"✗ Cannot read --keywords-file {a.keywords_file}: {e.strerror}")
+            with open(a.keywords_file, encoding="utf-8-sig") as f:
+                lines = [line.strip() for line in f]
+            kws.extend(line for line in lines if line and not line.startswith("#"))
+        except (OSError, UnicodeDecodeError) as e:
+            sys.exit(f"✗ Cannot read --keywords-file {a.keywords_file}: {getattr(e, 'strerror', e)}")
     return list(dict.fromkeys(kws))  # de-dupe, keep order
 
 
@@ -429,9 +460,9 @@ def _fetch_html(url, timeout=10):
         return ""
     if not url.startswith(("http://", "https://")):
         url = "http://" + url
-    if not _is_public_host(urllib.parse.urlparse(url).hostname or ""):
-        return ""
     try:
+        if not _is_public_host(urllib.parse.urlparse(url).hostname or ""):
+            return ""
         r = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0 (compatible; " + UA + ")", "Accept": "text/html"})
         with _OPENER.open(r, timeout=timeout) as resp:
@@ -439,7 +470,7 @@ def _fetch_html(url, timeout=10):
     except Exception:
         return ""
 
-@functools.lru_cache(maxsize=512)  # ponytail: homepages only; evicted pages just refetch
+@functools.lru_cache(maxsize=256)  # ponytail: homepages only (up to 400 KB each); evicted pages just refetch
 def _fetch_cached(url):
     """Homepage fetch shared by the email crawl, --socials and --tech (one fetch per site)."""
     return _fetch_html(url, timeout=8)
@@ -458,13 +489,20 @@ def _find_socials(html):
     return out
 
 def _each_site(todo, work, label, workers=None):
-    """Run work(row) over the rows, SITE_WORKERS at a time, with one progress line."""
-    done = 0
+    """Run work(row) over the rows, SITE_WORKERS at a time, with one progress line. One row that
+    blows up (a malformed website, an odd page) is skipped; it never aborts the run."""
+    done, failed = 0, 0
+    def safe(r):
+        try:
+            work(r)
+        except Exception:
+            return 1
+        return 0
     with ThreadPoolExecutor(max_workers=workers or SITE_WORKERS) as ex:
-        for _ in ex.map(work, todo):
-            done += 1
+        for f in ex.map(safe, todo):
+            done, failed = done + 1, failed + f
             print(f"\r  {label}: {done}/{len(todo)} checked", end="", flush=True)
-    print()
+    print(f"  ({failed} skipped after an error)" if failed else "")
 
 def enrich_sites(results, find, fields, label, workers=None):
     """Merge find(homepage html) into every lead that has a website. Zero LLM tokens."""
@@ -525,7 +563,10 @@ def intent_score(r):
 
 
 # ── Email crawl: each business website's homepage, then its contact/about pages ──
-EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+# The lookbehind pins each match attempt to the start of a run of local-part characters: without
+# it the scan is quadratic, and a 60 KB run of "a" (a minified blob) took a minute per page.
+_LOCAL = r"[A-Za-z0-9._%+-]"
+EMAIL_RE = re.compile(rf"(?<!{_LOCAL}){_LOCAL}+@[A-Za-z0-9.-]+\.[A-Za-z]{{2,}}")
 MAILTO_RE = re.compile(r"mailto:([^\"'>\s?]+)", re.I)
 HREF_RE = re.compile(r"<a\s[^>]*?href\s*=\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", re.I | re.S)
 _JUNK_EXT = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".avif", ".css", ".js")
@@ -542,7 +583,10 @@ _ESCAPE_PREFIX = re.compile(r"^(?:u00(?:3c|3e|22|27|26))+")
 def _host(url):
     if not url.startswith(("http://", "https://")):
         url = "http://" + url
-    h = (urllib.parse.urlparse(url).hostname or "").lower()
+    try:
+        h = (urllib.parse.urlparse(url).hostname or "").lower()
+    except ValueError:  # "http://[bad": a malformed website value from a listing
+        return ""
     return h[4:] if h.startswith("www.") else h
 
 # Google Business Profile links often carry campaign tags (?utm_source=gbp&utm_medium=organic),
@@ -554,10 +598,17 @@ def clean_website(url):
     them (store?storeid=...)."""
     if not url:
         return ""
-    p = urllib.parse.urlsplit(url)
-    q = [(k, v) for k, v in urllib.parse.parse_qsl(p.query, keep_blank_values=True)
-         if not k.lower().startswith(_TRACKING_PARAMS)]
-    return urllib.parse.urlunsplit(p._replace(query=urllib.parse.urlencode(q), fragment=""))
+    try:
+        p = urllib.parse.urlsplit(url)
+    except ValueError:  # malformed: leave it as the listing had it
+        return url
+    q = urllib.parse.parse_qsl(p.query, keep_blank_values=True)
+    kept = [(k, v) for k, v in q if not k.lower().startswith(_TRACKING_PARAMS)]
+    frag = p.fragment if p.fragment.startswith(("/", "!")) else ""  # keep hash-routed store pages
+    if len(kept) == len(q) and frag == p.fragment:
+        return url  # nothing to drop: never re-encode a query the site chose
+    query = p.query if len(kept) == len(q) else urllib.parse.urlencode(kept)
+    return urllib.parse.urlunsplit(p._replace(query=query, fragment=frag))
 
 def is_real_email(e):
     """False for anything not worth sending to: a template placeholder (user@domain.com,
@@ -575,13 +626,13 @@ _AT = r"(?:\[\s*at\s*\]|\(\s*at\s*\)|\{\s*at\s*\})"
 _DOT = r"(?:\[\s*dot\s*\]|\(\s*dot\s*\)|\{\s*dot\s*\}|\s+dot\s+)"
 _TLD = (r"(?:com|net|org|co|io|biz|info|us|uk|ca|au|de|fr|es|it|nl|eu|edu|gov|me|app|dev|"
         r"shop|online|store|xyz|ai)")
-_DEOBF_RE = re.compile(rf"([A-Za-z0-9._%+\-]+)\s*{_AT}\s*([A-Za-z0-9.\-]+?)\s*{_DOT}\s*({_TLD})\b", re.I)
+_DEOBF_RE = re.compile(rf"(?<!{_LOCAL})({_LOCAL}+)\s*{_AT}\s*([A-Za-z0-9.\-]+?)\s*{_DOT}\s*({_TLD})\b", re.I)
 
 def extract_emails(html, site_host):
     """Emails from mailto: links, plain text and obfuscated spans, junk dropped, site-domain first,
     max 3. HTML entities are decoded first, so info&#64;site.com counts."""
     site = _host(site_host or "")
-    text = _html.unescape(html or "")
+    text = _html.unescape(html or "")[:400_000]
     found = []
     deobf = [f"{m[0]}@{m[1]}.{m[2]}" for m in _DEOBF_RE.findall(text)]
     for e in MAILTO_RE.findall(text) + EMAIL_RE.findall(text) + deobf:
@@ -597,10 +648,15 @@ def contact_links(html, base_url):
     if not base_url.startswith(("http://", "https://")):
         base_url = "http://" + base_url
     host, out = _host(base_url), []
+    if not host:  # malformed or empty website: nothing to join the paths onto
+        return out
     for href, text in HREF_RE.findall(html or ""):
         if not re.search(r"contact|about|team|staff|support", href + " " + text, re.I):
             continue
-        url = urllib.parse.urldefrag(urllib.parse.urljoin(base_url, href.strip()))[0]
+        try:
+            url = urllib.parse.urldefrag(urllib.parse.urljoin(base_url, href.strip()))[0]
+        except ValueError:  # a malformed href on the page
+            continue
         if url.startswith(("http://", "https://")) and _host(url) == host and url not in out:
             out.append(url)
     for path in ("/contact", "/contact-us", "/about", "/about-us"):
@@ -781,6 +837,21 @@ def main():
 
     if len(a.lang) != 2 or not a.lang.isalpha():
         sys.exit(f"✗ --lang must be a 2-letter code (got {a.lang!r}); the engine rejects anything else.")
+    if a.depth < 1:
+        sys.exit("✗ --depth must be 1 or more.")
+    if a.max_time < 1:
+        sys.exit("✗ --max-time must be 1 or more seconds (the engine runs a job for at least 180).")
+    if a.limit is not None and a.limit < 1:
+        sys.exit("✗ --limit must be 1 or more.")
+    if a.has_email and not a.email:
+        sys.exit("✗ --has-email needs the email crawl: drop --no-email.")
+    if a.city and (a.lat or a.lon):
+        print("ℹ --city given, so the lat/lon arguments are ignored.")
+    if a.out and os.path.dirname(a.out):  # fail now, not after the scrape, if the folder is unusable
+        try:
+            os.makedirs(os.path.dirname(a.out), exist_ok=True)
+        except OSError as e:
+            sys.exit(f"✗ Cannot create the folder for --out: {e}")
 
     if a.grid is not None:
         if not a.city:
@@ -807,6 +878,10 @@ def main():
         try:
             req("GET", "/api/v1/jobs")
             break
+        except urllib.error.HTTPError as e:
+            if e.code < 500:  # the engine is up but refuses us (wrong API key, wrong URL): say so at once
+                sys.exit(f"✗ The engine at {BASE} answered HTTP {e.code} to the health check: {e.read().decode()[:200]}")
+            err = e
         except Exception as e:
             err = e
         print("\r  waiting for the engine to start" + "." * (i + 1), end="", flush=True)
@@ -825,13 +900,16 @@ def main():
             "depth": a.depth, "email": False, "max_time": a.max_time}
     if a.proxy:
         body["proxies"] = a.proxy
-    job_id, rows, skipped, ncells = None, [], 0, 0
+    job_id, rows, skipped, ncells, failed_places = None, [], 0, 0, 0
     for city in cities:  # one place at a time, like the grid tiles
         jid, place_rows, s, n = scrape_place(a, body, city, keywords)
         job_id, skipped, ncells = job_id or jid, skipped + s, ncells + n
+        failed_places += jid is None
         rows = dedupe(rows + place_rows)
     if job_id is None:
         sys.exit("✗ No job finished. You may be rate-limited — wait or add proxies.")
+    if failed_places:
+        print(f"⚠ Incomplete: {failed_places} of {len(cities)} places returned nothing (see the ✗ lines above).")
     for r in rows:
         r["website"] = clean_website(r.get("website", ""))
     before = len(rows)
@@ -846,6 +924,8 @@ def main():
         fields = [c.strip() for c in a.fields.split(",") if c.strip()]
     else:
         fields = LEAD
+    if a.has_email and "emails" not in fields:
+        sys.exit("✗ --has-email needs the emails column: add emails to --fields.")
     print(f"✓ Done — {len(rows)} businesses (fields: {', '.join(fields)}).")
     if skipped:
         print(f"⚠ Incomplete: {skipped} of {ncells} tiles failed, so parts of the area are missing. Rerun later.")
@@ -865,40 +945,49 @@ def main():
     if a.has_email:
         rows = [r for r in rows if r.get("emails")][:a.limit or None]
         print(f"  --has-email kept {len(rows)} rows")
-    results = [{k: r.get(k, "") for k in fields} for r in rows]
 
+    # Enrichment runs on the raw rows, which always carry the website, whatever --fields keeps.
     if a.socials:
         print("▶ Finding socials (Instagram / Facebook / LinkedIn / TikTok / YouTube / X) on each website…")
         print("  ℹ Cost: this runs in CODE = 0 LLM tokens. It only adds ~40–50 tokens per business")
         print("    IF you load the results into an AI's context (negligible if you keep the file on disk).")
-        enrich_sites(results, _find_socials, SOCIAL_FIELDS, "socials")
+        enrich_sites(rows, _find_socials, SOCIAL_FIELDS, "socials")
         fields = fields + SOCIAL_FIELDS
-        found = sum(1 for r in results if any(r.get(k) for k in SOCIAL_FIELDS))
-        print(f"  socials found for {found}/{len(results)} businesses")
+        found = sum(1 for r in rows if any(r.get(k) for k in SOCIAL_FIELDS))
+        print(f"  socials found for {found}/{len(rows)} businesses")
 
     if a.tech:
         print("▶ Checking ad pixels, analytics and site platform on each website (0 LLM tokens)…")
-        enrich_sites(results, _find_tech, TECH_FIELDS, "tech")
-        for r in results:
+        enrich_sites(rows, _find_tech, TECH_FIELDS, "tech")
+        for r in rows:
             r["intent_score"] = intent_score(r)
-        results.sort(key=lambda r: r["intent_score"], reverse=True)
+        rows.sort(key=lambda r: r["intent_score"], reverse=True)
         fields = fields + TECH_FIELDS + ["intent_score"]
-        ads = sum(1 for r in results if "yes" in (r.get("fb_pixel"), r.get("google_ads_tag")))
-        print(f"  Meta Pixel or Google Ads tag on {ads}/{len(results)} websites; "
+        ads = sum(1 for r in rows if "yes" in (r.get("fb_pixel"), r.get("google_ads_tag")))
+        print(f"  Meta Pixel or Google Ads tag on {ads}/{len(rows)} websites; "
               f"rows sorted by intent_score (highest first)")
+    results = [{k: r.get(k, "") for k in fields} for r in rows]
 
     # Default output is a CSV file (opens in Excel / Google Sheets). Use --json (or a .json --out path) for JSON.
     as_json = a.json or (a.out and a.out.lower().endswith(".json"))
     out = a.out or f"results-{job_id[:8]}.{'json' if as_json else 'csv'}"
-    if as_json:
-        with open(out, "w", encoding="utf-8") as f:
-            json.dump(results, f, indent=2, ensure_ascii=False)
-    else:
-        # utf-8-sig: the BOM makes Excel on Windows read accented names as UTF-8 instead of cp1252.
-        with open(out, "w", newline="", encoding="utf-8-sig") as f:
-            w = csv.DictWriter(f, fieldnames=fields)
-            w.writeheader()
-            w.writerows(results)
+    def write(path):
+        if as_json:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(results, f, indent=2, ensure_ascii=False)
+        else:
+            # utf-8-sig: the BOM makes Excel on Windows read accented names as UTF-8 instead of cp1252.
+            with open(path, "w", newline="", encoding="utf-8-sig") as f:
+                w = csv.DictWriter(f, fieldnames=fields)
+                w.writeheader()
+                w.writerows(results)
+    try:
+        write(out)
+    except OSError as e:  # the target is locked (open in Excel) or unwritable: never lose a finished scrape
+        fallback = f"results-{job_id[:8]}.{'json' if as_json else 'csv'}"
+        print(f"⚠ Could not write {out} ({e.strerror}); writing {fallback} instead.")
+        out = fallback
+        write(out)
     print(f"  saved → {os.path.abspath(out)}  (opens in Excel or Google Sheets)")
     for r in results[:5]:
         tail = f" | IG:{r.get('instagram','') or '—'}" if a.socials else f" | {r.get('website','')}"
@@ -906,4 +995,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(f"\n✗ Stopped. A job already created keeps running in the engine; list jobs at {BASE}/api/v1/jobs")
