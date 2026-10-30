@@ -36,7 +36,7 @@ if ! git merge-base HEAD "upstream/$BRANCH" >/dev/null; then
 fi
 
 BEFORE="$(git rev-parse HEAD)"
-if ! git merge --no-edit "upstream/$BRANCH"; then
+if ! git merge --no-edit --quiet "upstream/$BRANCH"; then
   echo
   echo "The update conflicts with your own changes in the files listed above."
   echo "Fix them, then run: git add -A && git commit --no-edit"
