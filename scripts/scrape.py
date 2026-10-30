@@ -26,6 +26,16 @@ Notes:
 import argparse, csv, functools, io, json, math, os, re, sys, time, urllib.request, urllib.parse, urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
+# The status lines below use ▶ ✓ ℹ •, and every file this script writes can hold accented business
+# names. Windows picks cp1252 for both, so without this the first print raises UnicodeEncodeError
+# before any work happens, and a CSV of scraped names lands in cp1252 instead of UTF-8.
+# errors="replace" keeps a terminal that still cannot render a glyph from killing a finished run.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):   # not a reconfigurable stream (pytest capture, a pipe wrapper)
+        pass
+
 ENV_KEYS = ("SCRAPER_BASE_URL", "SCRAPER_PORT", "SCRAPER_API_KEY")
 
 
@@ -434,10 +444,10 @@ def main():
     as_json = a.json or (a.out and a.out.lower().endswith(".json"))
     out = a.out or f"results-{job_id[:8]}.{'json' if as_json else 'csv'}"
     if as_json:
-        with open(out, "w") as f:
+        with open(out, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
     else:
-        with open(out, "w", newline="") as f:
+        with open(out, "w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=fields)
             w.writeheader()
             w.writerows(results)
