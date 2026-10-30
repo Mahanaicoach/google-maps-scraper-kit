@@ -13,7 +13,7 @@
   <img alt="No API keys" src="https://img.shields.io/badge/API%20keys-none-334155?style=flat-square">
 </p>
 
-<p align="center"><sub>Last verified working: 2026-10-14 with engine v1.18.1 on macOS Apple Silicon.</sub></p>
+<p align="center"><sub>Last verified working: 2026-10-30 with engine v1.18.1 on macOS Apple Silicon.</sub></p>
 
 **A free, open-source Google Maps scraper for lead generation that runs on your own machine.**
 Name a business type and a city. Get back an outreach-ready CSV with name, phone, email, website,
@@ -60,8 +60,8 @@ Maps API, delivered as clean, structured JSON and Markdown.
 
 ## Quick start
 
-Requires [Docker Desktop](https://www.docker.com/products/docker-desktop). Python 3 is optional and
-uses the standard library only.
+Requires [Docker Desktop](https://www.docker.com/products/docker-desktop) and Python 3. The scripts
+use the standard library only, so there is nothing to `pip install`.
 
 ```bash
 git clone https://github.com/Mahanaicoach/google-maps-scraper-kit.git

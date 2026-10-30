@@ -16,7 +16,10 @@ services:
     # platform: linux/amd64
     container_name: gmaps-scraper
     restart: unless-stopped
-    command: ["-web", "-data-folder", "/gmapsdata"]
+    # -c: parallel workers. The engine's own default resolves to 1 in this image, so a depth 5 job
+    # with emails visits every listing and website one at a time (~8 min). Most of that is business
+    # websites, not Google. Lower it if Google starts throttling you; raise it with proxies.
+    command: ["-web", "-data-folder", "/gmapsdata", "-c", "4"]
     # No published port: the engine is reached only through the ui service below.
     volumes:
       # Only job results. Do not mount a named volume over /opt: the image already ships Chromium at

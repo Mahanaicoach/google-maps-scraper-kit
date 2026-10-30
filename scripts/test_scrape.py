@@ -89,6 +89,28 @@ class PollAttempts(unittest.TestCase):
         self.assertGreaterEqual(scrape.poll_attempts(-5), 1)
 
 
+class StuckJob(unittest.TestCase):
+    """A job the engine never flips to "ok" (gosom/google-maps-scraper#346) keeps its written rows."""
+    def run_stuck(self, csv_body):
+        def fake_req(method, path, body=None):
+            if method == "POST":
+                return 201, b'{"id":"stuck"}'
+            if path.endswith("/download"):
+                return 200, csv_body
+            return 200, b'{"Status":"working"}'
+        with mock.patch.object(scrape, "req", fake_req), mock.patch.object(scrape.time, "sleep"), \
+             mock.patch.object(scrape, "poll_attempts", return_value=2), redirect_stdout(io.StringIO()):
+            return scrape.run_job({"max_time": 1})
+
+    def test_keeps_written_rows(self):
+        _, rows = self.run_stuck(b"title,phone\nA,1\nB,2\n")
+        self.assertEqual([r["title"] for r in rows], ["A", "B"])
+
+    def test_no_rows_still_errors(self):
+        with self.assertRaises(RuntimeError):
+            self.run_stuck(b"")
+
+
 class ExtractEmails(unittest.TestCase):
     def test_mailto_regex_junk_preference_cap(self):
         html = """
@@ -111,7 +133,7 @@ class CleanEngineEmails(unittest.TestCase):
         # The left column is what the engine actually returned on a depth 1 Austin scrape.
         rows = [{"emails": "user@domain.com"},
                 {"emails": "user@domain.com, hello@funkysolcoffee.com"},
-                {"emails": "orders@desnudo.com, example@gmail.com, orders@desnudo.com"},
+                {"emails": "orders@desnudo.com, example@gmail.com, u003eorders@desnudo.com"},
                 {"emails": "office@afugacoffee.com"},
                 {"emails": ""}]
         changed = scrape.clean_engine_emails(rows)

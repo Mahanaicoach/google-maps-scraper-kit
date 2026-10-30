@@ -12,6 +12,7 @@ Install these once:
 | Tool | Why | Get it |
 |---|---|---|
 | **Docker Desktop** | runs the scraper container | https://www.docker.com/products/docker-desktop |
+| **Python 3** | runs `scrape.py` and `scrape.sh` (standard library only, no `pip install`) | https://www.python.org/downloads |
 | **Claude Code** *(optional but recommended)* | lets Claude drive the scraper for you | https://claude.com/claude-code |
 | **git** *(optional)* | only if you'll push this to GitHub | https://git-scm.com |
 
@@ -54,14 +55,14 @@ The first run pulls the `gosom/google-maps-scraper` image once, a few hundred MB
 
 ```bash
 docker ps | grep gmaps-scraper          # should show it "Up"
-curl http://localhost:8080/api/v1/jobs  # should print [] (empty list) or existing jobs
+curl http://localhost:8080/api/v1/jobs  # should print null (no jobs yet) or a JSON list of jobs
 ```
 
 The engine also serves a web UI and API docs in the browser:
 - Web UI: **http://localhost:8080**
 - OpenAPI docs: **http://localhost:8080/api/docs**
 
-If `curl` returns a JSON array, the engine is live.
+If `curl` prints `null` or a JSON list, the engine is live.
 
 > **Rate limits and the law.** The engine sends real requests to Google Maps. Light use is fine. Big
 > jobs back to back, high `depth`, many keywords or scheduled runs without proxies can get your IP
@@ -184,7 +185,8 @@ curl -X DELETE http://localhost:8080/api/v1/jobs/<job-id>
 | `port is already allocated` / something else already uses 8080 | Set `SCRAPER_PORT=8081` in `.env`, then `docker compose up -d`. Compose publishes the scraper on that host port and `scripts/scrape.sh` and `scripts/scrape.py` read the same file, so nothing else needs editing. The port inside the container stays 8080 (do not change the right-hand side of the mapping). If your `.env` still has a `SCRAPER_BASE_URL` line, delete it or update its port: it overrides `SCRAPER_PORT`. The slash commands and the skill show `localhost:8080` in their examples, so tell Claude the port you picked. |
 | `422 missing max time` | Job body needs `max_time` (in **seconds**, e.g. `300`). |
 | `422 missing geo coordinates` | Job body needs `lat` and `lon` as **strings**, e.g. `"30.2672"`. |
-| Job stuck `working` forever | Lower `depth`, or the IP is being throttled by Google — wait, or add proxies (see skill). |
+| Job stuck `working` forever | Engine v1.18.x sometimes never marks a finished job done ([gosom/google-maps-scraper#346](https://github.com/gosom/google-maps-scraper/issues/346)); `scrape.py` keeps the rows already written when its wait runs out, and `docker compose restart` frees the engine for the next job. Otherwise lower `depth`, or the IP is being throttled by Google — wait, or add proxies (see skill). |
+| Scrapes feel slow | The kit runs the engine with `-c 4` (parallel workers) in `docker-compose.yml`; the engine's own default is 1. A depth 5 job with emails takes about 4 minutes. Most of that is visiting business websites for emails: `--no-email` is much faster. |
 | Empty CSV | Keyword too narrow or wrong geo — widen `radius` or fix `lat`/`lon`. |
 | Docker pull is slow | Normal on first run; it caches after that. |
 | `docker: 'compose' is not a docker command` / `unknown shorthand flag: 'd'` | The Compose plugin is missing. It ships with Docker Desktop — uninstalling Desktop leaves a **dangling symlink** in `~/.docker/cli-plugins/` that looks installed but isn't (`ls -l ~/.docker/cli-plugins/docker-compose`). Install it (`brew install docker-compose`), or skip Compose entirely — see *No Compose?* below. |
@@ -195,20 +197,22 @@ curl -X DELETE http://localhost:8080/api/v1/jobs/<job-id>
 ### No Compose? Run the same container with `docker run`
 
 This command runs the engine alone, with the localhost binding. It skips the `ui` proxy from
-`docker-compose.yml`, so the web UI shows upstream's GitHub and sponsor links; the API is the same:
+`docker-compose.yml`, so the web UI shows upstream's links and keeps the engine's job-list bug (Start
+Scraping does nothing, [gosom/google-maps-scraper#337](https://github.com/gosom/google-maps-scraper/issues/337)).
+The API and both scripts work the same:
 
 ```bash
 docker run -d --name gmaps-scraper --restart unless-stopped \
   -p 127.0.0.1:8080:8080 \
   -v gmaps_data:/gmapsdata \
-  gosom/google-maps-scraper:v1.18.1 -web -data-folder /gmapsdata
+  gosom/google-maps-scraper:v1.18.1 -web -data-folder /gmapsdata -c 4
 ```
 
-Add `--platform linux/amd64` on Apple Silicon. Stop it with `docker stop gmaps-scraper`.
+Stop it with `docker stop gmaps-scraper`.
 
 ### Running without Docker (fallback)
 
-Use this when Docker is unavailable, or when amd64 emulation is too slow on Apple Silicon. The engine
+Use this when Docker is unavailable. The engine
 is a single Go binary. It serves the **same API on the same port**, so every script and slash command
 in the kit works unchanged.
 

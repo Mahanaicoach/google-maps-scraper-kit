@@ -59,7 +59,7 @@ KEY = os.environ.get("SCRAPER_API_KEY", "")
 # The 8 lead fields: what you use to contact and qualify a lead.
 # Everything else (geo coordinates, IDs, hours, images, review blobs) is dropped by default.
 LEAD = ["title", "phone", "emails", "website", "category", "address", "review_rating", "review_count"]
-UA = "google-maps-scraper-kit/1.1 (https://github.com/Mahanaicoach/google-maps-scraper-kit)"
+UA = "google-maps-scraper-kit/1.2 (https://github.com/Mahanaicoach/google-maps-scraper-kit)"
 
 POLL_EVERY = 8            # seconds between status checks
 POLL_GRACE = 120          # the engine still has to flush results and flip the status
@@ -176,15 +176,26 @@ def run_job(body):
             raise RuntimeError("\n✗ Job failed. If this keeps happening you may be rate-limited — wait or add proxies.")
         time.sleep(POLL_EVERY)
     else:
-        raise RuntimeError(
-            f"\n✗ Gave up waiting after ~{attempts * POLL_EVERY // 60} min. The job may still be "
-            f"running, and the engine keeps the results either way, so nothing is lost:\n"
-            f"    curl {BASE}/api/v1/jobs/{job_id}\n"
-            f"  and once its Status is \"ok\", download the CSV with\n"
-            f"    curl -o results.csv {BASE}/api/v1/jobs/{job_id}/download")
+        # The engine writes rows as it goes, and v1.18.x can leave a finished job stuck on
+        # "working" (gosom/google-maps-scraper#346), so take whatever is on disk.
+        rows = download_rows(job_id)
+        if not rows:
+            raise RuntimeError(
+                f"\n✗ Gave up waiting after ~{attempts * POLL_EVERY // 60} min with no rows yet. The "
+                f"engine keeps the job, so check it later:\n"
+                f"    curl {BASE}/api/v1/jobs/{job_id}\n"
+                f"  and once its Status is \"ok\", download the CSV with\n"
+                f"    curl -o results.csv {BASE}/api/v1/jobs/{job_id}/download")
+        print(f"\n⚠ Job still \"{status}\" after ~{attempts * POLL_EVERY // 60} min; "
+              f"keeping the {len(rows)} rows it has written.")
+        return job_id, rows
 
+    return job_id, download_rows(job_id)
+
+
+def download_rows(job_id):
     _, raw = req("GET", f"/api/v1/jobs/{job_id}/download")
-    return job_id, list(csv.DictReader(io.StringIO(raw.decode("utf-8", "replace"))))
+    return list(csv.DictReader(io.StringIO(raw.decode("utf-8", "replace"))))
 
 
 def collect_keywords(a):
@@ -271,6 +282,9 @@ _JUNK_DOMAIN = ("example", "sentry", "wixpress", "wix.com", "godaddy", "squaresp
                 "domain.com", "email.com", "yourdomain", "schema.org", "w3.org", "sentry.io")
 _JUNK_LOCAL = {"name", "email", "user", "you", "someone", "example", "username",
                "youremail", "yourname", "firstname", "lastname", "sample"}
+# A JSON-escaped <, >, ", ' or & glued to the address (">orders@x.com" in page source),
+# which the regex reads as part of the local part: u003eorders@x.com.
+_ESCAPE_PREFIX = re.compile(r"^(?:u00(?:3c|3e|22|27|26))+")
 
 def _host(url):
     if not url.startswith(("http://", "https://")):
@@ -297,7 +311,8 @@ def clean_engine_emails(results):
     changed = 0
     for r in results:
         raw = [e.strip().lower() for e in (r.get("emails") or "").split(",") if e.strip()]
-        kept = list(dict.fromkeys(e for e in raw if is_real_email(e)))
+        fixed = (_ESCAPE_PREFIX.sub("", e) for e in raw)
+        kept = list(dict.fromkeys(e for e in fixed if is_real_email(e)))
         if kept != raw:
             r["emails"] = ", ".join(kept)
             changed += 1
@@ -309,7 +324,7 @@ def extract_emails(html, site_host):
     site = _host(site_host or "")
     found = []
     for e in MAILTO_RE.findall(html or "") + EMAIL_RE.findall(html or ""):
-        e = urllib.parse.unquote(e).strip().lower()
+        e = _ESCAPE_PREFIX.sub("", urllib.parse.unquote(e).strip().lower())
         if not is_real_email(e) or e in found:
             continue
         found.append(e)
