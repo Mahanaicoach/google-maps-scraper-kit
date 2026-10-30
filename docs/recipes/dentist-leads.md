@@ -51,7 +51,7 @@ Illustrative rows only:
 ## Columns that matter for dental outreach
 
 - `title` and `phone`: who to call, and the number to call.
-- `emails`: the published practice inbox. The deep email pass checks contact and about pages to fill it.
+- `emails`: the published practice inbox. The email crawl reads the homepage, then contact and about pages.
 - `website`: the site you will review before you reach out.
 - `category`: separates general dentists from orthodontists and other specialists.
 - `review_rating` and `review_count`: a quick read on how established the practice is.

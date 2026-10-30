@@ -15,7 +15,7 @@ Batch (one job, many keywords) from a file (one keyword per line):
 Whole city past Google's ~120 results per search (3 x 3 map tiles, run one at a time, deduped on place_id):
     python3 scripts/scrape.py "plumbers in Phoenix AZ" --city "Phoenix, AZ" --grid 3
 
-Skip the deep email pass over contact and about pages (on by default whenever emails are on):
+Check homepages only for emails, not contact and about pages:
     python3 scripts/scrape.py "gyms in Miami FL" --city "Miami, FL" --no-deep-emails
 
 Notes:
@@ -23,7 +23,7 @@ Notes:
 - Geocoding uses OpenStreetMap Nominatim (free, no key). It allows ~1 request/sec and requires a
   descriptive User-Agent (set below). Do not loop it aggressively.
 """
-import argparse, csv, functools, io, ipaddress, json, math, os, re, socket, sys, time
+import argparse, csv, functools, io, ipaddress, json, math, os, re, shutil, socket, subprocess, sys, time
 import html as _html, http.client, urllib.request, urllib.parse, urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
@@ -60,12 +60,16 @@ KEY = os.environ.get("SCRAPER_API_KEY", "")
 # The 8 lead fields: what you use to contact and qualify a lead.
 # Everything else (geo coordinates, IDs, hours, images, review blobs) is dropped by default.
 LEAD = ["title", "phone", "emails", "website", "category", "address", "review_rating", "review_count"]
-UA = "google-maps-scraper-kit/1.4 (https://github.com/Mahanaicoach/google-maps-scraper-kit)"
+UA = "google-maps-scraper-kit/1.5 (https://github.com/Mahanaicoach/google-maps-scraper-kit)"
+# Business websites fetched at once by the email crawl, --socials and --tech. They are many
+# different small sites, not Google, so this does not raise the rate-limit risk.
+SITE_WORKERS = 16
 
 POLL_EVERY = 8            # seconds between status checks
 POLL_GRACE = 120          # the engine still has to flush results and flip the status
 POLL_CEILING = 7200       # never wait longer than 2h, whatever --max-time asked for
 ENGINE_MIN_RUNTIME = 180  # the engine floors anything below this (runner/webrunner)
+ENGINE_CONTAINER = "gmaps-scraper"  # container_name in docker-compose.yml and SETUP's docker run
 
 
 def poll_attempts(max_time):
@@ -153,8 +157,47 @@ def dedupe(rows):
     return out
 
 
+def _local_docker():
+    return urllib.parse.urlparse(BASE).hostname in ("localhost", "127.0.0.1", "::1") \
+        and shutil.which("docker") is not None
+
+def engine_run_ended(since):
+    """True if the local engine's log shows a scraper run ending after `since` (UTC, ISO 8601).
+    The scripts run one job at a time, so that is this job's run."""
+    if not _local_docker():
+        return False
+    try:
+        out = subprocess.run(["docker", "logs", "--since", since, ENGINE_CONTAINER],
+                             capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "scrapemate exited" in out.stdout + out.stderr
+
+def restart_engine():
+    if not _local_docker():
+        return False
+    try:
+        return subprocess.run(["docker", "restart", ENGINE_CONTAINER],
+                              capture_output=True, timeout=90).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+def recover_stuck_job(job_id):
+    """Engine v1.18.x can finish a job, rows written, without marking it done, and then holds every
+    later job on "pending" until it restarts (gosom/google-maps-scraper#346). Keep the rows and
+    restart the local engine so the next scrape runs."""
+    rows = download_rows(job_id)
+    print(f"\n⚠ The engine finished this job but did not mark it done (gosom/google-maps-scraper#346); "
+          f"keeping its {len(rows)} rows.")
+    if restart_engine():
+        print("  Restarted the engine, which would otherwise hold every later job on \"pending\".")
+    else:
+        print("  If the next scrape stays \"pending\", run: docker restart " + ENGINE_CONTAINER)
+    return rows
+
 def run_job(body):
     """Create one engine job, poll it, download it -> (job_id, raw CSV rows). Raises RuntimeError."""
+    since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     try:
         _, raw = req("POST", "/api/v1/jobs", body)
     except urllib.error.HTTPError as e:
@@ -166,7 +209,7 @@ def run_job(body):
 
     attempts = poll_attempts(body.get("max_time"))
     print(f"▶ Polling (up to ~{attempts * POLL_EVERY // 60} min)…")
-    status = None
+    status, ended = None, 0
     for i in range(attempts):
         _, raw = req("GET", f"/api/v1/jobs/{job_id}")
         status = json.loads(raw).get("Status")
@@ -175,6 +218,10 @@ def run_job(body):
             print(); break
         if status == "failed":
             raise RuntimeError("\n✗ Job failed. If this keeps happening you may be rate-limited — wait or add proxies.")
+        if status == "working" and engine_run_ended(since):
+            ended += 1
+            if ended > 2:  # the status normally flips within seconds of the run ending
+                return job_id, recover_stuck_job(job_id)
         time.sleep(POLL_EVERY)
     else:
         # The engine writes rows as it goes, and v1.18.x can leave a finished job stuck on
@@ -188,7 +235,8 @@ def run_job(body):
                 f"  and once its Status is \"ok\", download the CSV with\n"
                 f"    curl -o results.csv {BASE}/api/v1/jobs/{job_id}/download")
         print(f"\n⚠ Job still \"{status}\" after ~{attempts * POLL_EVERY // 60} min; "
-              f"keeping the {len(rows)} rows it has written.")
+              f"keeping the {len(rows)} rows it has written. If the next scrape stays \"pending\", "
+              f"restart the engine: docker restart {ENGINE_CONTAINER}")
         return job_id, rows
 
     return job_id, download_rows(job_id)
@@ -307,7 +355,7 @@ def _fetch_html(url, timeout=10):
 
 @functools.lru_cache(maxsize=512)  # ponytail: homepages only; evicted pages just refetch
 def _fetch_cached(url):
-    """Homepage fetch shared by the deep email pass, --socials and --tech (one fetch per site)."""
+    """Homepage fetch shared by the email crawl, --socials and --tech (one fetch per site)."""
     return _fetch_html(url, timeout=8)
 
 def _find_socials(html):
@@ -323,7 +371,7 @@ def _find_socials(html):
             break
     return out
 
-def enrich_sites(results, find, fields, label, workers=8):
+def enrich_sites(results, find, fields, label, workers=None):
     """Merge find(homepage html) into every lead that has a website. Zero LLM tokens."""
     for r in results:                       # make sure every row has the keys
         for k in fields:
@@ -332,7 +380,7 @@ def enrich_sites(results, find, fields, label, workers=8):
     done = 0
     def work(r):
         r.update(find(_fetch_cached(r["website"])))
-    with ThreadPoolExecutor(max_workers=workers) as ex:
+    with ThreadPoolExecutor(max_workers=workers or SITE_WORKERS) as ex:
         for _ in ex.map(work, todo):
             done += 1
             print(f"\r  {label}: {done}/{len(todo)} sites checked", end="", flush=True)
@@ -385,7 +433,7 @@ def intent_score(r):
     return s
 
 
-# ── Deep email pass: contact/about pages for rows the engine left without an email ──
+# ── Email crawl: each business website's homepage, then its contact/about pages ──
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 MAILTO_RE = re.compile(r"mailto:([^\"'>\s?]+)", re.I)
 HREF_RE = re.compile(r"<a\s[^>]*?href\s*=\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", re.I | re.S)
@@ -411,24 +459,6 @@ def is_real_email(e):
     if not EMAIL_RE.fullmatch(e) or e.endswith(_JUNK_EXT):
         return False
     return local not in _JUNK_LOCAL and not any(j in dom for j in _JUNK_DOMAIN)
-
-
-def clean_engine_emails(results):
-    """Re-filter the engine's own `emails` column through is_real_email.
-
-    The engine copies whatever it finds on the page, placeholders included, and until now only the
-    addresses this script scraped itself were filtered. That let user@domain.com through and counted
-    it as a hit, so the found rate printed below overstated how many leads were reachable.
-    Returns the number of rows changed; a row left empty here still gets the deep pass."""
-    changed = 0
-    for r in results:
-        raw = [e.strip().lower() for e in (r.get("emails") or "").split(",") if e.strip()]
-        fixed = (_ESCAPE_PREFIX.sub("", e) for e in raw)
-        kept = list(dict.fromkeys(e for e in fixed if is_real_email(e)))
-        if kept != raw:
-            r["emails"] = ", ".join(kept)
-            changed += 1
-    return changed
 
 
 # "name [at] domain [dot] com", "name (at) domain dot com" and friends, adapted from OpenLeadFinder.
@@ -472,19 +502,19 @@ def contact_links(html, base_url):
             out.append(url)
     return out[:3]
 
-def enrich_emails(results, workers=8):
-    """Fill empty `emails` from the homepage, then up to 3 contact/about pages. Zero LLM tokens."""
+def enrich_emails(results, deep=True, workers=None):
+    """Fill empty `emails` from the homepage, then (deep) up to 3 contact/about pages. Zero LLM tokens."""
     todo = [r for r in results if r.get("website") and not r.get("emails")]
     done = 0
     def work(r):
         site = r["website"]
         home = _fetch_cached(site)
         found = extract_emails(home, site)
-        if home and not found:
-            pages = "".join(_fetch_html(u, timeout=8) for u in contact_links(home, site))
+        if deep and home and not found:
+            pages = "\n".join(_fetch_html(u, timeout=8) for u in contact_links(home, site))
             found = extract_emails(pages, site)
         r["emails"] = ", ".join(found)
-    with ThreadPoolExecutor(max_workers=workers) as ex:
+    with ThreadPoolExecutor(max_workers=workers or SITE_WORKERS) as ex:
         for _ in ex.map(work, todo):
             done += 1
             print(f"\r  emails: {done}/{len(todo)} sites checked", end="", flush=True)
@@ -507,13 +537,13 @@ def main():
     ap.add_argument("--lang", default="en", metavar="XX",
                     help="interface language the engine asks Google for, 2 letters "
                          "(default: en; use the local language, e.g. pt, es, de)")
-    # Emails are ON by default (they're the most valuable lead field). Visits each business
-    # website to find an address — a bit slower. Use --no-email to skip for a fast run.
+    # Emails are ON by default (they're the most valuable lead field): the script crawls each
+    # business website after the Maps job. --no-email skips the crawl.
     ap.add_argument("--email", dest="email", action="store_true", default=True, help=argparse.SUPPRESS)
     ap.add_argument("--no-email", dest="email", action="store_false",
-                    help="skip email extraction for a faster run (emails are on by default)")
+                    help="skip the website crawl for emails (emails are on by default)")
     ap.add_argument("--no-deep-emails", dest="deep_emails", action="store_false",
-                    help="skip the second email pass over contact/about pages (on whenever emails are on)")
+                    help="check homepages only, not contact and about pages")
     ap.add_argument("--grid", type=int, metavar="N",
                     help="split the --city area into N x N map tiles, one job each, deduped "
                          "(breaks Google's ~120 per search cap; max 10)")
@@ -565,10 +595,6 @@ def main():
         lat, lon = coords
         print(f"  → {lat}, {lon}")
 
-    if a.email:
-        print("ℹ Email extraction is ON (visits each business website; a bit slower). "
-              "Use --no-email for a fast run.")
-
     # --- WARN, don't block: flag high-volume jobs (proceed anyway) ---
     if a.depth >= 15 or len(keywords) >= 10 or (a.grid or 1) ** 2 >= 4:
         print("⚠️  Heads-up: this is a large job (high depth, many keywords or a grid).")
@@ -584,9 +610,12 @@ def main():
 
     body = {"name": "scrape-py", "keywords": keywords, "lang": a.lang, "zoom": 15,
             "lat": str(lat), "lon": str(lon), "fast_mode": False, "radius": 10000,
-            "depth": a.depth, "email": a.email, "max_time": a.max_time}
+            # The engine's own email pass visits every website in a browser, one per worker: it took
+            # most of each job and found fewer emails than the crawl below (OpenLeadFinder's
+            # approach), so the engine only reads Google Maps.
+            "depth": a.depth, "email": False, "max_time": a.max_time}
     if not a.grid:
-        print(f"▶ Creating job: {len(keywords)} keyword(s) @ {lat},{lon} depth={a.depth} email={a.email}")
+        print(f"▶ Creating job: {len(keywords)} keyword(s) @ {lat},{lon} depth={a.depth}")
         for k in keywords:
             print(f"    • {k}")
         try:
@@ -595,7 +624,7 @@ def main():
             sys.exit(str(e))
     else:
         print(f"▶ Grid {a.grid}x{a.grid}: {len(cells)} jobs, one at a time, "
-              f"{len(keywords)} keyword(s) depth={a.depth} email={a.email}")
+              f"{len(keywords)} keyword(s) depth={a.depth}")
         for k in keywords:
             print(f"    • {k}")
         job_id, rows = None, []
@@ -621,22 +650,15 @@ def main():
         fields = [c.strip() for c in a.fields.split(",") if c.strip()]
     else:
         fields = LEAD
+    print(f"✓ Done — {len(rows)} businesses (fields: {', '.join(fields)}).")
+
+    if a.email and "emails" in fields:  # on the raw rows, so --fields without website still works
+        pages = "homepage, then contact and about pages" if a.deep_emails else "homepage only"
+        print(f"▶ Emails: checking each business website ({pages}, {SITE_WORKERS} at a time)…")
+        enrich_emails(rows, deep=a.deep_emails)
+        total, n = sum(1 for r in rows if r.get("emails")), len(rows)
+        print(f"  emails found for {total}/{n} businesses ({round(100 * total / n) if n else 0}%)")
     results = [{k: r.get(k, "") for k in fields} for r in rows]
-    print(f"✓ Done — {len(results)} businesses (fields: {', '.join(fields)}).")
-
-    if "emails" in fields:
-        dropped = clean_engine_emails(results)
-        if dropped:
-            print(f"  dropped placeholder emails (user@domain.com and the like) on {dropped} row(s)")
-
-    if a.email and a.deep_emails and "emails" in fields:
-        print("▶ Deep email pass: checking contact/about pages for rows with no email…")
-        engine = sum(1 for r in results if r.get("emails"))
-        enrich_emails(results)
-        total = sum(1 for r in results if r.get("emails"))
-        n = len(results)
-        print(f"  emails: {engine}/{n} from the engine, +{total - engine} from contact pages "
-              f"= {total}/{n} ({round(100 * total / n) if n else 0}%)")
 
     if a.socials:
         print("▶ Finding socials (Instagram / Facebook / LinkedIn) on each website…")

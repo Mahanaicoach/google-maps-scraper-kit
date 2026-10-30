@@ -5,14 +5,16 @@ Name a business type and a city, and you get a CSV of local businesses with thei
 
 ## How emails are found
 
-Emails are on by default. Google Maps listings carry no email field, so the kit collects them from each business website in two steps.
+Emails are on by default. Google Maps listings carry no email field, so once the Maps job is done the script crawls each business website itself, 16 sites at a time:
 
-1. The engine visits the website on every listing and pulls any email it can read there.
-2. The deep email pass then takes each row that has a website but still no email. It fetches the homepage, then up to 3 contact and about pages on the same site.
+1. It fetches the homepage and reads any email there.
+2. If the homepage shows none, it fetches up to 3 contact and about pages on the same site.
 
-The deep email pass reads `mailto:` links and plain text on those pages. It drops junk such as image file names, placeholder addresses and website-builder domains. It sorts addresses on the business's own domain first and keeps at most 3 per row. It runs in plain Python code, so it costs zero AI tokens.
+The engine's own email option is left off: it visits every site in a browser, took most of each job's time, and found fewer emails than this crawl on the same listings.
 
-When the pass ends, the script prints one found-rate line. It shows how many emails came from the engine, how many the contact pages added, and the total share of rows with an email.
+The crawl reads `mailto:` links and plain text on those pages. It drops junk such as image file names, placeholder addresses and website-builder domains. It sorts addresses on the business's own domain first and keeps at most 3 per row. It runs in plain Python code, so it costs zero AI tokens.
+
+When the crawl ends, the script prints one found-rate line: how many businesses got an email, and their share of all rows.
 
 ## Run it
 
@@ -23,7 +25,7 @@ docker compose up -d
 python3 scripts/scrape.py "dentists in Denver CO" --city "Denver, CO" --depth 5
 ```
 
-Skip the deep email pass for a quicker run, or skip emails entirely for the fastest run:
+Check homepages only for a quicker run, or skip emails entirely for the fastest run:
 
 ```bash
 python3 scripts/scrape.py "dentists in Denver CO" --city "Denver, CO" --no-deep-emails

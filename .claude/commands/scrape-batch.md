@@ -14,7 +14,8 @@ array, so a batch is one job with all the terms.
    (Instagram / Facebook / LinkedIn) for these? Emails are already included. (yes / no)"*. If yes, add `--socials`.
 4. **Warn, don't block:** a batch with many keywords is high-volume. Print ONE short warning that it can
    get the IP temporarily rate-limited and suggest proxies for large or repeated runs, then **proceed**.
-5. POST a single job with the full `keywords` array, the required fields (`max_time` seconds, string `lat`/`lon`)
+5. Easiest: `python3 scripts/scrape.py --keywords-file <file> --city "<City, ST>"` (one job, emails crawled
+   by the script). Raw API instead: POST a single job with the full `keywords` array, the required fields (`max_time` seconds, string `lat`/`lon`)
    and **`"email": true`** (emails are the key lead field). Use a generous `max_time` (e.g. `900`), because many
    keywords plus email extraction take longer. Poll in the background, then download.
 6. Present the 8 lead fields in a clean table and save the full file to disk.

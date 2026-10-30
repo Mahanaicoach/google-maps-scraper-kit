@@ -5,7 +5,7 @@ Set up the kit's engine on this computer:
 
 1. Confirm Docker is installed and running: `docker ps`. If it errors, tell the user to install or start **Docker Desktop** (link in `SETUP.md` §0) and stop here.
 2. From the kit root, start the engine: `docker compose up -d`.
-3. Wait ~10s, then verify it is live: `curl http://localhost:8080/api/v1/jobs` should return a JSON array (often `[]`).
+3. Wait ~10s, then verify it is live: `curl http://localhost:8080/api/v1/jobs` should return `null` (no jobs yet) or a JSON array of jobs.
 4. Report success. Tell the user they can now run `/scrape <business> in <city>`, or ask in plain language (e.g. "scrape gyms in Miami").
 5. **Show this warning once setup succeeds:**
    > **Before you scrape:** the engine sends real requests to Google Maps. Light use is fine. Big jobs

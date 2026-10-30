@@ -56,7 +56,7 @@ Illustrative rows only:
 ## Columns that matter for roofing outreach
 
 - `phone`: the main contact channel for most trade businesses.
-- `emails`: filled when the roofer publishes one. The deep email pass checks contact and about pages.
+- `emails`: filled when the roofer publishes one. The email crawl reads the homepage, then contact and about pages.
 - `website`: an empty cell here also means no email or socials could be found.
 - `category`: shows how each business describes itself.
 - `review_rating` and `review_count`: a quick read on size and reputation.
