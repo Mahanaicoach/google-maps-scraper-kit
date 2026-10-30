@@ -246,7 +246,8 @@ HREF_RE = re.compile(r"<a\s[^>]*?href\s*=\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</a>",
 _JUNK_EXT = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".css", ".js")
 _JUNK_DOMAIN = ("example", "sentry", "wixpress", "wix.com", "godaddy", "squarespace", "wordpress",
                 "domain.com", "email.com", "yourdomain", "schema.org", "w3.org", "sentry.io")
-_JUNK_LOCAL = {"name", "email", "user", "you", "someone"}
+_JUNK_LOCAL = {"name", "email", "user", "you", "someone", "example", "username",
+               "youremail", "yourname", "firstname", "lastname", "sample"}
 
 def _host(url):
     if not url.startswith(("http://", "https://")):
@@ -254,15 +255,39 @@ def _host(url):
     h = (urllib.parse.urlparse(url).hostname or "").lower()
     return h[4:] if h.startswith("www.") else h
 
+def is_real_email(e):
+    """False for anything not worth sending to: a template placeholder (user@domain.com,
+    example@gmail.com), a vendor/boilerplate domain, or an image path that parsed as an address."""
+    local, _, dom = e.rpartition("@")
+    if not EMAIL_RE.fullmatch(e) or e.endswith(_JUNK_EXT):
+        return False
+    return local not in _JUNK_LOCAL and not any(j in dom for j in _JUNK_DOMAIN)
+
+
+def clean_engine_emails(results):
+    """Re-filter the engine's own `emails` column through is_real_email.
+
+    The engine copies whatever it finds on the page, placeholders included, and until now only the
+    addresses this script scraped itself were filtered. That let user@domain.com through and counted
+    it as a hit, so the found rate printed below overstated how many leads were reachable.
+    Returns the number of rows changed; a row left empty here still gets the deep pass."""
+    changed = 0
+    for r in results:
+        raw = [e.strip().lower() for e in (r.get("emails") or "").split(",") if e.strip()]
+        kept = list(dict.fromkeys(e for e in raw if is_real_email(e)))
+        if kept != raw:
+            r["emails"] = ", ".join(kept)
+            changed += 1
+    return changed
+
+
 def extract_emails(html, site_host):
     """Emails from mailto: links and plain text, junk dropped, site-domain first, max 3."""
     site = _host(site_host or "")
     found = []
     for e in MAILTO_RE.findall(html or "") + EMAIL_RE.findall(html or ""):
         e = urllib.parse.unquote(e).strip().lower()
-        local, _, dom = e.rpartition("@")
-        if (not EMAIL_RE.fullmatch(e) or e.endswith(_JUNK_EXT) or local in _JUNK_LOCAL
-                or any(j in dom for j in _JUNK_DOMAIN) or e in found):
+        if not is_real_email(e) or e in found:
             continue
         found.append(e)
     on_site = lambda e: site and (e.endswith("@" + site) or e.endswith("." + site))
@@ -421,6 +446,11 @@ def main():
         fields = LEAD
     results = [{k: r.get(k, "") for k in fields} for r in rows]
     print(f"✓ Done — {len(results)} businesses (fields: {', '.join(fields)}).")
+
+    if "emails" in fields:
+        dropped = clean_engine_emails(results)
+        if dropped:
+            print(f"  dropped placeholder emails (user@domain.com and the like) on {dropped} row(s)")
 
     if a.email and a.deep_emails and "emails" in fields:
         print("▶ Deep email pass: checking contact/about pages for rows with no email…")

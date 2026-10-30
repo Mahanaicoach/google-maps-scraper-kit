@@ -85,6 +85,34 @@ class ExtractEmails(unittest.TestCase):
         self.assertEqual(scrape.extract_emails("no emails here", "x.com"), [])
 
 
+class CleanEngineEmails(unittest.TestCase):
+    def test_drops_placeholders_keeps_real(self):
+        # The left column is what the engine actually returned on a depth 1 Austin scrape.
+        rows = [{"emails": "user@domain.com"},
+                {"emails": "user@domain.com, hello@funkysolcoffee.com"},
+                {"emails": "orders@desnudo.com, example@gmail.com, orders@desnudo.com"},
+                {"emails": "office@afugacoffee.com"},
+                {"emails": ""}]
+        changed = scrape.clean_engine_emails(rows)
+        self.assertEqual([r["emails"] for r in rows],
+                         ["", "hello@funkysolcoffee.com", "orders@desnudo.com",
+                          "office@afugacoffee.com", ""])
+        self.assertEqual(changed, 3)  # untouched rows are not counted
+
+    def test_missing_column_is_not_an_error(self):
+        rows = [{"title": "no emails field"}]
+        self.assertEqual(scrape.clean_engine_emails(rows), 0)
+
+
+class IsRealEmail(unittest.TestCase):
+    def test_placeholders_and_vendors(self):
+        for e in ("user@domain.com", "example@gmail.com", "youremail@yourdomain.com",
+                  "name@company.org", "a@b.wixpress.com", "logo@2x.png"):
+            self.assertFalse(scrape.is_real_email(e), e)
+        for e in ("info@acmeplumbing.com", "owner@gmail.com", "hello@funkysol.co.uk"):
+            self.assertTrue(scrape.is_real_email(e), e)
+
+
 class ContactLinks(unittest.TestCase):
     def test_discovers_same_site_only(self):
         html = """<a href="/contact-us#form">Get in touch</a>
