@@ -140,6 +140,15 @@ grid is slower and more likely to trip rate limits: warn once, don't block.
 **Deep email pass:** on by default whenever emails are on. Rows with a website but no email get their
 contact and about pages checked, and the script prints the found rate. `--no-deep-emails` skips it.
 
+**Who already advertises:** when the user wants warm leads, businesses that run ads, or to know a
+site's platform, add `--tech`. It reads each homepage for a Meta Pixel, Google Ads tag and analytics,
+the platform (WordPress, Shopify, Wix, Squarespace, Webflow) and mobile support, scores each lead 0-100
+(`intent_score`: pixels dominate, reviews, rating and an email add a little) and sorts highest first.
+It finds installed tags, not live ad campaigns. Zero LLM tokens.
+
+The script fetches only public addresses: a website that resolves or redirects to a private,
+loopback or link-local address (this machine, the engine on localhost, the user's network) is skipped.
+
 ## Other endpoints
 - `GET /api/v1/jobs` lists jobs. `DELETE /api/v1/jobs/{id}` deletes a job and frees disk.
 - Browser UI and OpenAPI docs: `http://localhost:8080` and `http://localhost:8080/api/docs`. The kit's

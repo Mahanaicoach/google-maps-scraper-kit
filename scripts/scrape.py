@@ -23,7 +23,8 @@ Notes:
 - Geocoding uses OpenStreetMap Nominatim (free, no key). It allows ~1 request/sec and requires a
   descriptive User-Agent (set below). Do not loop it aggressively.
 """
-import argparse, csv, functools, io, json, math, os, re, sys, time, urllib.request, urllib.parse, urllib.error
+import argparse, csv, functools, io, ipaddress, json, math, os, re, socket, sys, time
+import html as _html, urllib.request, urllib.parse, urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
 # The status lines below use ▶ ✓ ℹ •, and every file this script writes can hold accented business
@@ -59,7 +60,7 @@ KEY = os.environ.get("SCRAPER_API_KEY", "")
 # The 8 lead fields: what you use to contact and qualify a lead.
 # Everything else (geo coordinates, IDs, hours, images, review blobs) is dropped by default.
 LEAD = ["title", "phone", "emails", "website", "category", "address", "review_rating", "review_count"]
-UA = "google-maps-scraper-kit/1.2 (https://github.com/Mahanaicoach/google-maps-scraper-kit)"
+UA = "google-maps-scraper-kit/1.3 (https://github.com/Mahanaicoach/google-maps-scraper-kit)"
 
 POLL_EVERY = 8            # seconds between status checks
 POLL_GRACE = 120          # the engine still has to flush results and flip the status
@@ -221,32 +222,57 @@ SOCIAL_RE = {
     "facebook":  re.compile(r"https?://(?:www\.|m\.|web\.)?facebook\.com/([A-Za-z0-9_.\-]+)", re.I),
     "linkedin":  re.compile(r"https?://(?:[a-z]{2,3}\.)?linkedin\.com/(?:company|in|school)/([A-Za-z0-9_.\-%]+)", re.I),
 }
+SOCIAL_FIELDS = list(SOCIAL_RE)
 _SKIP_HANDLE = {"", "home", "pages", "people", "help", "about", "policies", "policy",
                 "legal", "tos", "privacy", "settings", "sharer", "tr", "profile.php",
                 "plugins", "dialog", "intent", "login", "share.php", "permalink.php",
                 "p", "reel", "reels", "explore", "stories", "tv", "watch", "events",
                 "groups", "marketplace", "gaming", "photo", "hashtag", "search"}
 
+@functools.lru_cache(maxsize=1024)
+def _is_public_host(host):
+    """True only if every address the host resolves to is public. Websites come from third-party
+    listings, so one could point a fetch at this machine or its network instead (the engine API on
+    localhost:8080, a router admin page, a cloud metadata endpoint)."""
+    try:
+        infos = socket.getaddrinfo(host, None)
+        return bool(infos) and all(ipaddress.ip_address(i[4][0].split("%")[0]).is_global for i in infos)
+    except (OSError, UnicodeError, ValueError):
+        return False
+
+class _PublicRedirectsOnly(urllib.request.HTTPRedirectHandler):
+    """A public site may not redirect the fetch to a private address either."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not _is_public_host(urllib.parse.urlparse(newurl).hostname or ""):
+            return None  # urllib then raises HTTPError, which _fetch_html turns into ""
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+_OPENER = urllib.request.build_opener(_PublicRedirectsOnly)
+
 def _fetch_html(url, timeout=10):
     if not url:
         return ""
     if not url.startswith(("http://", "https://")):
         url = "http://" + url
+    # ponytail: the host is resolved again by the actual connect, so DNS rebinding can still slip
+    # through; pin the checked IP in a custom connection if this ever runs as a shared service.
+    if not _is_public_host(urllib.parse.urlparse(url).hostname or ""):
+        return ""
     try:
         r = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0 (compatible; " + UA + ")", "Accept": "text/html"})
-        with urllib.request.urlopen(r, timeout=timeout) as resp:
+        with _OPENER.open(r, timeout=timeout) as resp:
             return resp.read(400_000).decode("utf-8", "replace")
     except Exception:
         return ""
 
 @functools.lru_cache(maxsize=512)  # ponytail: homepages only; evicted pages just refetch
 def _fetch_cached(url):
-    """Homepage fetch shared by the deep email pass and --socials (one fetch per site)."""
+    """Homepage fetch shared by the deep email pass, --socials and --tech (one fetch per site)."""
     return _fetch_html(url, timeout=8)
 
 def _find_socials(html):
-    out = {"instagram": "", "facebook": "", "linkedin": ""}
+    out = {k: "" for k in SOCIAL_FIELDS}
     for plat, rx in SOCIAL_RE.items():
         for m in rx.finditer(html or ""):
             h = m.group(1).lower()
@@ -258,19 +284,66 @@ def _find_socials(html):
             break
     return out
 
-def enrich_socials(results, workers=8):
-    """Add instagram/facebook/linkedin to each lead by scanning its website. Zero LLM tokens."""
+def enrich_sites(results, find, fields, label, workers=8):
+    """Merge find(homepage html) into every lead that has a website. Zero LLM tokens."""
     for r in results:                       # make sure every row has the keys
-        r.setdefault("instagram", ""); r.setdefault("facebook", ""); r.setdefault("linkedin", "")
+        for k in fields:
+            r.setdefault(k, "")
     todo = [r for r in results if r.get("website")]
     done = 0
     def work(r):
-        r.update(_find_socials(_fetch_cached(r["website"])))
+        r.update(find(_fetch_cached(r["website"])))
     with ThreadPoolExecutor(max_workers=workers) as ex:
         for _ in ex.map(work, todo):
             done += 1
-            print(f"\r  socials: {done}/{len(todo)} sites checked", end="", flush=True)
+            print(f"\r  {label}: {done}/{len(todo)} sites checked", end="", flush=True)
     print()
+
+
+# ── Optional ad and tech signals (--tech): who already spends on marketing ──────
+# Regexes from OpenLeadFinder's website layer. They run on the homepage already fetched above.
+TECH_RE = {
+    "fb_pixel":       re.compile(r"connect\.facebook\.net/[^\"']*fbevents\.js|fbq\(", re.I),
+    "google_ads_tag": re.compile(r"googleadservices\.com|AW-\d{6,}|googleads\.g\.doubleclick\.net", re.I),
+    "analytics":      re.compile(r"googletagmanager\.com/gtag|gtag\(|UA-\d{4,}|G-[A-Z0-9]{6,}", re.I),
+}
+CMS_RE = [
+    ("wordpress",   re.compile(r"/wp-content/|/wp-includes/", re.I)),
+    ("shopify",     re.compile(r"cdn\.shopify\.com|shopify\.theme", re.I)),
+    ("wix",         re.compile(r"static\.wixstatic\.com|_wixcss|wix\.com", re.I)),
+    ("squarespace", re.compile(r"static1\.squarespace|squarespace\.com", re.I)),
+    ("webflow",     re.compile(r"webflow\.com", re.I)),
+]
+VIEWPORT_RE = re.compile(r"<meta[^>]+name=[\"']viewport[\"']", re.I)
+TECH_FIELDS = list(TECH_RE) + ["cms", "mobile_friendly"]
+
+def _find_tech(html):
+    """yes/no per signal, the site platform, and mobile support. Blank when the site did not load,
+    so "unknown" never reads as "no pixel"."""
+    if not html:
+        return {k: "" for k in TECH_FIELDS}
+    yn = lambda hit: "yes" if hit else "no"
+    out = {k: yn(rx.search(html)) for k, rx in TECH_RE.items()}
+    out["cms"] = next((name for name, rx in CMS_RE if rx.search(html)), "")
+    out["mobile_friendly"] = yn(VIEWPORT_RE.search(html))
+    return out
+
+def _num(v, kind=float):
+    try:
+        return kind(str(v).replace(",", ""))
+    except ValueError:
+        return 0
+
+def intent_score(r):
+    """0-100 "already spends on marketing" score: ad pixels dominate, an established, reachable
+    business adds a little. A heuristic, adapted from OpenLeadFinder without its live ad checks."""
+    s = 35 * (r.get("fb_pixel") == "yes") + 25 * (r.get("google_ads_tag") == "yes")
+    s += 10 * (r.get("analytics") == "yes")
+    reviews = _num(r.get("review_count"), int)
+    s += 15 if reviews >= 50 else 8 if reviews >= 10 else 0
+    s += 10 * (_num(r.get("review_rating")) >= 4.0)
+    s += 5 * bool(r.get("emails"))
+    return s
 
 
 # ── Deep email pass: contact/about pages for rows the engine left without an email ──
@@ -319,11 +392,23 @@ def clean_engine_emails(results):
     return changed
 
 
+# "name [at] domain [dot] com", "name (at) domain dot com" and friends, adapted from OpenLeadFinder.
+# The "at" must be bracketed and the domain must end in a known TLD: a bare " at " also matched
+# prose such as "meet at noon dot com".
+_AT = r"(?:\[\s*at\s*\]|\(\s*at\s*\)|\{\s*at\s*\})"
+_DOT = r"(?:\[\s*dot\s*\]|\(\s*dot\s*\)|\{\s*dot\s*\}|\s+dot\s+)"
+_TLD = (r"(?:com|net|org|co|io|biz|info|us|uk|ca|au|de|fr|es|it|nl|eu|edu|gov|me|app|dev|"
+        r"shop|online|store|xyz|ai)")
+_DEOBF_RE = re.compile(rf"([A-Za-z0-9._%+\-]+)\s*{_AT}\s*([A-Za-z0-9.\-]+?)\s*{_DOT}\s*({_TLD})\b", re.I)
+
 def extract_emails(html, site_host):
-    """Emails from mailto: links and plain text, junk dropped, site-domain first, max 3."""
+    """Emails from mailto: links, plain text and obfuscated spans, junk dropped, site-domain first,
+    max 3. HTML entities are decoded first, so info&#64;site.com counts."""
     site = _host(site_host or "")
+    text = _html.unescape(html or "")
     found = []
-    for e in MAILTO_RE.findall(html or "") + EMAIL_RE.findall(html or ""):
+    deobf = [f"{m[0]}@{m[1]}.{m[2]}" for m in _DEOBF_RE.findall(text)]
+    for e in MAILTO_RE.findall(text) + EMAIL_RE.findall(text) + deobf:
         e = _ESCAPE_PREFIX.sub("", urllib.parse.unquote(e).strip().lower())
         if not is_real_email(e) or e in found:
             continue
@@ -403,6 +488,9 @@ def main():
     ap.add_argument("--fields", help="comma-separated columns to keep (overrides the default lead set)")
     ap.add_argument("--socials", action="store_true",
                     help="also find Instagram/Facebook/LinkedIn from each website (0 LLM tokens; slower)")
+    ap.add_argument("--tech", action="store_true",
+                    help="also detect Meta Pixel, Google Ads tag, analytics, site platform and mobile "
+                         "support on each website, and sort by an intent_score (0 LLM tokens; slower)")
     a = ap.parse_args()
 
     keywords = collect_keywords(a)
@@ -466,6 +554,10 @@ def main():
             job_id, rows = run_job(body)
         except RuntimeError as e:
             sys.exit(str(e))
+        unique = dedupe(rows)  # a place found by two keywords comes back twice
+        if len(unique) < len(rows):
+            print(f"  dropped {len(rows) - len(unique)} duplicate rows (same place, several keywords)")
+        rows = unique
     else:
         print(f"▶ Grid {a.grid}x{a.grid}: {len(cells)} jobs, one at a time, "
               f"{len(keywords)} keyword(s) depth={a.depth} email={a.email}")
@@ -515,10 +607,21 @@ def main():
         print("▶ Finding socials (Instagram / Facebook / LinkedIn) on each website…")
         print("  ℹ Cost: this runs in CODE = 0 LLM tokens. It only adds ~40–50 tokens per business")
         print("    IF you load the results into an AI's context (negligible if you keep the file on disk).")
-        enrich_socials(results)
-        fields = fields + ["instagram", "facebook", "linkedin"]
-        found = sum(1 for r in results if r.get("instagram") or r.get("facebook") or r.get("linkedin"))
+        enrich_sites(results, _find_socials, SOCIAL_FIELDS, "socials")
+        fields = fields + SOCIAL_FIELDS
+        found = sum(1 for r in results if any(r.get(k) for k in SOCIAL_FIELDS))
         print(f"  socials found for {found}/{len(results)} businesses")
+
+    if a.tech:
+        print("▶ Checking ad pixels, analytics and site platform on each website (0 LLM tokens)…")
+        enrich_sites(results, _find_tech, TECH_FIELDS, "tech")
+        for r in results:
+            r["intent_score"] = intent_score(r)
+        results.sort(key=lambda r: r["intent_score"], reverse=True)
+        fields = fields + TECH_FIELDS + ["intent_score"]
+        ads = sum(1 for r in results if "yes" in (r.get("fb_pixel"), r.get("google_ads_tag")))
+        print(f"  Meta Pixel or Google Ads tag on {ads}/{len(results)} websites; "
+              f"rows sorted by intent_score (highest first)")
 
     # Default output is a CSV file (opens in Excel / Google Sheets). Use --json (or a .json --out path) for JSON.
     as_json = a.json or (a.out and a.out.lower().endswith(".json"))

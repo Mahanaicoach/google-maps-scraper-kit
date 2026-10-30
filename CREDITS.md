@@ -17,6 +17,13 @@ The kit runs the engine's official Docker image, unmodified. Everything else in 
 original to the kit: local deployment, lead-field cleaning, CSV output, auto-geocoding, batch jobs,
 social profile enrichment, and the Claude Code skill and slash commands.
 
+## Website signals adapted from OpenLeadFinder
+
+The `--tech` detection patterns, the intent score and the obfuscated-email patterns in
+`scripts/scrape.py`, and its private-address guard, are adapted from OpenLeadFinder, Mahan's
+self-hosted lead finder. It is released under the same MIT License, Copyright (c) 2026
+OpenLeadFinder contributors; the license text is the one reproduced below.
+
 ## Engine license (reproduced as required by MIT)
 
 ```

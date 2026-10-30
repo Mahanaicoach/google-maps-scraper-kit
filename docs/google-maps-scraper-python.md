@@ -33,6 +33,7 @@ On Windows, run the same commands with `py` or `python3`. Python is only the cli
 | `--full` | Keeps all 36 raw columns instead of the 8 lead fields. |
 | `--fields` | Comma-separated columns to keep, overriding the lead fields. |
 | `--socials` | Adds Instagram, Facebook and LinkedIn from each website. Slower. Zero AI tokens. |
+| `--tech` | Adds `fb_pixel`, `google_ads_tag`, `analytics` (yes/no, blank if the site did not load), `cms`, `mobile_friendly` and a 0-100 `intent_score`, and sorts by that score. Shares the homepage fetch with `--socials`. Zero AI tokens. |
 | `--keyword` | Adds an extra keyword to the same job. Repeatable. |
 | `--keywords-file` | Reads one keyword per line from a file. One job, one CSV. |
 
