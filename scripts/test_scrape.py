@@ -123,11 +123,11 @@ class StuckJob(unittest.TestCase):
             self.run_stuck(b"")
 
     def test_ended_run_recovered_in_seconds_and_engine_restarted(self):
-        # The engine log says the run ended but the status never flips: stop after 3 polls
-        # (about 24 s) instead of the whole budget, keep the rows, restart the engine.
+        # The engine log says the run ended and the row count has stopped moving for 3 polls: stop
+        # after 4 polls (about 32 s) instead of the whole budget, keep the rows, restart the engine.
         rows, polls, restarted, deleted = self.run_stuck(b"title\nA\n", run_ended=True, attempts=90)
         self.assertEqual([r["title"] for r in rows], ["A"])
-        self.assertEqual(polls, 3)
+        self.assertEqual(polls, 4)
         self.assertTrue(restarted)
         self.assertEqual(deleted, ["/api/v1/jobs/stuck"])  # no longer a "working" ghost in the job list
 
@@ -349,6 +349,8 @@ class CleanWebsite(unittest.TestCase):
                          "https://www.hpb.com/store?storeid=HPB-005")
         self.assertEqual(scrape.clean_website("http://plain.com/"), "http://plain.com/")
         self.assertEqual(scrape.clean_website(""), "")
+        self.assertEqual(scrape.clean_website("http://x.com/?a=1;b=2#top"), "http://x.com/?a=1;b=2")  # never re-encoded
+        self.assertEqual(scrape.clean_website("http://x.com/#/store/5"), "http://x.com/#/store/5")  # hash routing kept
 
 
 class KeywordsFile(unittest.TestCase):
@@ -384,7 +386,7 @@ FIELDS = ["input_id", "link", "title", "category", "address", "website", "phone"
           "review_rating", "latitude", "longitude", "cid", "place_id", "emails"]
 
 def _row(pid, lat="30.2"):
-    return {"title": f"Biz {pid}", "place_id": pid, "cid": "c" + pid, "latitude": lat,
+    return {"title": f"Biz {pid}", "place_id": pid, "cid": "c" + pid, "latitude": lat, "website": f"http://{pid.lower()}.biz",
             "longitude": "-97.7", "phone": "+1 555", "emails": f"{pid.lower()}@biz.net"}
 
 CELL_ROWS = {"job-1": [_row("A"), _row("B"), _row("C")],
@@ -466,11 +468,12 @@ class EndToEnd(unittest.TestCase):
             w = csv.DictWriter(f, fieldnames=scrape.LEAD); w.writeheader()
             w.writerow({"title": "Biz A", "address": ""})
         argv = ["scrape.py", "plumbers", "--city", "Austin, TX", "--city", "Round Rock, TX", "--no-email",
-                "--exclude", earlier, "--limit", "2", "--out", out]
+                "--exclude", earlier, "--limit", "2", "--out", out, "--socials", "--fields", "title,phone"]
         log = io.StringIO()
         try:
             with mock.patch.object(scrape, "BASE", f"http://127.0.0.1:{srv.server_port}"), \
                  mock.patch.object(scrape, "geocode", return_value=("30.25", "-97.75")) as geo, \
+                 mock.patch.object(scrape, "_fetch_cached", return_value='<a href="https://instagram.com/biz_b">ig</a>'), \
                  mock.patch.object(scrape.time, "sleep"), \
                  mock.patch.object(sys, "argv", argv), redirect_stdout(log):
                 scrape.main()
@@ -481,6 +484,8 @@ class EndToEnd(unittest.TestCase):
         with open(out, newline="", encoding="utf-8-sig") as f:  # the kit writes a BOM for Excel
             rows = list(csv.DictReader(f))
         self.assertEqual([r["title"] for r in rows], ["Biz B", "Biz C"])  # --limit 2
+        # --socials works even though --fields dropped the website column: enrichment reads the raw rows
+        self.assertEqual(rows[0]["instagram"], "https://instagram.com/biz_b")
 
 
 class Filters(unittest.TestCase):
@@ -494,6 +499,14 @@ class Filters(unittest.TestCase):
         nw = mock.Mock(min_rating=None, min_reviews=None, no_website=True, has_phone=False)
         self.assertTrue(scrape.keep_row({"website": ""}, nw))
         self.assertFalse(scrape.keep_row({"website": "http://x.com"}, nw))
+
+    def test_chain_branches_are_not_merged(self):
+        # Two branches of a chain share the website (and sometimes the phone): distinct place_ids
+        # must both survive, and only an exclusion list may match on name+phone or name+website.
+        branches = [{"place_id": "P1", "title": "Anytime Fitness", "address": "1 A St", "website": "http://af.com", "phone": "+1 1"},
+                    {"place_id": "P2", "title": "Anytime Fitness", "address": "9 B St", "website": "http://af.com", "phone": "+1 1"}]
+        self.assertEqual(len(scrape.dedupe(branches)), 2)
+        self.assertEqual(len(scrape.dedupe(branches, exclude=[{"title": "Anytime Fitness", "address": "9 B St"}])), 1)
 
     def test_exclude_matches_lean_rows(self):
         new = [{"place_id": "P1", "title": "Joe's", "address": "1 Main"}, {"place_id": "P2", "title": "Ann's"}]
@@ -511,6 +524,56 @@ class Filters(unittest.TestCase):
         c = os.path.join(d, "a.csv"); open(c, "w", encoding="utf-8-sig").write("title,phone\nB,1\n")
         self.assertEqual(scrape.load_rows(j), [{"title": "A"}])
         self.assertEqual(scrape.load_rows(c), [{"title": "B", "phone": "1"}])  # BOM stripped, key is clean
+
+
+class RegexSpeed(unittest.TestCase):
+    def test_long_runs_are_linear(self):
+        import time as _t
+        blob = "a" * 100_000 + " contact: info@acme.com " + "b" * 100_000
+        t0 = _t.perf_counter()
+        self.assertEqual(scrape.extract_emails(blob, "acme.com"), ["info@acme.com"])
+        self.assertLess(_t.perf_counter() - t0, 1.0)  # was about a minute per 60 KB run
+
+
+class Resilience(unittest.TestCase):
+    def test_get_retries_transient_errors(self):
+        answers = iter([scrape.urllib.error.HTTPError("u", 502, "bad gateway", {}, None),
+                        OSError("timed out"), (200, b"null")])
+        def fake_req(method, path, body=None):
+            a = next(answers)
+            if isinstance(a, Exception):
+                raise a
+            return a
+        with mock.patch.object(scrape, "req", fake_req), mock.patch.object(scrape.time, "sleep") as slept:
+            self.assertEqual(scrape._get("/api/v1/jobs"), (200, b"null"))
+        self.assertEqual(slept.call_count, 2)
+        with mock.patch.object(scrape, "req", side_effect=scrape.urllib.error.HTTPError("u", 404, "nf", {}, None)), \
+             self.assertRaises(scrape.urllib.error.HTTPError):
+            scrape._get("/api/v1/jobs/x")  # a 4xx is final, no retry
+
+    def test_pending_restart_failure_raises_instead_of_polling_a_deleted_job(self):
+        statuses = iter(["pending"] * 20)
+        def fake_req(method, path, body=None):
+            if method == "POST":
+                return 201, b'{"id":"j1"}'
+            if method == "DELETE":
+                return 200, b""
+            return 200, json.dumps({"Status": next(statuses)}).encode()
+        with mock.patch.object(scrape, "req", fake_req), mock.patch.object(scrape.time, "sleep"), \
+             mock.patch.object(scrape, "poll_attempts", return_value=50), \
+             mock.patch.object(scrape, "engine_run_ended", return_value=False), \
+             mock.patch.object(scrape, "engine_idle", return_value=True), \
+             mock.patch.object(scrape, "restart_engine", return_value=False), \
+             redirect_stdout(io.StringIO()), self.assertRaises(RuntimeError) as cm:
+            scrape.run_job({"max_time": 1})
+        self.assertIn("docker restart", str(cm.exception))
+
+    def test_failing_docker_logs_is_not_idle(self):
+        failed = mock.Mock(returncode=1, stdout="", stderr="Error: No such container")
+        with mock.patch.object(scrape, "_local_docker", return_value=True), \
+             mock.patch.object(scrape.subprocess, "run", return_value=failed):
+            self.assertFalse(scrape.engine_idle())
+            self.assertFalse(scrape.engine_run_ended("2026-01-01T00:00:00Z"))
 
 
 class VerifyEmails(unittest.TestCase):
@@ -534,6 +597,83 @@ class VerifyEmails(unittest.TestCase):
         scrape.mx_host.cache_clear()
         with mock.patch.object(scrape, "_doh_mx", side_effect=OSError("offline")):
             self.assertEqual(scrape.mx_host("x.com"), "")  # lookup failed: keep the address, no label
+
+
+class HostileInput(unittest.TestCase):
+    """A listing can carry a malformed website; nothing in the crawl may raise on it."""
+    BAD = "http://[bad"
+
+    def test_url_helpers_never_raise(self):
+        self.assertEqual(scrape.clean_website(self.BAD), self.BAD)
+        self.assertEqual(scrape._host(self.BAD), "")
+        self.assertEqual(scrape.extract_emails("a@b.com", self.BAD), ["a@b.com"])
+        self.assertEqual(scrape._fetch_html(self.BAD), "")
+        links = scrape.contact_links('<a href="http://[x">contact</a><a href="/contact">c</a>', self.BAD)
+        self.assertTrue(all(isinstance(u, str) for u in links))
+
+    def test_one_bad_row_does_not_abort_the_run(self):
+        rows = [{"website": "boom"}, {"website": "fine"}]
+        def work(r):
+            if r["website"] == "boom":
+                raise ValueError("parser blew up")
+            r["seen"] = "yes"
+        log = io.StringIO()
+        with redirect_stdout(log):
+            scrape._each_site(rows, work, "x", workers=2)
+        self.assertEqual(rows[1].get("seen"), "yes")
+        self.assertIn("1 skipped after an error", log.getvalue())
+
+    def test_exclude_file_must_be_a_list_of_rows(self):
+        d = tempfile.mkdtemp()
+        j = os.path.join(d, "job.json"); open(j, "w").write('{"job": {"keywords": ["x"]}}')
+        with self.assertRaises(ValueError):
+            scrape.load_rows(j)
+
+
+class EnvFile(unittest.TestCase):
+    def test_export_prefix_comment_quotes_and_trailing_slash(self):
+        d = tempfile.mkdtemp(); os.mkdir(os.path.join(d, "scripts"))
+        open(os.path.join(d, ".env"), "w").write(
+            "export SCRAPER_PORT=8081 # my port\nSCRAPER_BASE_URL='http://localhost:8081/'\n# SCRAPER_API_KEY=nope\n")
+        saved = {k: os.environ.pop(k, None) for k in scrape.ENV_KEYS}
+        try:
+            with mock.patch.object(scrape, "__file__", os.path.join(d, "scripts", "scrape.py")):
+                scrape.load_env_file()
+            self.assertEqual(os.environ.get("SCRAPER_PORT"), "8081")
+            self.assertEqual(os.environ.get("SCRAPER_BASE_URL"), "http://localhost:8081/")
+            self.assertIsNone(os.environ.get("SCRAPER_API_KEY"))
+        finally:
+            for k, v in saved.items():
+                os.environ.pop(k, None)
+                if v is not None:
+                    os.environ[k] = v
+
+    def test_base_url_has_no_trailing_slash(self):
+        # "http://host/" + "/api/..." would be "//api/...", which the proxy answers with a 307 that
+        # urllib will not follow for a POST.
+        with mock.patch.dict(os.environ, {"SCRAPER_BASE_URL": "http://localhost:8090/"}):
+            self.assertEqual((os.environ.get("SCRAPER_BASE_URL") or "").rstrip("/"), "http://localhost:8090")
+        self.assertFalse(scrape.BASE.endswith("/"))
+
+
+class ArgumentBounds(unittest.TestCase):
+    def run_main(self, *extra):
+        argv = ["scrape.py", "x in y", "1", "2", *extra]
+        with mock.patch.object(sys, "argv", argv), redirect_stdout(io.StringIO()), \
+             self.assertRaises(SystemExit) as cm:
+            scrape.main()
+        return str(cm.exception)
+
+    def test_has_email_needs_the_crawl(self):
+        self.assertIn("--has-email", self.run_main("--has-email", "--no-email"))
+
+    def test_rejects_values_the_engine_would_choke_on(self):
+        self.assertIn("--depth", self.run_main("--depth", "0"))
+        self.assertIn("--max-time", self.run_main("--max-time", "0"))  # the engine says "missing max time"
+        self.assertIn("--limit", self.run_main("--limit", "-1"))
+        bad_dir = os.path.join(tempfile.mkdtemp(), "a-file")
+        open(bad_dir, "w").close()  # a file where the folder should be
+        self.assertIn("--out", self.run_main("--out", os.path.join(bad_dir, "x", "leads.csv")))
 
 
 if __name__ == "__main__":

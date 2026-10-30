@@ -8,18 +8,19 @@
       "Bash(docker compose start:*)",
       "Bash(docker compose ps:*)",
       "Bash(docker ps:*)",
-      "Bash(curl http://localhost:8080:*)",
-      "Bash(curl -s http://localhost:8080:*)",
-      "Bash(curl http://127.0.0.1:8080:*)",
-      "Bash(curl -s -X POST http://localhost:8080:*)",
-      "Bash(curl -s -X DELETE http://localhost:8080:*)",
-      "Bash(curl -X DELETE http://localhost:8080:*)",
+      "Bash(curl http://localhost:8080/:*)",
+      "Bash(curl -s http://localhost:8080/:*)",
+      "Bash(curl http://127.0.0.1:8080/:*)",
+      "Bash(curl -s -X POST http://localhost:8080/:*)",
+      "Bash(curl -s -X DELETE http://localhost:8080/:*)",
+      "Bash(curl -X DELETE http://localhost:8080/:*)",
       "Bash(docker restart gmaps-scraper)",
       "Bash(python3 scripts/test_scrape.py)",
       "Bash(./scripts/scrape.sh:*)",
       "Bash(bash scripts/scrape.sh:*)",
       "Bash(python3 scripts/scrape.py:*)",
-      "Bash(python scripts/scrape.py:*)"
+      "Bash(python scripts/scrape.py:*)",
+      "Bash(py scripts/scrape.py:*)"
     ],
     "deny": []
   }

@@ -14,9 +14,17 @@ if [ -z "$KEYWORD" ] || [ -z "$LAT" ] || [ -z "$LON" ]; then
   exit 1
 fi
 
-# Git Bash on Windows often has only `python`.
-PY="$(command -v python3 || command -v python || true)"
+# Git Bash on Windows often has only `python`, and `python3` there can be the Microsoft Store stub
+# that only prints a message, so take the first name that really runs.
+PY=""
+for p in python3 python py; do
+  command -v "$p" >/dev/null 2>&1 && "$p" -c 'import sys' >/dev/null 2>&1 && { PY="$p"; break; }
+done
 [ -n "$PY" ] || { echo "✗ Python 3 is required (standard library only, no pip installs)." >&2; exit 1; }
 
-OUT="results-$(echo "$KEYWORD" | tr ' /' '__' | tr -cd 'A-Za-z0-9_-').csv"
+# File name from the keyword; a keyword with no ASCII letters (寿司 in 東京) falls back to a timestamp
+# so reruns never overwrite each other.
+SLUG="$(printf '%s' "$KEYWORD" | tr ' /' '__' | tr -cd 'A-Za-z0-9_-')"
+[ -n "$SLUG" ] || SLUG="$(date +%Y%m%d-%H%M%S)"
+OUT="results-$SLUG.csv"
 exec "$PY" "$(dirname "$0")/scrape.py" "$KEYWORD" "$LAT" "$LON" --depth "$DEPTH" --out "$OUT"
