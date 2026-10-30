@@ -200,6 +200,23 @@ def engine_run_ended(since):
         return False
     return out.returncode == 0 and "scrapemate exited" in out.stdout + out.stderr
 
+def engine_error(job_id):
+    """The engine's own reason for a failed job, from the local log: "error scraping job <id>: ...".
+    A proxy typo, for example, otherwise surfaces only as a generic "failed"."""
+    if not _local_docker():
+        return ""
+    try:
+        out = subprocess.run(["docker", "logs", "--since", "15m", ENGINE_CONTAINER],
+                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if out.returncode != 0:
+        return ""
+    for line in reversed((out.stdout + out.stderr).splitlines()):
+        if f"error scraping job {job_id}" in line:
+            return line.split(f"job {job_id}:", 1)[-1].strip()[:200]
+    return ""
+
 def restart_engine():
     """Restart the local engine and wait until its API answers again. Without the wait, the next
     grid tile hit the proxy while the engine was still starting and failed with HTTP 502."""
@@ -266,10 +283,16 @@ def run_job(body):
     for attempt in (1, 2):
         try:
             return _run_job_once(body)
-        except JobFailed:
+        except JobFailed as e:
+            reason = e.args[1] if len(e.args) > 1 else engine_error(e.args[0])
+            said = f" The engine says: {reason}." if reason else ""
+            if "proxy" in reason.lower():  # a bad proxy fails the same way every time: do not retry
+                raise RuntimeError(f"\n✗ Job failed: the proxy did not work.{said}\n"
+                                   "  This engine needs user:pass for socks5 proxies; an http:// proxy works without.")
             if attempt == 2:
-                raise RuntimeError("\n✗ Job failed twice. You may be rate-limited — wait or add proxies.")
-            print(f"\n⚠ Job failed; Google may be throttling this IP. Waiting {FAILED_RETRY_WAIT} s, then retrying once…")
+                raise RuntimeError(f"\n✗ Job failed twice.{said} You may be rate-limited — wait or add proxies.")
+            print(f"\n⚠ Job failed.{said or ' Google may be throttling this IP.'} "
+                  f"Waiting {FAILED_RETRY_WAIT} s, then retrying once…")
             time.sleep(FAILED_RETRY_WAIT)
 
 
@@ -315,7 +338,19 @@ def _run_job_once(body, restarted=False):
         if status == "ok":
             print(); break
         if status == "failed":
-            raise JobFailed("job failed")
+            raise JobFailed(job_id)
+        if status == "working" and not n_rows:
+            # A job the engine could not even start (a bad proxy, a driver error) stays "working"
+            # forever with no rows, and holds every later job on "pending". Read the engine's reason,
+            # drop the dead job, restart the engine and report.
+            reason = engine_error(job_id)
+            if reason:
+                try:
+                    req("DELETE", f"/api/v1/jobs/{job_id}")
+                except Exception:
+                    pass
+                restart_engine()
+                raise JobFailed(job_id, reason)
         # Stuck (gosom#346): the engine log says the run ended and the row count has stopped moving.
         # The second condition guards against a Docker VM clock that runs ahead of the host.
         if status == "working" and n_rows == last_rows and engine_run_ended(since):
@@ -783,8 +818,8 @@ def main():
     ap.add_argument("--city", action="append",
                     help="city/place to auto-geocode for lat/lon; repeatable, one run per city into one file")
     ap.add_argument("--proxy", action="append", metavar="URL",
-                    help="proxy for the engine, repeatable (socks5://, socks5h://, http://, https://, "
-                         "user:pass@ allowed); the engine rotates them")
+                    help="proxy for the engine, repeatable: http://, https://, socks5:// or socks5h://; "
+                         "this engine needs user:pass@ for socks5; the engine rotates them")
     ap.add_argument("--depth", type=int, default=5)
     # The engine passes this to Google as the interface language, which decides the language of
     # the category names it returns (and nudges which listings come back). It has to match the
@@ -907,7 +942,7 @@ def main():
         failed_places += jid is None
         rows = dedupe(rows + place_rows)
     if job_id is None:
-        sys.exit("✗ No job finished. You may be rate-limited — wait or add proxies.")
+        sys.exit("✗ No job finished; the reason is in the ✗ line above.")
     if failed_places:
         print(f"⚠ Incomplete: {failed_places} of {len(cities)} places returned nothing (see the ✗ lines above).")
     for r in rows:

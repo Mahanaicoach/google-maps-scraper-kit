@@ -37,7 +37,7 @@ On Windows, run the same commands with `py` or `python3`. Python is only the cli
 | `--keyword` | Adds an extra keyword to the same job. Repeatable. |
 | `--lang` | Two-letter language the engine asks Google for, e.g. `pt`, `es`, `de`. Default `en`. Use the market's language so category names come back in it. |
 | `--keywords-file` | Reads one keyword per line from a file. One job, one CSV. |
-| `--proxy` | Proxy URL for the engine, repeatable: `socks5://`, `socks5h://`, `http://` or `https://`, `user:pass@` allowed. The engine rotates them. |
+| `--proxy` | Proxy URL for the engine, repeatable: `http://`, `https://`, `socks5://` or `socks5h://`. This engine needs `user:pass@` for socks5. The engine rotates them; a wrong proxy fails the job and the script prints the engine's reason. |
 | `--min-rating`, `--min-reviews` | Keep rows rated X or higher, or with N or more reviews. Unrated rows drop. |
 | `--no-website` | Keep only businesses without a website: the classic web-design prospect list. |
 | `--has-phone`, `--has-email` | Keep only rows with a phone, or rows where an email was found. |

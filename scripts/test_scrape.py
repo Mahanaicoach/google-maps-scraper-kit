@@ -161,6 +161,13 @@ class PendingAndFailed(unittest.TestCase):
             job_id, rows = scrape.run_job({"max_time": 1})
         return job_id, rows, len(posts), restart.call_count, slept, deleted
 
+    def test_engine_error_reads_the_failed_job_line(self):
+        log = mock.Mock(returncode=0, stdout="x\n2026/10/30 22:38:59 error scraping job j9: failed to start auth proxy for socks5://h:1: username and password are required\n", stderr="")
+        with mock.patch.object(scrape, "_local_docker", return_value=True), \
+             mock.patch.object(scrape.subprocess, "run", return_value=log):
+            self.assertTrue(scrape.engine_error("j9").startswith("failed to start auth proxy"))
+            self.assertEqual(scrape.engine_error("other"), "")
+
     def test_pending_on_idle_engine_restarts_once(self):
         # An earlier web UI job wedged the engine: our job never leaves "pending". Delete it, restart,
         # create it again, and never loop on a second pending streak.
@@ -174,6 +181,38 @@ class PendingAndFailed(unittest.TestCase):
         statuses = ["pending"] * (scrape.PENDING_RESTART_AFTER + 3) + ["ok"]
         _, _, posts, restarts, _, _ = self.run_statuses(statuses, idle=False)
         self.assertEqual((posts, restarts), (1, 0))
+
+    def test_bad_proxy_fails_at_once_with_the_engine_reason(self):
+        reason = "failed to start auth proxy for socks5://127.0.0.1:1: username and password are required"
+        with mock.patch.object(scrape, "engine_error", return_value=reason), \
+             self.assertRaises(RuntimeError) as cm:
+            self.run_statuses(["failed"])
+        self.assertIn("username and password", str(cm.exception))
+        self.assertIn("user:pass", str(cm.exception))
+
+    def test_dead_working_job_is_reported_from_the_engine_log(self):
+        # The engine logged "error scraping job", left the job on "working" with no rows and never
+        # flipped it: delete it, restart the engine, tell the user the engine's reason.
+        reason = "failed to start auth proxy for socks5://h:1: username and password are required"
+        deletes = []
+        def fake_req(method, path, body=None):
+            if method == "POST":
+                return 201, b'{"id":"j1"}'
+            if method == "DELETE":
+                deletes.append(path)
+                return 200, b""
+            if path.endswith("/download"):
+                return 200, b"title\n"  # header only: zero rows
+            return 200, b'{"Status":"working"}'
+        with mock.patch.object(scrape, "req", fake_req), mock.patch.object(scrape.time, "sleep"), \
+             mock.patch.object(scrape, "poll_attempts", return_value=50), \
+             mock.patch.object(scrape, "engine_run_ended", return_value=False), \
+             mock.patch.object(scrape, "engine_error", return_value=reason), \
+             mock.patch.object(scrape, "restart_engine", return_value=True) as restart, \
+             redirect_stdout(io.StringIO()), self.assertRaises(RuntimeError) as cm:
+            scrape.run_job({"max_time": 1})
+        self.assertIn("username and password", str(cm.exception))
+        self.assertEqual((deletes, restart.call_count), (["/api/v1/jobs/j1"], 1))
 
     def test_failed_job_is_retried_once(self):
         job_id, rows, posts, _, slept, _ = self.run_statuses(["failed", "working", "ok"])
