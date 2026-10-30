@@ -41,6 +41,7 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.com' http://localhost:8080/api/v1/jobs)" = 421
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Origin: https://evil.com' http://localhost:8080/api/v1/jobs)" = 403
       - name: engine validates a job body through the proxy
-        run: curl -s -X POST -H 'Content-Type: application/json' -d '{}' http://localhost:8080/api/v1/jobs | grep -q 'missing name'
+        run: |
+          curl -s -X POST -H 'Content-Type: application/json' -d '{}' http://localhost:8080/api/v1/jobs | grep -q 'missing name'
       - if: always()
         run: docker compose down -v
