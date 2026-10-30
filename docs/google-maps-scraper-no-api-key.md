@@ -20,7 +20,7 @@ docker compose up -d
 python3 scripts/scrape.py "plumbers in Phoenix AZ" --city "Phoenix, AZ" --depth 5
 ```
 
-You need Docker Desktop. Python 3 is optional and uses the standard library only. The engine API binds to `127.0.0.1`, so it is reachable only from your machine.
+You need Docker Desktop, and Python 3 for the scripts (standard library only). The web UI and the raw API need only Docker. The engine API binds to `127.0.0.1`, so it is reachable only from your machine.
 
 ## Example output
 

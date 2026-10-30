@@ -202,7 +202,7 @@ One keyword per line. One job. One CSV.
 | Cost | Free (MIT) | Free | Per-result credits or subscription | Free |
 | API key or account | None | Account | Required | None |
 | Where data goes | Stays on your machine | Provider's servers | Provider's servers | Your machine |
-| Rows per query | Whole city with --grid, deduped | Close to zero | Up to ~120 per keyword, unlimited keywords | A handful |
+| Rows per query | Whole city with --grid, deduped | Close to zero | Whole city with a location input, billed per result | A handful |
 | Emails and socials | Built in | No | Often a paid add-on | Manual |
 | Output | Clean CSV, 8 lead fields | Chat text | CSV or JSON | Spreadsheet |
 | Driven by an AI agent | Yes, skill included | n/a | No | No |
@@ -320,7 +320,9 @@ google-maps-scraper-kit/
 ├── .env.example            config template
 ├── scripts/
 │   ├── scrape.py           Python CLI: single, batch, geocoding, socials, CSV
-│   └── scrape.sh           bash CLI: single query
+│   ├── scrape.sh           bash CLI: single query
+│   └── test_scrape.py      offline tests, no network: python3 scripts/test_scrape.py
+├── docs/                   guides and recipes
 ├── examples/               sample job body and batch keyword list
 ├── .claude/
 │   ├── settings.json       pre-approved local commands for hands-free runs

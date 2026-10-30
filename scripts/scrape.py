@@ -199,6 +199,11 @@ def recover_stuck_job(job_id):
     rows = download_rows(job_id)
     print(f"\n⚠ The engine finished this job but did not mark it done (gosom/google-maps-scraper#346); "
           f"keeping its {len(rows)} rows.")
+    try:  # otherwise it sits in the job list as "working" forever, with no Download button in the web UI
+        req("DELETE", f"/api/v1/jobs/{job_id}")
+        print("  Deleted the stuck job from the engine's list; its rows are in your file.")
+    except Exception:
+        print(f"  Remove it from the job list yourself: curl -X DELETE {BASE}/api/v1/jobs/{job_id}")
     if restart_engine():
         print("  Restarted the engine, which would otherwise hold every later job on \"pending\".")
     else:
@@ -263,8 +268,11 @@ def collect_keywords(a):
         kws.append(a.keyword)
     kws.extend(a.also or [])
     if a.keywords_file:
-        with open(a.keywords_file) as f:
-            kws.extend(line.strip() for line in f if line.strip() and not line.startswith("#"))
+        try:
+            with open(a.keywords_file) as f:
+                kws.extend(line.strip() for line in f if line.strip() and not line.startswith("#"))
+        except OSError as e:
+            sys.exit(f"✗ Cannot read --keywords-file {a.keywords_file}: {e.strerror}")
     # de-dupe, keep order
     seen, out = set(), []
     for k in kws:
@@ -449,7 +457,9 @@ MAILTO_RE = re.compile(r"mailto:([^\"'>\s?]+)", re.I)
 HREF_RE = re.compile(r"<a\s[^>]*?href\s*=\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", re.I | re.S)
 _JUNK_EXT = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".avif", ".css", ".js")
 _JUNK_DOMAIN = ("example", "sentry", "wixpress", "wix.com", "godaddy", "squarespace", "wordpress",
-                "domain.com", "email.com", "yourdomain", "mysite.com", "schema.org", "w3.org", "sentry.io")
+                "domain.com", "email.com", "yourdomain", "mysite.com", "schema.org", "w3.org", "sentry.io",
+                # link-in-bio pages and website agencies: their support address is not the business's
+                "linktr.ee", "linkin.bio", "beacons.ai", "officite")
 _JUNK_LOCAL = {"name", "email", "user", "you", "someone", "example", "username",
                "youremail", "yourname", "firstname", "lastname", "sample"}
 # A JSON-escaped <, >, ", ' or & glued to the address (">orders@x.com" in page source),
@@ -461,6 +471,20 @@ def _host(url):
         url = "http://" + url
     h = (urllib.parse.urlparse(url).hostname or "").lower()
     return h[4:] if h.startswith("www.") else h
+
+# Google Business Profile links often carry campaign tags (?utm_source=gbp&utm_medium=organic),
+# about one website in four. They bloat the column and hide that two rows share one site.
+_TRACKING_PARAMS = ("utm_", "gclid", "fbclid", "msclkid", "mc_cid", "mc_eid")
+
+def clean_website(url):
+    """Drop tracking parameters and the fragment. Other parameters stay: some store pages need
+    them (store?storeid=...)."""
+    if not url:
+        return ""
+    p = urllib.parse.urlsplit(url)
+    q = [(k, v) for k, v in urllib.parse.parse_qsl(p.query, keep_blank_values=True)
+         if not k.lower().startswith(_TRACKING_PARAMS)]
+    return urllib.parse.urlunsplit(p._replace(query=urllib.parse.urlencode(q), fragment=""))
 
 def is_real_email(e):
     """False for anything not worth sending to: a template placeholder (user@domain.com,
@@ -656,6 +680,9 @@ def main():
         kept = [r for r in rows if in_bbox(r, bbox)]
         print(f"  dropped {len(rows) - len(kept)} rows outside the city box")
         rows = kept
+    for r in rows:
+        r["website"] = clean_website(r.get("website", ""))
+    rows = dedupe(rows)  # the engine lists a place once per job; this also covers repeats across runs of --keyword
     if a.full:
         fields = list(rows[0].keys()) if rows else LEAD
     elif a.fields:

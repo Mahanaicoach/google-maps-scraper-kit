@@ -93,10 +93,13 @@ class PollAttempts(unittest.TestCase):
 class StuckJob(unittest.TestCase):
     """A job the engine never flips to "ok" (gosom/google-maps-scraper#346) keeps its written rows."""
     def run_stuck(self, csv_body, run_ended=False, attempts=2):
-        polls = []
+        polls, deleted = [], []
         def fake_req(method, path, body=None):
             if method == "POST":
                 return 201, b'{"id":"stuck"}'
+            if method == "DELETE":
+                deleted.append(path)
+                return 200, b""
             if path.endswith("/download"):
                 return 200, csv_body
             polls.append(path)
@@ -107,12 +110,13 @@ class StuckJob(unittest.TestCase):
              mock.patch.object(scrape, "restart_engine", return_value=True) as restart, \
              redirect_stdout(io.StringIO()):
             job_id, rows = scrape.run_job({"max_time": 1})
-        return rows, len(polls), restart.called
+        return rows, len(polls), restart.called, deleted
 
     def test_keeps_written_rows(self):
-        rows, _, restarted = self.run_stuck(b"title,phone\nA,1\nB,2\n")
+        rows, _, restarted, deleted = self.run_stuck(b"title,phone\nA,1\nB,2\n")
         self.assertEqual([r["title"] for r in rows], ["A", "B"])
         self.assertFalse(restarted)
+        self.assertEqual(deleted, [])  # the budget ran out, but the job may still be running
 
     def test_no_rows_still_errors(self):
         with self.assertRaises(RuntimeError):
@@ -121,10 +125,11 @@ class StuckJob(unittest.TestCase):
     def test_ended_run_recovered_in_seconds_and_engine_restarted(self):
         # The engine log says the run ended but the status never flips: stop after 3 polls
         # (about 24 s) instead of the whole budget, keep the rows, restart the engine.
-        rows, polls, restarted = self.run_stuck(b"title\nA\n", run_ended=True, attempts=90)
+        rows, polls, restarted, deleted = self.run_stuck(b"title\nA\n", run_ended=True, attempts=90)
         self.assertEqual([r["title"] for r in rows], ["A"])
         self.assertEqual(polls, 3)
         self.assertTrue(restarted)
+        self.assertEqual(deleted, ["/api/v1/jobs/stuck"])  # no longer a "working" ghost in the job list
 
     def test_remote_engine_is_never_restarted(self):
         with mock.patch.object(scrape, "BASE", "http://scraper.example:8080"):
@@ -270,10 +275,29 @@ class EmailCrawl(unittest.TestCase):
 class IsRealEmail(unittest.TestCase):
     def test_placeholders_and_vendors(self):
         for e in ("user@domain.com", "example@gmail.com", "youremail@yourdomain.com",
-                  "name@company.org", "a@b.wixpress.com", "logo@2x.png"):
+                  "name@company.org", "a@b.wixpress.com", "logo@2x.png",
+                  "support@linktr.ee", "help@sites.officite.com"):  # seen in audit runs
             self.assertFalse(scrape.is_real_email(e), e)
         for e in ("info@acmeplumbing.com", "owner@gmail.com", "hello@funkysol.co.uk"):
             self.assertTrue(scrape.is_real_email(e), e)
+
+
+class CleanWebsite(unittest.TestCase):
+    def test_strips_tracking_keeps_real_params(self):
+        self.assertEqual(scrape.clean_website("https://a.com/x/?utm_source=gbp&utm_medium=organic#top"),
+                         "https://a.com/x/")
+        self.assertEqual(scrape.clean_website("https://www.hpb.com/store?storeid=HPB-005&utm_campaign=x"),
+                         "https://www.hpb.com/store?storeid=HPB-005")
+        self.assertEqual(scrape.clean_website("http://plain.com/"), "http://plain.com/")
+        self.assertEqual(scrape.clean_website(""), "")
+
+
+class KeywordsFile(unittest.TestCase):
+    def test_missing_file_is_a_clean_error(self):
+        a = mock.Mock(keyword=None, also=[], keywords_file="no-such-file.txt")
+        with self.assertRaises(SystemExit) as cm:
+            scrape.collect_keywords(a)
+        self.assertIn("Cannot read --keywords-file", str(cm.exception))
 
 
 class ContactLinks(unittest.TestCase):
