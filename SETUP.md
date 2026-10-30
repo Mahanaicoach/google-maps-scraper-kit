@@ -1,7 +1,7 @@
 # Setup guide: Google Maps Scraper Kit
 
-This guide takes you from a fresh machine to a finished Google Maps lead list in about 5 minutes.
-Most of that time is Docker pulling the engine image. A person or an agent can follow it step by step.
+This guide takes you from a fresh machine to a finished Google Maps lead list in about 10 minutes:
+about a minute for Docker to download the engine, then a few minutes for the first scrape. A person or an agent can follow it step by step.
 
 ---
 
@@ -51,7 +51,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-The first run pulls the `gosom/google-maps-scraper` image once, a few hundred MB. When it finishes, check it:
+The first run pulls the `gosom/google-maps-scraper` image once: about 600 MB to download, 2.4 GB on disk. When it finishes, check it:
 
 ```bash
 docker ps | grep gmaps-scraper          # should show it "Up"
@@ -61,6 +61,10 @@ curl http://localhost:8080/api/v1/jobs  # should print null (no jobs yet) or a J
 The engine also serves a web UI and API docs in the browser:
 - Web UI: **http://localhost:8080**
 - OpenAPI docs: **http://localhost:8080/api/docs**
+
+The page starts with emails on and depth 5, like the scripts. Type a keyword with its city, set the
+latitude and longitude, and click Start Scraping. It downloads the engine's raw 36-column CSV. The
+scripts give you the cleaned 8 lead fields and find more emails.
 
 If `curl` prints `null` or a JSON list, the engine is live.
 
@@ -185,8 +189,8 @@ curl -X DELETE http://localhost:8080/api/v1/jobs/<job-id>
 | `port is already allocated` / something else already uses 8080 | Set `SCRAPER_PORT=8081` in `.env`, then `docker compose up -d`. Compose publishes the scraper on that host port and `scripts/scrape.sh` and `scripts/scrape.py` read the same file, so nothing else needs editing. The port inside the container stays 8080 (do not change the right-hand side of the mapping). If your `.env` still has a `SCRAPER_BASE_URL` line, delete it or update its port: it overrides `SCRAPER_PORT`. The slash commands and the skill show `localhost:8080` in their examples, so tell Claude the port you picked. |
 | `422 missing max time` | Job body needs `max_time` (in **seconds**, e.g. `300`). |
 | `422 missing geo coordinates` | Job body needs `lat` and `lon` as **strings**, e.g. `"30.2672"`. |
-| Job stuck `working` forever | Engine v1.18.x sometimes never marks a finished job done ([gosom/google-maps-scraper#346](https://github.com/gosom/google-maps-scraper/issues/346)); `scrape.py` keeps the rows already written when its wait runs out, and `docker compose restart` frees the engine for the next job. Otherwise lower `depth`, or the IP is being throttled by Google — wait, or add proxies (see skill). |
-| Scrapes feel slow | The kit runs the engine with `-c 4` (parallel workers) in `docker-compose.yml`; the engine's own default is 1. A depth 5 job with emails takes about 4 minutes. Most of that is visiting business websites for emails: `--no-email` is much faster. |
+| Job stuck `working` forever, or every new job stays `pending` | Engine v1.18.x sometimes finishes a job without marking it done ([gosom/google-maps-scraper#346](https://github.com/gosom/google-maps-scraper/issues/346)) and then holds every later job on `pending`. `scripts/scrape.py` spots this in the engine log within about 30 seconds, keeps the rows and restarts the engine for you. From the web UI or the API, run `docker restart gmaps-scraper`. A job that stays `working` with no rows can also mean Google is throttling your IP: wait, or add proxies. |
+| Scrapes feel slow | A depth 5 search with emails takes about a minute: the engine reads Google Maps with 4 workers (`-c 4` in `docker-compose.yml`; the engine's own default is 1), then the script checks the business websites for emails, 16 at a time. `--no-email` skips the website check. The web UI uses the engine's own email option, which is several times slower. |
 | Empty CSV | Keyword too narrow or wrong geo — widen `radius` or fix `lat`/`lon`. |
 | Docker pull is slow | Normal on first run; it caches after that. |
 | `docker: 'compose' is not a docker command` / `unknown shorthand flag: 'd'` | The Compose plugin is missing. It ships with Docker Desktop — uninstalling Desktop leaves a **dangling symlink** in `~/.docker/cli-plugins/` that looks installed but isn't (`ls -l ~/.docker/cli-plugins/docker-compose`). Install it (`brew install docker-compose`), or skip Compose entirely — see *No Compose?* below. |

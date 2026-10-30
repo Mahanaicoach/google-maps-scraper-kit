@@ -10,6 +10,7 @@ _spec = importlib.util.spec_from_file_location(
     "scrape", os.path.join(os.path.dirname(os.path.abspath(__file__)), "scrape.py"))
 scrape = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(scrape)
+scrape.ENGINE_CONTAINER = "kit-tests-no-such-container"  # never read or restart a real engine
 
 BBOX = ["30.0", "30.5", "-98.0", "-97.5"]  # Nominatim order: south, north, west, east
 
@@ -91,24 +92,44 @@ class PollAttempts(unittest.TestCase):
 
 class StuckJob(unittest.TestCase):
     """A job the engine never flips to "ok" (gosom/google-maps-scraper#346) keeps its written rows."""
-    def run_stuck(self, csv_body):
+    def run_stuck(self, csv_body, run_ended=False, attempts=2):
+        polls = []
         def fake_req(method, path, body=None):
             if method == "POST":
                 return 201, b'{"id":"stuck"}'
             if path.endswith("/download"):
                 return 200, csv_body
+            polls.append(path)
             return 200, b'{"Status":"working"}'
         with mock.patch.object(scrape, "req", fake_req), mock.patch.object(scrape.time, "sleep"), \
-             mock.patch.object(scrape, "poll_attempts", return_value=2), redirect_stdout(io.StringIO()):
-            return scrape.run_job({"max_time": 1})
+             mock.patch.object(scrape, "poll_attempts", return_value=attempts), \
+             mock.patch.object(scrape, "engine_run_ended", return_value=run_ended), \
+             mock.patch.object(scrape, "restart_engine", return_value=True) as restart, \
+             redirect_stdout(io.StringIO()):
+            job_id, rows = scrape.run_job({"max_time": 1})
+        return rows, len(polls), restart.called
 
     def test_keeps_written_rows(self):
-        _, rows = self.run_stuck(b"title,phone\nA,1\nB,2\n")
+        rows, _, restarted = self.run_stuck(b"title,phone\nA,1\nB,2\n")
         self.assertEqual([r["title"] for r in rows], ["A", "B"])
+        self.assertFalse(restarted)
 
     def test_no_rows_still_errors(self):
         with self.assertRaises(RuntimeError):
             self.run_stuck(b"")
+
+    def test_ended_run_recovered_in_seconds_and_engine_restarted(self):
+        # The engine log says the run ended but the status never flips: stop after 3 polls
+        # (about 24 s) instead of the whole budget, keep the rows, restart the engine.
+        rows, polls, restarted = self.run_stuck(b"title\nA\n", run_ended=True, attempts=90)
+        self.assertEqual([r["title"] for r in rows], ["A"])
+        self.assertEqual(polls, 3)
+        self.assertTrue(restarted)
+
+    def test_remote_engine_is_never_restarted(self):
+        with mock.patch.object(scrape, "BASE", "http://scraper.example:8080"):
+            self.assertFalse(scrape.engine_run_ended("2026-01-01T00:00:00Z"))
+            self.assertFalse(scrape.restart_engine())
 
 
 class ExtractEmails(unittest.TestCase):
@@ -194,23 +215,38 @@ class TechSignals(unittest.TestCase):
         self.assertEqual(scrape.intent_score({"review_count": "12", "review_rating": "n/a"}), 8)
 
 
-class CleanEngineEmails(unittest.TestCase):
-    def test_drops_placeholders_keeps_real(self):
-        # The left column is what the engine actually returned on a depth 1 Austin scrape.
-        rows = [{"emails": "user@domain.com"},
-                {"emails": "user@domain.com, hello@funkysolcoffee.com"},
-                {"emails": "orders@desnudo.com, example@gmail.com, u003eorders@desnudo.com"},
-                {"emails": "office@afugacoffee.com"},
-                {"emails": ""}]
-        changed = scrape.clean_engine_emails(rows)
-        self.assertEqual([r["emails"] for r in rows],
-                         ["", "hello@funkysolcoffee.com", "orders@desnudo.com",
-                          "office@afugacoffee.com", ""])
-        self.assertEqual(changed, 3)  # untouched rows are not counted
+class EmailCrawl(unittest.TestCase):
+    def test_template_junk_dropped(self):
+        # Placeholders and a JSON-escaped prefix seen on real Austin coffee-shop sites.
+        html = ("user@domain.com example@gmail.com hello@funkysolcoffee.com "
+                "\\u003eorders@desnudo.com orders@desnudo.com")
+        self.assertEqual(scrape.extract_emails(html, "funkysolcoffee.com"),
+                         ["hello@funkysolcoffee.com", "orders@desnudo.com"])
 
-    def test_missing_column_is_not_an_error(self):
-        rows = [{"title": "no emails field"}]
-        self.assertEqual(scrape.clean_engine_emails(rows), 0)
+    def test_homepage_only_skips_contact_pages(self):
+        rows = [{"website": "http://acme.com", "emails": ""}]
+        home = '<a href="/contact">Contact</a>'
+        with mock.patch.object(scrape, "_fetch_cached", return_value=home), \
+             mock.patch.object(scrape, "_fetch_html", return_value="sales@acme.com") as pages, \
+             redirect_stdout(io.StringIO()):
+            scrape.enrich_emails(rows, deep=False)
+            pages.assert_not_called()
+            self.assertEqual(rows[0]["emails"], "")
+            scrape.enrich_emails(rows, deep=True)
+        self.assertEqual(rows[0]["emails"], "sales@acme.com")
+
+    def test_engine_never_asked_for_emails(self):
+        sent = []
+        def fake_run_job(body):
+            sent.append(body)
+            return "job-x", [_row("A")]
+        argv = ["scrape.py", "dentists in Austin TX", "30.2", "-97.7", "--no-email",
+                "--out", os.path.join(tempfile.mkdtemp(), "leads.csv")]
+        with mock.patch.object(scrape, "req", return_value=(200, b"null")), \
+             mock.patch.object(scrape, "run_job", fake_run_job), \
+             mock.patch.object(sys, "argv", argv), redirect_stdout(io.StringIO()):
+            scrape.main()
+        self.assertIs(sent[0]["email"], False)
 
 
 class IsRealEmail(unittest.TestCase):

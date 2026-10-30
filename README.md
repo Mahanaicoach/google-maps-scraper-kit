@@ -76,7 +76,8 @@ No coordinates handy? Let the Python CLI geocode the city:
 python3 scripts/scrape.py "dentists in Denver CO" --city "Denver, CO" --depth 5 --socials
 ```
 
-Need the whole city, not just the first 120? Add `--grid 3`:
+A search at `--depth 5` usually returns 20 to 40 places. A higher `--depth` scrolls further, up to
+Google's cap of about 120 per search. Need the whole city? Add `--grid 3`:
 
 ```bash
 python3 scripts/scrape.py "dentists in Denver CO" --city "Denver, CO" --grid 3
@@ -84,7 +85,7 @@ python3 scripts/scrape.py "dentists in Denver CO" --city "Denver, CO" --grid 3
 
 ### Example output
 
-`coffee_shops_austin.csv` (illustrative rows):
+`results-coffee_shops_in_Austin_TX.csv` from the first command above (illustrative rows):
 
 | title | phone | emails | website | category | address | review_rating | review_count |
 |---|---|---|---|---|---|---|---|
@@ -119,6 +120,10 @@ claude
 npx skills add mahanaicoach/google-maps-scraper-kit
 ```
 
+This installs the skill file only. The agent starts the engine with one `docker run` and calls its
+API directly. The scripts' extras (`--socials`, `--tech`, `--grid`, geocoding, the email crawl and the
+8-column cleanup) and the slash commands come with Option A.
+
 Then ask in plain language:
 
 > Scrape gyms in Miami and give me phones, emails and websites.
@@ -143,7 +148,7 @@ scrapes Google Maps business listings only. It does not scrape social platforms 
 | | |
 |---|---|
 | **8 lead fields by default** | name, phone, email, website, category, address, rating, review count. The engine captures 36 raw fields; `--full` keeps them all. |
-| **Email extraction, on by default** | Visits each business website and pulls published contact emails. A second pass checks the contact and about pages of rows still missing one, then prints your found rate. |
+| **Email extraction, on by default** | After the Maps job, the script crawls every business website, 16 at a time: the homepage, then its contact and about pages if the homepage shows no email. It prints your found rate. |
 | **Beyond the 120 cap** | `--grid 3` splits the city into 3 x 3 map tiles, runs them one at a time and dedupes on `place_id`. |
 | **Social enrichment** | `--socials` finds Instagram, Facebook and LinkedIn profiles in code (HTTP + regex). Zero AI tokens. |
 | **Who already advertises** | `--tech` spots a Meta Pixel, Google Ads tag and analytics on each website, plus its platform (WordPress, Shopify, Wix…) and mobile support, then ranks leads by an `intent_score` from 0 to 100. Zero AI tokens. |
@@ -171,13 +176,18 @@ One keyword per line. One job. One CSV.
 - **About 120 listings per search.** Google Maps stops scrolling at roughly 120 results per search.
   That is Google's cap, not the kit's. `--grid` is the fix: it splits the city into N x N map tiles,
   runs one search per tile in a single batch, and dedupes the results on `place_id`. Tiles run one at a
-  time, so a grid is slower and more likely to trip rate limits than a single search.
-- **Emails only when a business publishes one.** The extractor reads the business website, then a
-  second pass checks its contact and about pages. Listings with no site, or a site with no visible
+  time, so a grid is slower and more likely to trip rate limits than a single search. A first search
+  at depth 5 usually returns 20 to 40.
+- **Emails only when a business publishes one.** The script reads the business homepage, then its
+  contact and about pages. Listings with no site, or a site with no visible
   email, return an empty `emails` cell. Instagram bios are not read. Expect emails on a fraction of
   rows, not all of them.
 - **Rate limits are real.** Heavy use without proxies can get your IP temporarily rate-limited by
   Google for minutes to hours. Your Google account is not affected. See [Responsible use](#responsible-use).
+- **The web UI is the engine's own page.** It downloads the raw 36-column CSV and uses the engine's
+  slower email option. For a clean outreach list, use the scripts. The page also loads its scripts,
+  fonts and map tiles from public CDNs and OpenStreetMap, so it needs internet. Scraped data stays on
+  your machine.
 - **Apple Silicon runs natively from v1.18.0 on.** The image publishes arm64 builds, so M-series
   Macs need no emulation. Older tags are amd64 only and run under emulation.
 
