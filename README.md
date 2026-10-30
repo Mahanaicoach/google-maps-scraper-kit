@@ -93,7 +93,7 @@ python3 scripts/scrape.py "dentists in Denver CO" --city "Denver, CO" --grid 3
 ### Example output
 
 `results-coffee_shops_in_Austin_TX.csv` from the first command above (`scrape.py` names its file
-`results-<job id>.csv` unless you pass `--out`). Illustrative rows:
+`results-<short job id>.csv` unless you pass `--out`). Illustrative rows:
 
 | title | phone | emails | website | category | address | review_rating | review_count |
 |---|---|---|---|---|---|---|---|
@@ -162,7 +162,7 @@ scrapes Google Maps business listings only. It does not scrape social platforms 
 | **Social enrichment** | `--socials` finds Instagram, Facebook, LinkedIn, TikTok, YouTube and X profiles in code (HTTP + regex). Zero AI tokens. |
 | **Who already advertises** | `--tech` spots a Meta Pixel, Google Ads tag, analytics, Bing Ads, LinkedIn Insight and TikTok pixels on each website, plus its platform (WordPress, Shopify, Wix…) and mobile support, then ranks leads by an `intent_score` from 0 to 100. Zero AI tokens. |
 | **Filters** | `--no-website` (businesses that still need a site), `--min-rating`, `--min-reviews`, `--has-phone`, `--has-email`, `--limit`. `--exclude earlier.csv` skips the places you already have, so a weekly re-run returns only new leads. |
-| **Email checks** | `--verify-emails` looks up each domain's MX record over DNS (no key), drops dead domains and labels the mail host (`google_workspace`, `microsoft_365`, `other`). |
+| **Email checks** | `--verify-emails` looks up each domain's MX record over DNS (no key), drops dead domains and labels the mail host (`google_workspace`, `microsoft_365`, `other`, `none`; blank when the row has no email). |
 | **Auto-geocoding** | Type a city name. Coordinates are resolved for you via OpenStreetMap. Repeat `--city` to run several cities into one file. |
 | **Batch jobs** | Many keywords, one job, one CSV. The engine lists a place found by several keywords once. |
 | **Proxy rotation** | Built into the engine for large or repeated runs: `--proxy URL` (repeatable). `socks5`, `socks5h`, `http`, `https`. |
@@ -196,7 +196,7 @@ One keyword per line. One job. One CSV.
 - **Rate limits are real.** Heavy use without proxies can get your IP temporarily rate-limited by
   Google for minutes to hours. Your Google account is not affected. See [Responsible use](#responsible-use).
 - **The web UI is the engine's own page.** It downloads the raw 36-column CSV and uses the engine's
-  slower email option, whose `emails` column keeps junk such as `sentry.wixpress.com` and image
+  slower email option, whose `emails` column can keep junk such as `sentry.wixpress.com` and image
   names. For a clean outreach list, use the scripts. The page also loads its scripts,
   fonts and map tiles from public CDNs and OpenStreetMap, so it needs internet. Scraped data stays on
   your machine.
@@ -333,6 +333,7 @@ google-maps-scraper-kit/
 ├── scripts/
 │   ├── scrape.py           Python CLI: single, batch, geocoding, socials, CSV
 │   ├── scrape.sh           bash CLI: single query
+│   ├── update.sh           one-command update of a clone or fork
 │   └── test_scrape.py      offline tests, no network: python3 scripts/test_scrape.py
 ├── docs/                   guides and recipes
 ├── examples/               sample job body and batch keyword list

@@ -28,7 +28,7 @@ On Windows, run the same commands with `py` or `python3`. Python is only the cli
 | `--no-deep-emails` | Checks homepages only for emails, not contact and about pages. |
 | `--grid N` | Splits the `--city` area into N x N map tiles, one job each, deduped. Needs `--city`. Max 10. |
 | `--max-time` | Job time limit in seconds. Default `600`. |
-| `--out` | Output path. Default `results-<id>.csv`. A `.json` extension writes JSON. |
+| `--out` | Output path. Default `results-<short job id>.csv`. A `.json` extension writes JSON. |
 | `--json` | Writes JSON instead of CSV. |
 | `--full` | Keeps all 36 raw columns instead of the 8 lead fields. |
 | `--fields` | Comma-separated columns to keep, overriding the lead fields. |
@@ -43,7 +43,7 @@ On Windows, run the same commands with `py` or `python3`. Python is only the cli
 | `--has-phone`, `--has-email` | Keep only rows with a phone, or rows where an email was found. |
 | `--exclude FILE` | Drop places already in an earlier results file (`.csv` or `.json`), repeatable. Matches on `place_id`, `cid`, link, or name plus address, so the lean 8-column CSV works. |
 | `--limit N` | Stop at N rows after filtering. |
-| `--verify-emails` | Checks each email domain's MX record over DNS (dns.google, no key). Drops addresses on domains that do not exist and adds `email_host`: `google_workspace`, `microsoft_365`, `other` or `none`. |
+| `--verify-emails` | Checks each email domain's MX record over DNS (dns.google, no key). Drops addresses on domains that do not exist and adds `email_host`: `google_workspace`, `microsoft_365`, `other` or `none` (blank when the row has no email). |
 
 The script creates the job, polls until it finishes, downloads the CSV and keeps the 8 lead fields. It prints a short preview and saves the full results to a file.
 

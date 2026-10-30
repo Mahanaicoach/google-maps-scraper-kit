@@ -32,7 +32,7 @@ python3 scripts/scrape.py "dentists in Denver CO" --city "Denver, CO" --no-deep-
 python3 scripts/scrape.py "dentists in Denver CO" --city "Denver, CO" --no-email
 ```
 
-The CSV lands in `results-<id>.csv` unless you pass `--out`.
+The CSV lands in `results-<short job id>.csv` unless you pass `--out`.
 
 ## Example output
 

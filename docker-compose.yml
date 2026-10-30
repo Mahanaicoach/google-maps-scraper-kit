@@ -14,7 +14,9 @@ services:
     # Only older tags are amd64 and need the 'platform' line below. Default: commented out.
     image: gosom/google-maps-scraper:v1.18.1
     # platform: linux/amd64
-    container_name: gmaps-scraper
+    # SCRAPER_CONTAINER in .env renames both containers, for a second copy of the kit on one machine.
+    # The scripts read the same variable, so the stuck-job recovery restarts the right engine.
+    container_name: ${SCRAPER_CONTAINER:-gmaps-scraper}
     restart: unless-stopped
     # -c: parallel workers. The engine's own default resolves to 1 in this image, so a depth 5 job
     # with emails visits every listing and website one at a time (~8 min). Most of that is business
@@ -32,7 +34,7 @@ services:
   # Serves the engine's UI and API with the kit's own GitHub and sponsor links (ui-branding.conf).
   ui:
     image: nginx:1.27-alpine
-    container_name: gmaps-scraper-ui
+    container_name: ${SCRAPER_CONTAINER:-gmaps-scraper}-ui
     restart: unless-stopped
     depends_on:
       - google-maps-scraper

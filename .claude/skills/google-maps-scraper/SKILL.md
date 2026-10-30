@@ -112,7 +112,7 @@ outreach), `link`, `plus_code`, `cid`, `data_id`, `place_id`, `open_hours`, `pop
 `user_reviews`, `user_reviews_extended`.
 
 `scripts/scrape.py` already returns exactly the 8 lead fields. Use `--full` to keep all columns, or
-`--fields "a,b,c"` to choose your own. It **saves a CSV file by default** (`results-<id>.csv`); pass
+`--fields "a,b,c"` to choose your own. It **saves a CSV file by default** (`results-<short job id>.csv`); pass
 `--json` for JSON. If you call the API directly, **strip to the lead fields yourself** before
 presenting. Never dump the full 36-column row at the user.
 
