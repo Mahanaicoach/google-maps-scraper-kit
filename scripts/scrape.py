@@ -152,8 +152,10 @@ def _keys(r):
     """Every identity a row carries: place_id, cid, link and title+address. A lean 8-column CSV
     from an earlier run has only the last one, so matching on any key lets --exclude use it."""
     ks = [f"{k}:{r[k]}" for k in ("place_id", "cid", "link") if r.get(k)]
-    if r.get("title"):
-        ks.append(f"ta:{r['title']}|{r.get('address', '')}")
+    t = r.get("title")
+    if t:  # name plus address, and name plus phone or website: a --fields file may lack the address
+        ks.append(f"ta:{t}|{r.get('address', '')}")
+        ks += [f"t{c[0]}:{t}|{r[c]}" for c in ("phone", "website") if r.get(c)]
     return ks
 
 
@@ -169,7 +171,7 @@ def dedupe(rows, exclude=()):
 
 def load_rows(path):
     """Rows from an earlier results file, .csv or .json."""
-    with open(path, encoding="utf-8", newline="") as f:
+    with open(path, encoding="utf-8-sig", newline="") as f:  # -sig: also reads the kit's own CSVs
         return json.load(f) if path.lower().endswith(".json") else list(csv.DictReader(f))
 
 
@@ -799,11 +801,21 @@ def main():
         print("    Google (clears in minutes–hours; returns empty/failed jobs meanwhile). For big or")
         print("    repeated runs, add proxies. Proceeding…\n")
 
-    # Health check
-    try:
-        req("GET", "/api/v1/jobs")
-    except Exception as e:
-        sys.exit(f"✗ Scraper not reachable at {BASE} — run 'docker compose up -d' first.\n  ({e})")
+    # Health check. Right after `docker compose up -d` the proxy answers 502 for a few seconds while
+    # the engine starts, and the README's next line runs at once, so wait up to a minute for it.
+    for i in range(30):
+        try:
+            req("GET", "/api/v1/jobs")
+            break
+        except Exception as e:
+            err = e
+        print("\r  waiting for the engine to start" + "." * (i + 1), end="", flush=True)
+        time.sleep(2)
+    else:
+        sys.exit(f"\n✗ Scraper not reachable at {BASE}. Is Docker Desktop open? Start the engine with "
+                 f"'docker compose up -d' in the kit folder, wait 10 seconds, then try again.\n  ({err})")
+    if i:
+        print()
 
     body = {"name": "scrape-py", "keywords": keywords, "lang": a.lang, "zoom": 15,
             "fast_mode": False, "radius": 10000,
@@ -882,11 +894,12 @@ def main():
         with open(out, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
     else:
-        with open(out, "w", newline="", encoding="utf-8") as f:
+        # utf-8-sig: the BOM makes Excel on Windows read accented names as UTF-8 instead of cp1252.
+        with open(out, "w", newline="", encoding="utf-8-sig") as f:
             w = csv.DictWriter(f, fieldnames=fields)
             w.writeheader()
             w.writerows(results)
-    print(f"  saved → {out}")
+    print(f"  saved → {os.path.abspath(out)}  (opens in Excel or Google Sheets)")
     for r in results[:5]:
         tail = f" | IG:{r.get('instagram','') or '—'}" if a.socials else f" | {r.get('website','')}"
         print(f"  • {r.get('title','')} | {r.get('phone','')} | {r.get('emails','')}{tail}")

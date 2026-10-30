@@ -61,15 +61,21 @@ Maps API, delivered as clean, structured JSON and Markdown.
 
 ## Quick start
 
-Requires [Docker Desktop](https://www.docker.com/products/docker-desktop) and Python 3. The scripts
-use the standard library only, so there is nothing to `pip install`.
+Requires [Docker Desktop](https://www.docker.com/products/docker-desktop) (installed **and open**) and
+Python 3. The scripts use the standard library only, so there is nothing to `pip install`.
+
+Open a terminal (macOS: Terminal; Windows: PowerShell) and run these four lines. The first
+`docker compose up -d` downloads the engine once, about 600 MB, and the script waits for it to start:
 
 ```bash
 git clone https://github.com/Mahanaicoach/google-maps-scraper-kit.git
 cd google-maps-scraper-kit
 docker compose up -d
-./scripts/scrape.sh "coffee shops in Austin TX" 30.2672 -97.7431 5
+bash scripts/scrape.sh "coffee shops in Austin TX" 30.2672 -97.7431 5
 ```
+
+On Windows, skip the `bash` line and use the Python CLI below with `py` in place of `python3`.
+Prefer clicking? http://localhost:8080 has a form; it returns the engine's raw 36-column CSV.
 
 No coordinates handy? Let the Python CLI geocode the city:
 
