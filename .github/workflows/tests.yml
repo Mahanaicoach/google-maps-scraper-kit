@@ -36,6 +36,7 @@ jobs:
           curl -s http://localhost:8080/ | grep -q 'github.com/Mahanaicoach/google-maps-scraper-kit'
           curl -s http://localhost:8080/ | grep -q 'id="email" name="email" checked'
           curl -s http://localhost:8080/api/docs | grep -q 'redoc/v2.5.0/'
+          curl -s http://localhost:8080/ | grep -q 'assets/sponsors/sponsors.json'
       - name: proxy refuses other hosts and other sites
         run: |
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.com' http://localhost:8080/api/v1/jobs)" = 421
