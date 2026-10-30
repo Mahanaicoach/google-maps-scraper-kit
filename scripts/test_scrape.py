@@ -293,18 +293,6 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(rows[0], scrape.LEAD)
         self.assertEqual([r[0] for r in rows[1:]], ["Biz A", "Biz B", "Biz C", "Biz D", "Biz E"])
 
-    def test_batch_run_dedupes_keywords(self):
-        # "dentists" and "dental clinics" both return place A.
-        out = os.path.join(tempfile.mkdtemp(), "leads.csv")
-        argv = ["scrape.py", "dentists in Austin TX", "30.2", "-97.7", "--keyword", "dental clinics",
-                "--no-email", "--out", out]
-        with mock.patch.object(scrape, "req", return_value=(200, b"null")), \
-             mock.patch.object(scrape, "run_job", return_value=("job-x", [_row("A"), _row("B"), _row("A")])), \
-             mock.patch.object(sys, "argv", argv), redirect_stdout(io.StringIO()):
-            scrape.main()
-        with open(out, newline="") as f:
-            self.assertEqual([r["title"] for r in csv.DictReader(f)], ["Biz A", "Biz B"])
-
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -554,10 +554,6 @@ def main():
             job_id, rows = run_job(body)
         except RuntimeError as e:
             sys.exit(str(e))
-        unique = dedupe(rows)  # a place found by two keywords comes back twice
-        if len(unique) < len(rows):
-            print(f"  dropped {len(rows) - len(unique)} duplicate rows (same place, several keywords)")
-        rows = unique
     else:
         print(f"▶ Grid {a.grid}x{a.grid}: {len(cells)} jobs, one at a time, "
               f"{len(keywords)} keyword(s) depth={a.depth} email={a.email}")

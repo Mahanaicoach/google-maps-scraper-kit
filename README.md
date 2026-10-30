@@ -148,7 +148,7 @@ scrapes Google Maps business listings only. It does not scrape social platforms 
 | **Social enrichment** | `--socials` finds Instagram, Facebook and LinkedIn profiles in code (HTTP + regex). Zero AI tokens. |
 | **Who already advertises** | `--tech` spots a Meta Pixel, Google Ads tag and analytics on each website, plus its platform (WordPress, Shopify, Wix…) and mobile support, then ranks leads by an `intent_score` from 0 to 100. Zero AI tokens. |
 | **Auto-geocoding** | Type a city name. Coordinates are resolved for you via OpenStreetMap. |
-| **Batch jobs** | Many keywords, one job, one CSV, deduped when two keywords find the same place. |
+| **Batch jobs** | Many keywords, one job, one CSV. The engine lists a place found by several keywords once. |
 | **Proxy rotation** | Built into the engine for large or repeated runs. `socks5`, `socks5h`, `http`, `https`. |
 | **Agent-native** | A skill plus four slash commands. The agent handles create, poll, download, clean and present. |
 | **Safe defaults** | API bound to `127.0.0.1`, results git-ignored, rate-limit and data-law guardrails built into the skill. |
