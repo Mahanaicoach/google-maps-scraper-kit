@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Offline tests for scripts/scrape.py (standard library only, no network).
 Run: python3 scripts/test_scrape.py"""
-import csv, importlib.util, io, json, os, sys, tempfile, threading, unittest
+import csv, importlib.util, io, json, os, pathlib, sys, tempfile, threading, unittest
 from contextlib import redirect_stdout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
@@ -528,6 +528,24 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(rows[0]["instagram"], "https://instagram.com/biz_b")
 
 
+class NothingLeft(unittest.TestCase):
+    def test_filters_dropping_every_row_is_said_plainly(self):
+        MockEngine.created, MockEngine.polls = 0, {}
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), MockEngine)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        out = os.path.join(tempfile.mkdtemp(), "leads.csv")
+        argv = ["scrape.py", "plumbers in Austin TX", "30.2", "-97.7", "--no-email", "--min-reviews", "999", "--out", out]
+        log = io.StringIO()
+        try:
+            with mock.patch.object(scrape, "BASE", f"http://127.0.0.1:{srv.server_port}"), \
+                 mock.patch.object(scrape.time, "sleep"), mock.patch.object(sys, "argv", argv), redirect_stdout(log):
+                scrape.main()
+        finally:
+            srv.shutdown(); srv.server_close()
+        self.assertIn("Nothing left: the filters and --exclude dropped all 3 rows", log.getvalue())
+        self.assertNotIn("✓ Done", log.getvalue())
+
+
 class Filters(unittest.TestCase):
     def test_keep_row(self):
         a = mock.Mock(min_rating=4.5, min_reviews=10, no_website=False, has_phone=True)
@@ -560,8 +578,8 @@ class Filters(unittest.TestCase):
 
     def test_load_rows_csv_and_json(self):
         d = tempfile.mkdtemp()
-        j = os.path.join(d, "a.json"); open(j, "w").write('[{"title": "A"}]')
-        c = os.path.join(d, "a.csv"); open(c, "w", encoding="utf-8-sig").write("title,phone\nB,1\n")
+        j = os.path.join(d, "a.json"); pathlib.Path(j).write_text('[{"title": "A"}]')
+        c = os.path.join(d, "a.csv"); pathlib.Path(c).write_text("title,phone\nB,1\n", encoding="utf-8-sig")
         self.assertEqual(scrape.load_rows(j), [{"title": "A"}])
         self.assertEqual(scrape.load_rows(c), [{"title": "B", "phone": "1"}])  # BOM stripped, key is clean
 
@@ -577,8 +595,11 @@ class RegexSpeed(unittest.TestCase):
 
 class Resilience(unittest.TestCase):
     def test_get_retries_transient_errors(self):
-        answers = iter([scrape.urllib.error.HTTPError("u", 502, "bad gateway", {}, None),
-                        OSError("timed out"), (200, b"null")])
+        # HTTPError owns a temp file; close both at the end or Python warns about it at exit.
+        e502 = scrape.urllib.error.HTTPError("u", 502, "bad gateway", {}, None)
+        e404 = scrape.urllib.error.HTTPError("u", 404, "nf", {}, None)
+        self.addCleanup(e502.close); self.addCleanup(e404.close)
+        answers = iter([e502, OSError("timed out"), (200, b"null")])
         def fake_req(method, path, body=None):
             a = next(answers)
             if isinstance(a, Exception):
@@ -587,8 +608,7 @@ class Resilience(unittest.TestCase):
         with mock.patch.object(scrape, "req", fake_req), mock.patch.object(scrape.time, "sleep") as slept:
             self.assertEqual(scrape._get("/api/v1/jobs"), (200, b"null"))
         self.assertEqual(slept.call_count, 2)
-        with mock.patch.object(scrape, "req", side_effect=scrape.urllib.error.HTTPError("u", 404, "nf", {}, None)), \
-             self.assertRaises(scrape.urllib.error.HTTPError):
+        with mock.patch.object(scrape, "req", side_effect=e404), self.assertRaises(scrape.urllib.error.HTTPError):
             scrape._get("/api/v1/jobs/x")  # a 4xx is final, no retry
 
     def test_pending_restart_failure_raises_instead_of_polling_a_deleted_job(self):
@@ -665,7 +685,7 @@ class HostileInput(unittest.TestCase):
 
     def test_exclude_file_must_be_a_list_of_rows(self):
         d = tempfile.mkdtemp()
-        j = os.path.join(d, "job.json"); open(j, "w").write('{"job": {"keywords": ["x"]}}')
+        j = os.path.join(d, "job.json"); pathlib.Path(j).write_text('{"job": {"keywords": ["x"]}}')
         with self.assertRaises(ValueError):
             scrape.load_rows(j)
 
@@ -673,13 +693,13 @@ class HostileInput(unittest.TestCase):
 class EnvFile(unittest.TestCase):
     def test_export_prefix_comment_quotes_and_trailing_slash(self):
         d = tempfile.mkdtemp(); os.mkdir(os.path.join(d, "scripts"))
-        open(os.path.join(d, ".env"), "w").write(
-            "export SCRAPER_PORT=8081 # my port\nSCRAPER_BASE_URL='http://localhost:8081/'\n# SCRAPER_API_KEY=nope\n")
+        pathlib.Path(d, ".env").write_text(
+            "SCRAPER_PORT=8080\nexport SCRAPER_PORT=8081 # my port\nSCRAPER_BASE_URL='http://localhost:8081/'\n# SCRAPER_API_KEY=nope\n")
         saved = {k: os.environ.pop(k, None) for k in scrape.ENV_KEYS}
         try:
             with mock.patch.object(scrape, "__file__", os.path.join(d, "scripts", "scrape.py")):
                 scrape.load_env_file()
-            self.assertEqual(os.environ.get("SCRAPER_PORT"), "8081")
+            self.assertEqual(os.environ.get("SCRAPER_PORT"), "8081")  # the last line wins, as in compose
             self.assertEqual(os.environ.get("SCRAPER_BASE_URL"), "http://localhost:8081/")
             self.assertIsNone(os.environ.get("SCRAPER_API_KEY"))
         finally:
@@ -718,7 +738,7 @@ class ArgumentBounds(unittest.TestCase):
         self.assertIn("--max-time", self.run_main("--max-time", "0"))  # the engine says "missing max time"
         self.assertIn("--limit", self.run_main("--limit", "-1"))
         bad_dir = os.path.join(tempfile.mkdtemp(), "a-file")
-        open(bad_dir, "w").close()  # a file where the folder should be
+        pathlib.Path(bad_dir).write_text("")  # a file where the folder should be
         self.assertIn("--out", self.run_main("--out", os.path.join(bad_dir, "x", "leads.csv")))
 
 

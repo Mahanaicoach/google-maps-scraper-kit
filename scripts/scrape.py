@@ -42,8 +42,11 @@ ENV_KEYS = ("SCRAPER_BASE_URL", "SCRAPER_PORT", "SCRAPER_API_KEY", "SCRAPER_CONT
 
 def load_env_file():
     """Read SCRAPER_* from the kit's .env, the same file docker compose reads, so a remapped
-    port needs one edit. Variables already set in the environment win over the file."""
+    port needs one edit. The last line for a key wins, as in compose, so a second SCRAPER_PORT
+    line lower in the file (the second-copy block) is the one both sides use. Variables already
+    set in the environment win over the file."""
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, ".env")
+    found = {}
     try:
         with open(path, encoding="utf-8-sig", errors="replace") as f:
             for line in f:
@@ -52,10 +55,12 @@ def load_env_file():
                     line = line[7:]
                 k, sep, v = line.partition("=")
                 k, v = k.strip(), v.split(" #", 1)[0].strip().strip("\"'")  # drop a trailing comment
-                if sep and k in ENV_KEYS and k not in os.environ:
-                    os.environ[k] = v
+                if sep and k in ENV_KEYS:
+                    found[k] = v
     except OSError:
-        pass
+        return
+    for k, v in found.items():
+        os.environ.setdefault(k, v)
 
 
 load_env_file()
@@ -968,7 +973,11 @@ def main():
         fields = LEAD
     if a.has_email and "emails" not in fields:
         sys.exit("✗ --has-email needs the emails column: add emails to --fields.")
-    print(f"✓ Done — {len(rows)} businesses (fields: {', '.join(fields)}).")
+    if before and not rows:
+        print(f"⚠ Nothing left: the filters and --exclude dropped all {before} rows. Loosen them and rerun; "
+              f"the file below has only a header.")
+    else:
+        print(f"✓ Done — {len(rows)} businesses (fields: {', '.join(fields)}).")
     if skipped:
         print(f"⚠ Incomplete: {skipped} of {ncells} tiles failed, so parts of the area are missing. Rerun later.")
 
