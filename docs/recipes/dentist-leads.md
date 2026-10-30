@@ -1,5 +1,7 @@
 # Scrape dentists from Google Maps: a lead list recipe
 
+_Last updated 2026-10-30. Tested with engine v1.18.1._
+
 This recipe shows how to scrape dentists from Google Maps for one city with the Google Maps Scraper Kit, from a quick test to the whole city.
 You get a CSV of dental practices with phone, email, website, address, rating and review count, free and local, with no API key.
 

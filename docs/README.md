@@ -4,6 +4,7 @@ Short guides for the Google Maps Scraper Kit. Each page covers one task with the
 
 ## Guides
 
+- [Best free Google Maps scrapers in 2026, compared](best-google-maps-scrapers.md): for anyone choosing between this kit, the raw engine, cloud scrapers and the Places API.
 - [Google Maps email scraper](google-maps-email-scraper.md): for anyone who needs contact emails and wants to know how the kit finds them.
 - [Google Maps scraper in Python](google-maps-scraper-python.md): for terminal users who want every flag of the CLI in one table.
 - [Google Maps scraper without an API key](google-maps-scraper-no-api-key.md): for anyone avoiding Places API keys, quotas and billing.
