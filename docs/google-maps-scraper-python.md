@@ -1,9 +1,11 @@
 # Google Maps scraper in Python: the kit's dependency-free CLI
 
+_Last updated 2026-10-30. Tested with engine v1.18.1._
+
 `scripts/scrape.py` is a free Google Maps scraper Python CLI that turns a keyword and a place into a lead CSV, using only the standard library.
 It drives the engine running locally in Docker, so there is no API key, no pip install and no data leaving your machine.
 
-## Run it
+## How do I run it?
 
 Start the engine, which is the gosom/google-maps-scraper official Docker image, then call the script:
 

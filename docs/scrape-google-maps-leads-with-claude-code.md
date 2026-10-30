@@ -1,5 +1,7 @@
 # Scrape Google Maps leads with Claude Code
 
+_Last updated 2026-10-30. Tested with engine v1.18.1._
+
 The Google Maps Scraper Kit lets you scrape Google Maps leads with Claude Code by asking in plain English, and get back a clean table plus a CSV.
 It is free and runs locally: the agent drives a scraping engine in Docker on your machine, with no API key and no SaaS credits.
 

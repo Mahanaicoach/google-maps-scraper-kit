@@ -1,9 +1,11 @@
 # Google Maps email scraper: how the kit finds business emails
 
+_Last updated 2026-10-30. Tested with engine v1.18.1._
+
 The Google Maps Scraper Kit is a free Google Maps email scraper that runs on your own machine with no API key.
 Name a business type and a city, and you get a CSV of local businesses with their published contact emails next to phone, website and address.
 
-## How emails are found
+## How does it find emails?
 
 Emails are on by default. Google Maps listings carry no email field, so once the Maps job is done the script crawls each business website itself, 16 sites at a time:
 
@@ -16,7 +18,7 @@ The crawl reads `mailto:` links and plain text on those pages. It drops junk suc
 
 When the crawl ends, the script prints one found-rate line: how many businesses got an email, and their share of all rows.
 
-## Run it
+## How do I run it?
 
 Start the engine once, then run a search with `--city` so you can skip coordinates:
 
