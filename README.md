@@ -32,6 +32,25 @@ English.
 | Compare it with Apify, Outscraper and chat AIs | [How it compares](#how-it-compares) |
 | Follow a worked recipe for dentists, roofers or restaurants | [Guides and recipes](docs/README.md) |
 
+## Sponsors
+
+<p align="center">
+  <a href="https://serpapi.com/maps-scraper-kit-github"><img src="assets/sponsors/serpapi.png" alt="SerpApi: complete Maps API, available in JSON and Markdown" width="600"></a>
+</p>
+
+**[SerpApi](https://serpapi.com/maps-scraper-kit-github)**: Access Google Maps listings, reviews,
+directions, and other public search data with SerpApi's Google Maps API, delivered as clean,
+structured JSON and Markdown.
+
+<p align="center">
+  <a href="https://www.swiftproxy.net/?ref=googlemapsscraperkit"><img src="assets/sponsors/swiftproxy.webp" alt="Swiftproxy: residential proxies for Google Maps lead generation" width="600"></a>
+</p>
+
+**[Swiftproxy](https://www.swiftproxy.net/?ref=googlemapsscraperkit)**: Enhance your Google Maps data
+collection with Swiftproxy's global residential proxies. Access 90M+ residential IPs across 220+
+locations, with rotating and static IP options to support reliable scraping and location-specific data
+collection. Use code `PROXY90` to get 10% off.
+
 ---
 
 ## Quick start
