@@ -1,6 +1,6 @@
 ---
 name: google-maps-scraper
-description: Google Maps scraper for lead generation. Turns a business type and a place into a clean CSV of local businesses by driving the gosom/google-maps-scraper engine, running locally in Docker as a REST API on localhost:8080. Returns 8 lead fields by default (name, phone, email, website, category, address, rating and review count), plus optional Instagram, Facebook and LinkedIn profiles or all 36 raw fields. Use when the user wants a lead list, "a list of [businesses] in [place]", local business data, contact enrichment for places (emails, phones, socials), or a whole-city run past Google's ~120 results per search. Do not use for scraping Instagram, TikTok, YouTube, X or any other social media platform directly.
+description: Google Maps scraper for lead generation. Turns a business type and a place into a clean CSV of local businesses by driving the gosom/google-maps-scraper engine, running locally in Docker as a REST API on localhost:8080. Returns 8 lead fields by default (name, phone, email, website, category, address, rating and review count), plus optional social profiles (Instagram, Facebook, LinkedIn, TikTok, YouTube, X), row filters such as businesses without a website, or all 36 raw fields. Use when the user wants a lead list, "a list of [businesses] in [place]", local business data, contact enrichment for places (emails, phones, socials), or a whole-city run past Google's ~120 results per search. Do not use for scraping Instagram, TikTok, YouTube, X or any other social media platform directly.
 ---
 
 # Google Maps Scraper
@@ -116,9 +116,9 @@ outreach), `link`, `plus_code`, `cid`, `data_id`, `place_id`, `open_hours`, `pop
 `--json` for JSON. If you call the API directly, **strip to the lead fields yourself** before
 presenting. Never dump the full 36-column row at the user.
 
-### Social profiles: always ask the user (Instagram, Facebook, LinkedIn)
+### Social profiles: always ask the user (Instagram, Facebook, LinkedIn, TikTok, YouTube, X)
 Google Maps has no social links, so socials are an enrichment step: visit each business `website` and
-regex out its Instagram, Facebook and LinkedIn URLs. **Before scraping, ask the user once** whether they
+regex out its Instagram, Facebook, LinkedIn, TikTok, YouTube and X URLs. **Before scraping, ask the user once** whether they
 want socials too, unless they already said. If yes, **use the script:** `python3 scripts/scrape.py … --socials`.
 No `scripts/` (skill installed on its own)? Socials need the full kit: say so once, skip the question,
 and do not fetch the websites yourself.
@@ -141,7 +141,9 @@ the curl flow above):
   **Emails come back by default** (`--no-email` skips them). Add `--socials` if the user asked for socials.
 - **Batch (many keywords, one job):** `python3 scripts/scrape.py --keywords-file <file> --city "<City, ST>"`.
   The API takes a `keywords` array, so put all terms in a single job rather than firing many jobs.
-Use the manual curl flow only for custom job bodies, e.g. to set `proxies`.
+- **Several cities:** repeat `--city`; they run one after another into one deduped file.
+- **Proxies:** `--proxy socks5://user:pass@host:port` (repeatable; `socks5h`, `http`, `https` too).
+Use the manual curl flow only for custom job bodies.
 
 **Whole-city runs:** when the user says all, every or entire city, or a run returns about 120 rows
 (Google's per-search cap), use `python3 scripts/scrape.py "<keyword>" --city "<City, ST>" --grid 3`.
@@ -150,11 +152,19 @@ grid is slower and more likely to trip rate limits: warn once, don't block.
 
 **Email crawl:** on by default. After the Maps job the script fetches every business homepage, 16 at
 a time, then contact and about pages where the homepage shows no email, and prints the found rate.
-`--no-deep-emails` checks homepages only; `--no-email` skips the crawl.
+`--no-deep-emails` checks homepages only; `--no-email` skips the crawl. `--verify-emails` looks up each
+address's domain over DNS (dns.google, no key), drops domains that do not exist and adds `email_host`
+(`google_workspace`, `microsoft_365`, `other`, `none`).
+
+**Filters and follow-up runs:** when the user wants only businesses without a website (the classic
+web-design prospect list), a minimum rating or review count, or only rows with a phone or an email,
+pass `--no-website`, `--min-rating 4.5`, `--min-reviews 20`, `--has-phone`, `--has-email`. `--limit N`
+caps the rows. `--exclude earlier.csv` (repeatable, `.csv` or `.json`) drops places from an earlier
+run, so a weekly re-run returns only new leads. Filters run in code, before the website crawl.
 
 **Who already advertises:** when the user wants warm leads, businesses that run ads, or to know a
-site's platform, add `--tech`. It reads each homepage for a Meta Pixel, Google Ads tag and analytics,
-the platform (WordPress, Shopify, Wix, Squarespace, Webflow) and mobile support, scores each lead 0-100
+site's platform, add `--tech`. It reads each homepage for a Meta Pixel, Google Ads tag, analytics, Bing Ads,
+LinkedIn Insight and TikTok pixels, the platform (WordPress, Shopify, Wix, Squarespace, Webflow) and mobile support, scores each lead 0-100
 (`intent_score`: pixels dominate, reviews, rating and an email add a little) and sorts highest first.
 It finds installed tags, not live ad campaigns. Zero LLM tokens.
 
@@ -196,7 +206,7 @@ There is **no published hard threshold** for blocks, so stay conservative:
 
 **When to add proxies** (upstream: *"For larger scraping jobs, proxies help avoid rate limiting"*):
 large jobs, many keywords, repeated or scheduled runs, or after you see block signals.
-- Set the `"proxies"` array in the job body. Types: `socks5`, `socks5h`, `http`, `https`.
+- `--proxy URL` on the script (repeatable), or the `"proxies"` array in a raw job body. Types: `socks5`, `socks5h`, `http`, `https`.
 - Format: `protocol://user:pass@host:port` (auth optional), e.g.
   `"proxies": ["socks5://user:pass@host:port", "http://host2:port2"]`. The engine rotates them automatically.
 
