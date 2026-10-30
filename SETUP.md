@@ -25,8 +25,10 @@ docker ps               # should NOT error (means the daemon is up)
 > **Platform notes:**
 > - **Apple Silicon (M1/M2/M3):** from v1.18.0 the image publishes an arm64 build, so it runs
 >   natively and no `platform` line is needed. Only older tags are amd64 and run under emulation.
-> - **Windows:** use `scripts/scrape.py` (run with `py` or `python3`). The bash script `scrape.sh` needs
->   **WSL2** or **Git Bash**.
+> - **Windows:** when you install Python, tick **Add python.exe to PATH**. Then use `scripts/scrape.py`
+>   (run with `py`). The bash script `scrape.sh` needs **WSL2** or **Git Bash**.
+> - **macOS:** the first `git` or `python3` command may ask to install the Command Line Tools. Click
+>   Install, wait, then run the command again.
 
 ---
 
@@ -82,7 +84,7 @@ If `curl` prints `null` or a JSON list, the engine is live.
 Use the bash script. Its arguments are `"<keyword>" <lat> <lon> [depth]`:
 
 ```bash
-./scripts/scrape.sh "coffee shops in Austin TX" 30.2672 -97.7431 5
+bash scripts/scrape.sh "coffee shops in Austin TX" 30.2672 -97.7431 5
 ```
 
 Or use the Python CLI, which needs no dependencies:
@@ -187,6 +189,9 @@ curl -X DELETE http://localhost:8080/api/v1/jobs/<job-id>
 | Symptom | Fix |
 |---|---|
 | `curl: connection refused` on :8080 | Container not up. `docker compose up -d`, then `docker ps`. |
+| `Cannot connect to the Docker daemon` / `docker: command not found` | Docker Desktop is not running (or not installed). Open Docker Desktop, wait until its whale icon stops animating, then run `docker compose up -d` again. |
+| `502 Bad Gateway` right after `docker compose up -d` | The engine is still starting, about 10 seconds. The scripts wait for it; in the browser, reload the page. |
+| `Permission denied` running `./scripts/scrape.sh` | The file lost its execute bit (a ZIP download does that). Run `bash scripts/scrape.sh …` instead. |
 | `port is already allocated` / something else already uses 8080 | Set `SCRAPER_PORT=8081` in `.env`, then `docker compose up -d`. Compose publishes the scraper on that host port and `scripts/scrape.sh` and `scripts/scrape.py` read the same file, so nothing else needs editing. The port inside the container stays 8080 (do not change the right-hand side of the mapping). If your `.env` still has a `SCRAPER_BASE_URL` line, delete it or update its port: it overrides `SCRAPER_PORT`. The slash commands and the skill show `localhost:8080` in their examples, so tell Claude the port you picked. |
 | `422 missing max time` | Job body needs `max_time` (in **seconds**, e.g. `300`). |
 | `422 missing geo coordinates` | Job body needs `lat` and `lon` as **strings**, e.g. `"30.2672"`. |

@@ -449,7 +449,7 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("cell 3/4 skipped", text)
         self.assertIn("Incomplete: 1 of 4 tiles failed", text)
         self.assertIn("dropped 1 rows outside the city box", text)
-        with open(out, newline="") as f:
+        with open(out, newline="", encoding="utf-8-sig") as f:  # the kit writes a BOM for Excel
             rows = list(csv.reader(f))
         self.assertEqual(rows[0], scrape.LEAD)
         self.assertEqual([r[0] for r in rows[1:]], ["Biz A", "Biz B", "Biz C", "Biz D", "Biz E"])
@@ -478,7 +478,7 @@ class EndToEnd(unittest.TestCase):
             srv.shutdown(); srv.server_close()
         self.assertEqual(geo.call_count, 2)
         self.assertIn("kept 3 of 4 rows", log.getvalue())  # A, B, C + C, D -> 4 unique, minus excluded A
-        with open(out, newline="") as f:
+        with open(out, newline="", encoding="utf-8-sig") as f:  # the kit writes a BOM for Excel
             rows = list(csv.DictReader(f))
         self.assertEqual([r["title"] for r in rows], ["Biz B", "Biz C"])  # --limit 2
 
@@ -499,13 +499,18 @@ class Filters(unittest.TestCase):
         new = [{"place_id": "P1", "title": "Joe's", "address": "1 Main"}, {"place_id": "P2", "title": "Ann's"}]
         self.assertEqual(scrape.dedupe(new, exclude=[{"title": "Joe's", "address": "1 Main"}]), new[1:])
         self.assertEqual(scrape.dedupe(new, exclude=[{"place_id": "P2"}]), new[:1])
+        # A --fields file without address still matches on name plus phone or website.
+        new2 = [{"place_id": "P3", "title": "Ann's", "address": "2 Main", "phone": "+1 555", "website": "http://ann.com"}]
+        self.assertEqual(scrape.dedupe(new2, exclude=[{"title": "Ann's", "phone": "+1 555"}]), [])
+        self.assertEqual(scrape.dedupe(new2, exclude=[{"title": "Ann's", "website": "http://ann.com"}]), [])
+        self.assertEqual(scrape.dedupe(new2, exclude=[{"title": "Ann's"}]), new2)  # name alone is not enough
 
     def test_load_rows_csv_and_json(self):
         d = tempfile.mkdtemp()
         j = os.path.join(d, "a.json"); open(j, "w").write('[{"title": "A"}]')
-        c = os.path.join(d, "a.csv"); open(c, "w").write("title,phone\nB,1\n")
+        c = os.path.join(d, "a.csv"); open(c, "w", encoding="utf-8-sig").write("title,phone\nB,1\n")
         self.assertEqual(scrape.load_rows(j), [{"title": "A"}])
-        self.assertEqual(scrape.load_rows(c), [{"title": "B", "phone": "1"}])
+        self.assertEqual(scrape.load_rows(c), [{"title": "B", "phone": "1"}])  # BOM stripped, key is clean
 
 
 class VerifyEmails(unittest.TestCase):
