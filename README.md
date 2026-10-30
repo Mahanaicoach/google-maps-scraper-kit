@@ -76,8 +76,8 @@ bash scripts/scrape.sh "coffee shops in Austin TX" 30.2672 -97.7431 5
 
 On Windows, skip the `bash` line and use the Python CLI below with `py` in place of `python3`.
 Prefer clicking? http://localhost:8080 has a form; it returns the engine's raw 36-column CSV.
-Port 8080 already in use, or another copy of the kit on this machine? Read
-[SETUP, section 6](SETUP.md#6-troubleshooting) before `docker compose up -d`.
+Already running another copy of the kit on this machine? Set the port and names in `.env` first
+(SETUP §6, "second copy"), or `docker compose up -d` takes over the other copy's containers.
 
 No coordinates handy? Let the Python CLI geocode the city:
 
