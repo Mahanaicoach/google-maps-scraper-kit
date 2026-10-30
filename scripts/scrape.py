@@ -245,7 +245,7 @@ def run_job(body):
             time.sleep(FAILED_RETRY_WAIT)
 
 
-def _run_job_once(body):
+def _run_job_once(body, restarted=False):
     since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     try:
         _, raw = req("POST", "/api/v1/jobs", body)
@@ -279,10 +279,16 @@ def _run_job_once(body):
                 return job_id, recover_stuck_job(job_id)
         if status == "pending":
             pending += 1
-            if pending == PENDING_RESTART_AFTER and engine_idle():
+            if pending == PENDING_RESTART_AFTER and not restarted and engine_idle():
+                # Delete the pending job first, or the restarted engine runs it as well as the new one.
                 print("\n⚠ The engine has not started this job and shows no activity: an earlier job left it "
-                      "stuck (gosom/google-maps-scraper#346). Restarting it; it picks the pending job up itself.")
-                restart_engine()
+                      "stuck (gosom/google-maps-scraper#346). Restarting the engine and re-creating the job…")
+                try:
+                    req("DELETE", f"/api/v1/jobs/{job_id}")
+                except Exception:
+                    pass
+                if restart_engine():
+                    return _run_job_once(body, restarted=True)
         time.sleep(POLL_EVERY)
     else:
         # The engine writes rows as it goes, and v1.18.x can leave a finished job stuck on

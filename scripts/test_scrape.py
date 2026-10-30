@@ -141,11 +141,14 @@ class StuckJob(unittest.TestCase):
 class PendingAndFailed(unittest.TestCase):
     def run_statuses(self, statuses, idle=True):
         """Drive run_job through a status sequence; count job creations and engine restarts."""
-        posts, it = [], iter(statuses)
+        posts, deleted, it = [], [], iter(statuses)
         def fake_req(method, path, body=None):
             if method == "POST":
                 posts.append(body)
                 return 201, b'{"id":"j%d"}' % len(posts)
+            if method == "DELETE":
+                deleted.append(path)
+                return 200, b""
             if path.endswith("/download"):
                 return 200, b"title\nA\n"
             return 200, json.dumps({"Status": next(it)}).encode()
@@ -156,23 +159,24 @@ class PendingAndFailed(unittest.TestCase):
              mock.patch.object(scrape, "restart_engine", return_value=True) as restart, \
              redirect_stdout(io.StringIO()):
             job_id, rows = scrape.run_job({"max_time": 1})
-        return job_id, rows, len(posts), restart.call_count, slept
+        return job_id, rows, len(posts), restart.call_count, slept, deleted
 
     def test_pending_on_idle_engine_restarts_once(self):
-        # An earlier web UI job wedged the engine: our job never leaves "pending" until a restart.
-        statuses = ["pending"] * (scrape.PENDING_RESTART_AFTER + 3) + ["working", "ok"]
-        _, rows, posts, restarts, _ = self.run_statuses(statuses)
-        self.assertEqual((posts, restarts), (1, 1))
+        # An earlier web UI job wedged the engine: our job never leaves "pending". Delete it, restart,
+        # create it again, and never loop on a second pending streak.
+        statuses = ["pending"] * scrape.PENDING_RESTART_AFTER + ["pending"] * (scrape.PENDING_RESTART_AFTER + 2) + ["working", "ok"]
+        job_id, rows, posts, restarts, _, deleted = self.run_statuses(statuses)
+        self.assertEqual((job_id, posts, restarts, deleted), ("j2", 2, 1, ["/api/v1/jobs/j1"]))
         self.assertEqual([r["title"] for r in rows], ["A"])
 
     def test_pending_on_busy_engine_waits(self):
         # The engine is still running someone else's job: pending is normal, never restart.
         statuses = ["pending"] * (scrape.PENDING_RESTART_AFTER + 3) + ["ok"]
-        _, _, posts, restarts, _ = self.run_statuses(statuses, idle=False)
+        _, _, posts, restarts, _, _ = self.run_statuses(statuses, idle=False)
         self.assertEqual((posts, restarts), (1, 0))
 
     def test_failed_job_is_retried_once(self):
-        job_id, rows, posts, _, slept = self.run_statuses(["failed", "working", "ok"])
+        job_id, rows, posts, _, slept, _ = self.run_statuses(["failed", "working", "ok"])
         self.assertEqual((job_id, posts), ("j2", 2))
         slept.assert_any_call(scrape.FAILED_RETRY_WAIT)
         self.assertEqual([r["title"] for r in rows], ["A"])
