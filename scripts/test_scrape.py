@@ -595,8 +595,11 @@ class RegexSpeed(unittest.TestCase):
 
 class Resilience(unittest.TestCase):
     def test_get_retries_transient_errors(self):
-        answers = iter([scrape.urllib.error.HTTPError("u", 502, "bad gateway", {}, io.BytesIO()),
-                        OSError("timed out"), (200, b"null")])
+        # HTTPError owns a temp file; close both at the end or Python warns about it at exit.
+        e502 = scrape.urllib.error.HTTPError("u", 502, "bad gateway", {}, None)
+        e404 = scrape.urllib.error.HTTPError("u", 404, "nf", {}, None)
+        self.addCleanup(e502.close); self.addCleanup(e404.close)
+        answers = iter([e502, OSError("timed out"), (200, b"null")])
         def fake_req(method, path, body=None):
             a = next(answers)
             if isinstance(a, Exception):
@@ -605,8 +608,7 @@ class Resilience(unittest.TestCase):
         with mock.patch.object(scrape, "req", fake_req), mock.patch.object(scrape.time, "sleep") as slept:
             self.assertEqual(scrape._get("/api/v1/jobs"), (200, b"null"))
         self.assertEqual(slept.call_count, 2)
-        with mock.patch.object(scrape, "req", side_effect=scrape.urllib.error.HTTPError("u", 404, "nf", {}, io.BytesIO())), \
-             self.assertRaises(scrape.urllib.error.HTTPError):
+        with mock.patch.object(scrape, "req", side_effect=e404), self.assertRaises(scrape.urllib.error.HTTPError):
             scrape._get("/api/v1/jobs/x")  # a 4xx is final, no retry
 
     def test_pending_restart_failure_raises_instead_of_polling_a_deleted_job(self):
