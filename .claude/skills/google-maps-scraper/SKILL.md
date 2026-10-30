@@ -29,6 +29,8 @@ docker run -d --name gmaps-scraper --restart unless-stopped -p 127.0.0.1:8080:80
   -v gmaps_data:/gmapsdata gosom/google-maps-scraper:v1.18.1 -web -data-folder /gmapsdata -c 4
 ```
 Without `scripts/scrape.py`, run Steps 1 to 3 below with `curl`. They need nothing but Docker.
+This bare engine lacks the kit proxy's Host and Origin checks, so a web page in the user's browser
+could reach it. Tell the user once, and offer `docker stop gmaps-scraper` when the scrape is done.
 
 ## Step 1: Create a job (`POST /api/v1/jobs`)
 **Required fields. The API returns `422` without them:**

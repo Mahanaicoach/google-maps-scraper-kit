@@ -199,7 +199,9 @@ curl -X DELETE http://localhost:8080/api/v1/jobs/<job-id>
 This command runs the engine alone, with the localhost binding. It skips the `ui` proxy from
 `docker-compose.yml`, so the web UI shows upstream's links and keeps the engine's job-list bug (Start
 Scraping does nothing, [gosom/google-maps-scraper#337](https://github.com/gosom/google-maps-scraper/issues/337)).
-The API and both scripts work the same:
+It also skips the proxy's Host and Origin checks, so a web page open in your browser could reach the
+engine through DNS rebinding or a cross-site post. Stop it when you are not scraping. The API and both
+scripts work the same:
 
 ```bash
 docker run -d --name gmaps-scraper --restart unless-stopped \

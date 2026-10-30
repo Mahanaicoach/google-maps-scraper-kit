@@ -151,7 +151,7 @@ scrapes Google Maps business listings only. It does not scrape social platforms 
 | **Batch jobs** | Many keywords, one job, one CSV. The engine lists a place found by several keywords once. |
 | **Proxy rotation** | Built into the engine for large or repeated runs. `socks5`, `socks5h`, `http`, `https`. |
 | **Agent-native** | A skill plus four slash commands. The agent handles create, poll, download, clean and present. |
-| **Safe defaults** | API bound to `127.0.0.1`, results git-ignored, rate-limit and data-law guardrails built into the skill. |
+| **Safe defaults** | API bound to `127.0.0.1`, and the proxy refuses requests from other websites in your browser (DNS rebinding, cross-site posts). Results git-ignored; website fetches skip private addresses; rate-limit and data-law guardrails built into the skill. |
 
 ### Batch jobs and the Python CLI
 
