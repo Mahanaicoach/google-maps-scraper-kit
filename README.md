@@ -333,6 +333,26 @@ google-maps-scraper-kit/
 
 </details>
 
+## Updating
+
+Pull the latest fixes with one command. It works in a clone of this repo or of your fork, and it
+keeps your own commits:
+
+```bash
+bash scripts/update.sh
+```
+
+If the engine is running, the script restarts it so a new engine version takes effect.
+Forked it on GitHub? Run `git push` afterwards, or click **Sync fork** on your fork's
+page.
+
+On Windows without Git Bash, run the same update by hand:
+
+```bash
+git pull https://github.com/Mahanaicoach/google-maps-scraper-kit.git master
+docker compose up -d
+```
+
 ## Support
 
 Found a bug? [Open an issue](https://github.com/Mahanaicoach/google-maps-scraper-kit/issues/new/choose) with
