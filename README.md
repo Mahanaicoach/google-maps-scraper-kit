@@ -295,7 +295,8 @@ your IP **temporarily rate-limited** (minutes to hours). Your Google account is 
 - Run one job at a time. Start at `depth 5` and raise only when needed.
 - Watch for block signals: `failed` jobs, empty results, or far fewer rows than an identical earlier run.
 - Add proxies for large or repeated runs: `--proxy socks5://user:pass@host:port` on the script
-  (repeatable), or the `"proxies"` array on the raw API. The engine rotates them automatically. Sponsor
+  (repeatable), or the `"proxies"` array on the raw API. The engine rotates them automatically and
+  needs `user:pass` for socks5 (an `http://` proxy works without). Sponsor
   [Swiftproxy](https://www.swiftproxy.net/?ref=googlemapsscraperkit) takes 10% off with code `PROXY90`:
   ```json
   "proxies": ["socks5://user:pass@host:port", "http://host2:port2"]
