@@ -152,6 +152,28 @@ class PublicHostGuard(unittest.TestCase):
         req = scrape.urllib.request.Request("http://8.8.8.8/")
         self.assertIsNone(handler.redirect_request(req, None, 302, "Found", {}, "http://127.0.0.1/admin"))
 
+    @unittest.skipIf(scrape.urllib.request.getproxies(), "a proxy in the environment owns the connect")
+    def test_rebinding_caught_at_connect(self):
+        # DNS rebinding: the name check saw a public address, the connect lands on 127.0.0.1.
+        # No request may reach the local server.
+        hits = []
+        class Local(BaseHTTPRequestHandler):
+            def do_GET(self):
+                hits.append(self.path)
+                self.send_response(200); self.end_headers(); self.wfile.write(b"secret")
+            def log_message(self, *a):
+                pass
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), Local)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            with mock.patch.object(scrape, "_is_public_host", return_value=True):
+                self.assertEqual(scrape._fetch_html(f"http://127.0.0.1:{srv.server_port}/"), "")
+                with self.assertRaises(OSError):
+                    scrape._public_connection(("127.0.0.1", srv.server_port))
+        finally:
+            srv.shutdown(); srv.server_close()
+        self.assertEqual(hits, [])
+
 
 class TechSignals(unittest.TestCase):
     def test_detects_pixel_platform_viewport(self):

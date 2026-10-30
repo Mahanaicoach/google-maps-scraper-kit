@@ -11,6 +11,12 @@ command in `.claude/settings.json` that grants more than local access.
 The kit binds the engine's API to `127.0.0.1` because the engine has no built-in authentication.
 Do not expose port 8080 to a network without an authenticating proxy in front of it.
 
+The `ui` proxy in `docker-compose.yml` also answers only `localhost`, `127.0.0.1` and `[::1]` Host
+headers and refuses requests whose `Origin` is another site, so a web page in your browser cannot
+reach the engine through DNS rebinding or a cross-site post. `scripts/scrape.py` fetches business
+websites only when they resolve, redirect and connect to a public address. A way around either
+check is in scope.
+
 ## Where to report
 
 Use GitHub's private

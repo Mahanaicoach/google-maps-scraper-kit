@@ -24,7 +24,7 @@ Notes:
   descriptive User-Agent (set below). Do not loop it aggressively.
 """
 import argparse, csv, functools, io, ipaddress, json, math, os, re, socket, sys, time
-import html as _html, urllib.request, urllib.parse, urllib.error
+import html as _html, http.client, urllib.request, urllib.parse, urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
 # The status lines below use ▶ ✓ ℹ •, and every file this script writes can hold accented business
@@ -60,7 +60,7 @@ KEY = os.environ.get("SCRAPER_API_KEY", "")
 # The 8 lead fields: what you use to contact and qualify a lead.
 # Everything else (geo coordinates, IDs, hours, images, review blobs) is dropped by default.
 LEAD = ["title", "phone", "emails", "website", "category", "address", "review_rating", "review_count"]
-UA = "google-maps-scraper-kit/1.3 (https://github.com/Mahanaicoach/google-maps-scraper-kit)"
+UA = "google-maps-scraper-kit/1.4 (https://github.com/Mahanaicoach/google-maps-scraper-kit)"
 
 POLL_EVERY = 8            # seconds between status checks
 POLL_GRACE = 120          # the engine still has to flush results and flip the status
@@ -229,6 +229,12 @@ _SKIP_HANDLE = {"", "home", "pages", "people", "help", "about", "policies", "pol
                 "p", "reel", "reels", "explore", "stories", "tv", "watch", "events",
                 "groups", "marketplace", "gaming", "photo", "hashtag", "search"}
 
+def _is_public_ip(ip):
+    try:
+        return ipaddress.ip_address(ip.split("%")[0]).is_global
+    except ValueError:
+        return False
+
 @functools.lru_cache(maxsize=1024)
 def _is_public_host(host):
     """True only if every address the host resolves to is public. Websites come from third-party
@@ -236,9 +242,39 @@ def _is_public_host(host):
     localhost:8080, a router admin page, a cloud metadata endpoint)."""
     try:
         infos = socket.getaddrinfo(host, None)
-        return bool(infos) and all(ipaddress.ip_address(i[4][0].split("%")[0]).is_global for i in infos)
-    except (OSError, UnicodeError, ValueError):
+    except (OSError, UnicodeError):
         return False
+    return bool(infos) and all(_is_public_ip(i[4][0]) for i in infos)
+
+def _public_connection(address, *args, **kwargs):
+    """socket.create_connection that refuses a private peer. The connect resolves the host again,
+    so a DNS answer that changed after _is_public_host (rebinding) is caught here, before a byte
+    of the request is sent."""
+    sock = socket.create_connection(address, *args, **kwargs)
+    peer = sock.getpeername()[0]
+    if not _is_public_ip(peer):
+        sock.close()
+        raise OSError(f"refused non-public address {peer}")
+    return sock
+
+class _PublicPeer:
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._create_connection = _public_connection
+
+class _PublicHTTPConnection(_PublicPeer, http.client.HTTPConnection):
+    pass
+
+class _PublicHTTPSConnection(_PublicPeer, http.client.HTTPSConnection):
+    pass
+
+class _PublicHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_PublicHTTPConnection, req)
+
+class _PublicHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_PublicHTTPSConnection, req, context=self._context)
 
 class _PublicRedirectsOnly(urllib.request.HTTPRedirectHandler):
     """A public site may not redirect the fetch to a private address either."""
@@ -247,15 +283,18 @@ class _PublicRedirectsOnly(urllib.request.HTTPRedirectHandler):
             return None  # urllib then raises HTTPError, which _fetch_html turns into ""
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
-_OPENER = urllib.request.build_opener(_PublicRedirectsOnly)
+# Behind a proxy from the environment the socket peer is the proxy, often on a private address,
+# so only the resolve-time check applies there.
+_HANDLERS = [_PublicRedirectsOnly]
+if not urllib.request.getproxies():
+    _HANDLERS += [_PublicHTTPHandler, _PublicHTTPSHandler]
+_OPENER = urllib.request.build_opener(*_HANDLERS)
 
 def _fetch_html(url, timeout=10):
     if not url:
         return ""
     if not url.startswith(("http://", "https://")):
         url = "http://" + url
-    # ponytail: the host is resolved again by the actual connect, so DNS rebinding can still slip
-    # through; pin the checked IP in a custom connection if this ever runs as a shared service.
     if not _is_public_host(urllib.parse.urlparse(url).hostname or ""):
         return ""
     try:
