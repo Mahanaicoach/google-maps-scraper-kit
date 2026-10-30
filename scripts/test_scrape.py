@@ -131,6 +131,22 @@ class StuckJob(unittest.TestCase):
             self.assertFalse(scrape.engine_run_ended("2026-01-01T00:00:00Z"))
             self.assertFalse(scrape.restart_engine())
 
+    def test_restart_waits_until_engine_answers(self):
+        # Right after `docker restart` the proxy answers 502 for a few seconds; the next grid tile
+        # used to hit that and fail. restart_engine must only return once the API answers.
+        answers = iter([OSError("502"), OSError("502"), (200, b"null")])
+        def fake_req(method, path, body=None):
+            a = next(answers)
+            if isinstance(a, Exception):
+                raise a
+            return a
+        done = mock.Mock(returncode=0)
+        with mock.patch.object(scrape, "_local_docker", return_value=True), \
+             mock.patch.object(scrape.subprocess, "run", return_value=done), \
+             mock.patch.object(scrape, "req", fake_req), mock.patch.object(scrape.time, "sleep") as slept:
+            self.assertTrue(scrape.restart_engine())
+        self.assertEqual(slept.call_count, 2)
+
 
 class ExtractEmails(unittest.TestCase):
     def test_mailto_regex_junk_preference_cap(self):
@@ -222,6 +238,8 @@ class EmailCrawl(unittest.TestCase):
                 "\\u003eorders@desnudo.com orders@desnudo.com")
         self.assertEqual(scrape.extract_emails(html, "funkysolcoffee.com"),
                          ["hello@funkysolcoffee.com", "orders@desnudo.com"])
+        # Seen in a new-user test run: an image name and a site-builder placeholder.
+        self.assertEqual(scrape.extract_emails("hero@2x-1.avif info@mysite.com", "x.com"), [])
 
     def test_homepage_only_skips_contact_pages(self):
         rows = [{"website": "http://acme.com", "emails": ""}]
@@ -345,6 +363,7 @@ class EndToEnd(unittest.TestCase):
         text = log.getvalue()
         self.assertIn("cell 4/4: 3 rows, 6 unique so far", text)
         self.assertIn("cell 3/4 skipped", text)
+        self.assertIn("Incomplete: 1 of 4 tiles failed (cells 3)", text)
         self.assertIn("dropped 1 rows outside the city box", text)
         with open(out, newline="") as f:
             rows = list(csv.reader(f))

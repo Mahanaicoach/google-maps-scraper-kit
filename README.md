@@ -85,7 +85,8 @@ python3 scripts/scrape.py "dentists in Denver CO" --city "Denver, CO" --grid 3
 
 ### Example output
 
-`results-coffee_shops_in_Austin_TX.csv` from the first command above (illustrative rows):
+`results-coffee_shops_in_Austin_TX.csv` from the first command above (`scrape.py` names its file
+`results-<job id>.csv` unless you pass `--out`). Illustrative rows:
 
 | title | phone | emails | website | category | address | review_rating | review_count |
 |---|---|---|---|---|---|---|---|
@@ -185,7 +186,8 @@ One keyword per line. One job. One CSV.
 - **Rate limits are real.** Heavy use without proxies can get your IP temporarily rate-limited by
   Google for minutes to hours. Your Google account is not affected. See [Responsible use](#responsible-use).
 - **The web UI is the engine's own page.** It downloads the raw 36-column CSV and uses the engine's
-  slower email option. For a clean outreach list, use the scripts. The page also loads its scripts,
+  slower email option, whose `emails` column keeps junk such as `sentry.wixpress.com` and image
+  names. For a clean outreach list, use the scripts. The page also loads its scripts,
   fonts and map tiles from public CDNs and OpenStreetMap, so it needs internet. Scraped data stays on
   your machine.
 - **Apple Silicon runs natively from v1.18.0 on.** The image publishes arm64 builds, so M-series
@@ -246,6 +248,14 @@ No. Claude Code makes it hands-free through a skill and slash commands, but `scr
 **Does it work with Codex, Cursor or other agents?**
 Yes. `npx skills add mahanaicoach/google-maps-scraper-kit` installs the skill into any Agent
 Skills-compatible tool. The `/scrape` slash commands are Claude Code only.
+
+**Why does `npx skills add` show "High Risk" or "Med Risk"?**
+skills.sh runs automated audits on every skill. On Oct 14, 2026 they flagged that this skill runs shell
+commands (curl and Python against `localhost:8080`) and reads untrusted web content. Both are what a
+local scraper does. Gen Agent Trust Hub's own summary found no malicious patterns and called its
+remote-code alert a false positive, because it targets localhost. The skill now treats scraped data
+as untrusted, and a re-audit is requested in
+[vercel-labs/skills#2624](https://github.com/vercel-labs/skills/issues/2624).
 
 **What data do I get for each business?**
 Name, phone, email, website, category, address, rating and review count by default. Add `--socials`
