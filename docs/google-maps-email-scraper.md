@@ -51,7 +51,8 @@ The empty `emails` cell on the last row is normal. That site published no email 
 ## What to expect
 
 - Expect emails on a fraction of rows, not all of them. A business with no website, or a site with no visible email, returns an empty cell.
-- Instagram bios are not read. Add `--socials` to get Instagram, Facebook and LinkedIn profile links from each website instead.
+- Instagram bios are not read. Add `--socials` to get Instagram, Facebook, LinkedIn, TikTok, YouTube and X profile links from each website instead.
+- Add `--verify-emails` to drop addresses whose domain does not exist and to see who hosts each domain's mail (`email_host`: Google Workspace, Microsoft 365, other). Add `--has-email` to keep only rows with an address.
 - Email extraction visits every website, so a run with emails is slower than one with `--no-email`.
 - Google Maps returns about 120 listings per search. Add `--grid 3` to split the city into 9 map tiles and get past that cap, with duplicates removed.
 - Heavy use without proxies can get your IP temporarily rate-limited by Google for minutes to hours. Run one job at a time and add proxies for large or repeated runs.

@@ -27,7 +27,7 @@ For a whole city past the ~120 per search cap, add `--grid 3`. It splits the cit
 
 ## Step 3: Add hours and price range for qualification
 
-`--full` keeps all ~34 raw columns, including `open_hours` and `price_range`:
+`--full` keeps all 36 raw columns, including `open_hours` and `price_range`:
 
 ```bash
 python3 scripts/scrape.py "restaurants in Austin TX" --city "Austin, TX" --full

@@ -27,7 +27,8 @@ clearly abusive use (surveilling individuals, spam). The skill has the full guid
 ## Hard facts you must not get wrong
 - API base: `http://localhost:8080`, with **no auth** because it is bound to localhost. Never expose it publicly.
 - Create a job with `POST /api/v1/jobs`. These body fields are **required**, or it returns 422:
-  `max_time` (in **seconds**, e.g. `300`), `lat` and `lon` (as **strings**), and `keywords` (array).
+  `name` (any label), `keywords` (array), `lang` (`"en"`), `lat` and `lon` (as **strings**), and
+  `max_time` (in **seconds**, e.g. `300`).
 - The create response is `{"id":"<uuid>"}` (lowercase `id`). Check status with `GET /api/v1/jobs/{id}`; its field is `"Status"`, and it becomes `"ok"` when done.
 - **Poll in the background.** The Bash tool blocks foreground `sleep`. Run the poll loop as a
   background command (`run_in_background: true`) and read its output file when notified.

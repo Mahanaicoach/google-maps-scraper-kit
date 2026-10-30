@@ -37,7 +37,7 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):   # not a reconfigurable stream (pytest capture, a pipe wrapper)
         pass
 
-ENV_KEYS = ("SCRAPER_BASE_URL", "SCRAPER_PORT", "SCRAPER_API_KEY")
+ENV_KEYS = ("SCRAPER_BASE_URL", "SCRAPER_PORT", "SCRAPER_API_KEY", "SCRAPER_CONTAINER")
 
 
 def load_env_file():
@@ -69,7 +69,9 @@ POLL_EVERY = 8            # seconds between status checks
 POLL_GRACE = 120          # the engine still has to flush results and flip the status
 POLL_CEILING = 7200       # never wait longer than 2h, whatever --max-time asked for
 ENGINE_MIN_RUNTIME = 180  # the engine floors anything below this (runner/webrunner)
-ENGINE_CONTAINER = "gmaps-scraper"  # container_name in docker-compose.yml and SETUP's docker run
+# container_name in docker-compose.yml and SETUP's docker run; the one the script reads the log of
+# and restarts. SCRAPER_CONTAINER in .env for a renamed container or a second stack.
+ENGINE_CONTAINER = os.environ.get("SCRAPER_CONTAINER") or "gmaps-scraper"
 
 
 def poll_attempts(max_time):
@@ -146,15 +148,29 @@ def in_bbox(row, bbox, margin=0.10):
     return s - my <= lat <= n + my and w - mx <= lon <= e + mx
 
 
-def dedupe(rows):
-    """Keep the first row per place_id, else cid, else link, else title+address."""
-    seen, out = set(), []
+def _keys(r):
+    """Every identity a row carries: place_id, cid, link and title+address. A lean 8-column CSV
+    from an earlier run has only the last one, so matching on any key lets --exclude use it."""
+    ks = [f"{k}:{r[k]}" for k in ("place_id", "cid", "link") if r.get(k)]
+    if r.get("title"):
+        ks.append(f"ta:{r['title']}|{r.get('address', '')}")
+    return ks
+
+
+def dedupe(rows, exclude=()):
+    """Keep the first row per place; drop rows already present in `exclude` (an earlier run)."""
+    seen, out = {k for r in exclude for k in _keys(r)}, []
     for r in rows:
-        key = next((f"{k}:{r[k]}" for k in ("place_id", "cid", "link") if r.get(k)),
-                   f"ta:{r.get('title', '')}|{r.get('address', '')}")
-        if key not in seen:
-            seen.add(key); out.append(r)
+        ks = _keys(r)
+        if not any(k in seen for k in ks):
+            seen.update(ks); out.append(r)
     return out
+
+
+def load_rows(path):
+    """Rows from an earlier results file, .csv or .json."""
+    with open(path, encoding="utf-8", newline="") as f:
+        return json.load(f) if path.lower().endswith(".json") else list(csv.DictReader(f))
 
 
 def _local_docker():
@@ -199,14 +215,53 @@ def recover_stuck_job(job_id):
     rows = download_rows(job_id)
     print(f"\n⚠ The engine finished this job but did not mark it done (gosom/google-maps-scraper#346); "
           f"keeping its {len(rows)} rows.")
+    try:  # otherwise it sits in the job list as "working" forever, with no Download button in the web UI
+        req("DELETE", f"/api/v1/jobs/{job_id}")
+        print("  Deleted the stuck job from the engine's list; its rows are in your file.")
+    except Exception:
+        print(f"  Remove it from the job list yourself: curl -X DELETE {BASE}/api/v1/jobs/{job_id}")
     if restart_engine():
         print("  Restarted the engine, which would otherwise hold every later job on \"pending\".")
     else:
         print("  If the next scrape stays \"pending\", run: docker restart " + ENGINE_CONTAINER)
     return rows
 
+PENDING_RESTART_AFTER = 6  # polls (~48 s) a new job may sit on "pending" before an idle engine is judged stuck
+FAILED_RETRY_WAIT = 60     # seconds before the one retry of a "failed" job (usually a passing Google block)
+
+
+def engine_idle(seconds=45):
+    """True if the local engine logged no scraper activity in the last `seconds`. A job that stays
+    "pending" on an idle engine means an earlier job (web UI, raw API) left it wedged
+    (gosom/google-maps-scraper#346); a busy engine is just finishing another job first."""
+    if not _local_docker():
+        return False
+    try:
+        out = subprocess.run(["docker", "logs", "--since", f"{seconds}s", ENGINE_CONTAINER],
+                             capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "scrapemate" not in out.stdout + out.stderr
+
+
+class JobFailed(RuntimeError):
+    pass
+
+
 def run_job(body):
-    """Create one engine job, poll it, download it -> (job_id, raw CSV rows). Raises RuntimeError."""
+    """Create one engine job, poll it, download it -> (job_id, raw CSV rows). A job the engine marks
+    "failed" (usually a passing Google block) is retried once after a pause. Raises RuntimeError."""
+    for attempt in (1, 2):
+        try:
+            return _run_job_once(body)
+        except JobFailed:
+            if attempt == 2:
+                raise RuntimeError("\n✗ Job failed twice. You may be rate-limited — wait or add proxies.")
+            print(f"\n⚠ Job failed; Google may be throttling this IP. Waiting {FAILED_RETRY_WAIT} s, then retrying once…")
+            time.sleep(FAILED_RETRY_WAIT)
+
+
+def _run_job_once(body, restarted=False):
     since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     try:
         _, raw = req("POST", "/api/v1/jobs", body)
@@ -219,19 +274,37 @@ def run_job(body):
 
     attempts = poll_attempts(body.get("max_time"))
     print(f"▶ Polling (up to ~{attempts * POLL_EVERY // 60} min)…")
-    status, ended = None, 0
+    status, ended, pending = None, 0, 0
     for i in range(attempts):
         _, raw = req("GET", f"/api/v1/jobs/{job_id}")
         status = json.loads(raw).get("Status")
-        print(f"\r  status: {str(status):<10} (attempt {i + 1})", end="", flush=True)
+        progress = ""
+        if status == "working":  # the engine writes rows as it goes, so the download shows progress
+            try:
+                progress = f", {len(download_rows(job_id))} rows so far"
+            except Exception:
+                pass
+        print(f"\r  status: {str(status):<10} (attempt {i + 1}{progress})", end="", flush=True)
         if status == "ok":
             print(); break
         if status == "failed":
-            raise RuntimeError("\n✗ Job failed. If this keeps happening you may be rate-limited — wait or add proxies.")
+            raise JobFailed("job failed")
         if status == "working" and engine_run_ended(since):
             ended += 1
             if ended > 2:  # the status normally flips within seconds of the run ending
                 return job_id, recover_stuck_job(job_id)
+        if status == "pending":
+            pending += 1
+            if pending == PENDING_RESTART_AFTER and not restarted and engine_idle():
+                # Delete the pending job first, or the restarted engine runs it as well as the new one.
+                print("\n⚠ The engine has not started this job and shows no activity: an earlier job left it "
+                      "stuck (gosom/google-maps-scraper#346). Restarting the engine and re-creating the job…")
+                try:
+                    req("DELETE", f"/api/v1/jobs/{job_id}")
+                except Exception:
+                    pass
+                if restart_engine():
+                    return _run_job_once(body, restarted=True)
         time.sleep(POLL_EVERY)
     else:
         # The engine writes rows as it goes, and v1.18.x can leave a finished job stuck on
@@ -263,14 +336,12 @@ def collect_keywords(a):
         kws.append(a.keyword)
     kws.extend(a.also or [])
     if a.keywords_file:
-        with open(a.keywords_file) as f:
-            kws.extend(line.strip() for line in f if line.strip() and not line.startswith("#"))
-    # de-dupe, keep order
-    seen, out = set(), []
-    for k in kws:
-        if k not in seen:
-            seen.add(k); out.append(k)
-    return out
+        try:
+            with open(a.keywords_file) as f:
+                kws.extend(line.strip() for line in f if line.strip() and not line.startswith("#"))
+        except OSError as e:
+            sys.exit(f"✗ Cannot read --keywords-file {a.keywords_file}: {e.strerror}")
+    return list(dict.fromkeys(kws))  # de-dupe, keep order
 
 
 # ── Optional social enrichment (Instagram / Facebook / LinkedIn) ──────────────
@@ -279,13 +350,16 @@ SOCIAL_RE = {
     "instagram": re.compile(r"https?://(?:www\.)?instagram\.com/([A-Za-z0-9_.]+)", re.I),
     "facebook":  re.compile(r"https?://(?:www\.|m\.|web\.)?facebook\.com/([A-Za-z0-9_.\-]+)", re.I),
     "linkedin":  re.compile(r"https?://(?:[a-z]{2,3}\.)?linkedin\.com/(?:company|in|school)/([A-Za-z0-9_.\-%]+)", re.I),
+    "tiktok":    re.compile(r"https?://(?:www\.)?tiktok\.com/@([A-Za-z0-9_.]+)", re.I),
+    "youtube":   re.compile(r"https?://(?:www\.)?youtube\.com/(?:@|channel/|c/|user/)([A-Za-z0-9_.\-]+)", re.I),
+    "x":         re.compile(r"https?://(?:www\.)?(?:twitter|x)\.com/([A-Za-z0-9_]{1,15})\b", re.I),
 }
 SOCIAL_FIELDS = list(SOCIAL_RE)
 _SKIP_HANDLE = {"", "home", "pages", "people", "help", "about", "policies", "policy",
                 "legal", "tos", "privacy", "settings", "sharer", "tr", "profile.php",
                 "plugins", "dialog", "intent", "login", "share.php", "permalink.php",
                 "p", "reel", "reels", "explore", "stories", "tv", "watch", "events",
-                "groups", "marketplace", "gaming", "photo", "hashtag", "search"}
+                "groups", "marketplace", "gaming", "photo", "hashtag", "search", "share", "i"}
 
 def _is_public_ip(ip):
     try:
@@ -381,20 +455,22 @@ def _find_socials(html):
             break
     return out
 
+def _each_site(todo, work, label, workers=None):
+    """Run work(row) over the rows, SITE_WORKERS at a time, with one progress line."""
+    done = 0
+    with ThreadPoolExecutor(max_workers=workers or SITE_WORKERS) as ex:
+        for _ in ex.map(work, todo):
+            done += 1
+            print(f"\r  {label}: {done}/{len(todo)} checked", end="", flush=True)
+    print()
+
 def enrich_sites(results, find, fields, label, workers=None):
     """Merge find(homepage html) into every lead that has a website. Zero LLM tokens."""
     for r in results:                       # make sure every row has the keys
         for k in fields:
             r.setdefault(k, "")
-    todo = [r for r in results if r.get("website")]
-    done = 0
-    def work(r):
-        r.update(find(_fetch_cached(r["website"])))
-    with ThreadPoolExecutor(max_workers=workers or SITE_WORKERS) as ex:
-        for _ in ex.map(work, todo):
-            done += 1
-            print(f"\r  {label}: {done}/{len(todo)} sites checked", end="", flush=True)
-    print()
+    _each_site([r for r in results if r.get("website")],
+               lambda r: r.update(find(_fetch_cached(r["website"]))), label, workers)
 
 
 # ── Optional ad and tech signals (--tech): who already spends on marketing ──────
@@ -403,6 +479,9 @@ TECH_RE = {
     "fb_pixel":       re.compile(r"connect\.facebook\.net/[^\"']*fbevents\.js|fbq\(", re.I),
     "google_ads_tag": re.compile(r"googleadservices\.com|AW-\d{6,}|googleads\.g\.doubleclick\.net", re.I),
     "analytics":      re.compile(r"googletagmanager\.com/gtag|gtag\(|UA-\d{4,}|G-[A-Z0-9]{6,}", re.I),
+    "bing_ads":       re.compile(r"bat\.bing\.com|window\.uetq", re.I),
+    "linkedin_insight": re.compile(r"snap\.licdn\.com|_linkedin_partner_id", re.I),
+    "tiktok_pixel":   re.compile(r"analytics\.tiktok\.com|ttq\.load\(", re.I),
 }
 CMS_RE = [
     ("wordpress",   re.compile(r"/wp-content/|/wp-includes/", re.I)),
@@ -449,7 +528,9 @@ MAILTO_RE = re.compile(r"mailto:([^\"'>\s?]+)", re.I)
 HREF_RE = re.compile(r"<a\s[^>]*?href\s*=\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", re.I | re.S)
 _JUNK_EXT = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".avif", ".css", ".js")
 _JUNK_DOMAIN = ("example", "sentry", "wixpress", "wix.com", "godaddy", "squarespace", "wordpress",
-                "domain.com", "email.com", "yourdomain", "mysite.com", "schema.org", "w3.org", "sentry.io")
+                "domain.com", "email.com", "yourdomain", "mysite.com", "schema.org", "w3.org", "sentry.io",
+                # link-in-bio pages and website agencies: their support address is not the business's
+                "linktr.ee", "linkin.bio", "beacons.ai", "officite")
 _JUNK_LOCAL = {"name", "email", "user", "you", "someone", "example", "username",
                "youremail", "yourname", "firstname", "lastname", "sample"}
 # A JSON-escaped <, >, ", ' or & glued to the address (">orders@x.com" in page source),
@@ -461,6 +542,20 @@ def _host(url):
         url = "http://" + url
     h = (urllib.parse.urlparse(url).hostname or "").lower()
     return h[4:] if h.startswith("www.") else h
+
+# Google Business Profile links often carry campaign tags (?utm_source=gbp&utm_medium=organic),
+# about one website in four. They bloat the column and hide that two rows share one site.
+_TRACKING_PARAMS = ("utm_", "gclid", "fbclid", "msclkid", "mc_cid", "mc_eid")
+
+def clean_website(url):
+    """Drop tracking parameters and the fragment. Other parameters stay: some store pages need
+    them (store?storeid=...)."""
+    if not url:
+        return ""
+    p = urllib.parse.urlsplit(url)
+    q = [(k, v) for k, v in urllib.parse.parse_qsl(p.query, keep_blank_values=True)
+         if not k.lower().startswith(_TRACKING_PARAMS)]
+    return urllib.parse.urlunsplit(p._replace(query=urllib.parse.urlencode(q), fragment=""))
 
 def is_real_email(e):
     """False for anything not worth sending to: a template placeholder (user@domain.com,
@@ -501,7 +596,7 @@ def contact_links(html, base_url):
         base_url = "http://" + base_url
     host, out = _host(base_url), []
     for href, text in HREF_RE.findall(html or ""):
-        if not re.search(r"contact|about", href + " " + text, re.I):
+        if not re.search(r"contact|about|team|staff|support", href + " " + text, re.I):
             continue
         url = urllib.parse.urldefrag(urllib.parse.urljoin(base_url, href.strip()))[0]
         if url.startswith(("http://", "https://")) and _host(url) == host and url not in out:
@@ -514,8 +609,6 @@ def contact_links(html, base_url):
 
 def enrich_emails(results, deep=True, workers=None):
     """Fill empty `emails` from the homepage, then (deep) up to 3 contact/about pages. Zero LLM tokens."""
-    todo = [r for r in results if r.get("website") and not r.get("emails")]
-    done = 0
     def work(r):
         site = r["website"]
         home = _fetch_cached(site)
@@ -524,11 +617,102 @@ def enrich_emails(results, deep=True, workers=None):
             pages = "\n".join(_fetch_html(u, timeout=8) for u in contact_links(home, site))
             found = extract_emails(pages, site)
         r["emails"] = ", ".join(found)
-    with ThreadPoolExecutor(max_workers=workers or SITE_WORKERS) as ex:
-        for _ in ex.map(work, todo):
-            done += 1
-            print(f"\r  emails: {done}/{len(todo)} sites checked", end="", flush=True)
-    print()
+    _each_site([r for r in results if r.get("website") and not r.get("emails")], work, "emails", workers)
+
+
+# ── Optional email domain check (--verify-emails): can the domain receive mail, and who hosts it ──
+def _doh_mx(domain):
+    """MX lookup over DNS-over-HTTPS (Google's public resolver, no key) -> the JSON answer."""
+    url = "https://dns.google/resolve?" + urllib.parse.urlencode({"name": domain, "type": "MX"})
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=8) as r:
+        return json.load(r)
+
+@functools.lru_cache(maxsize=1024)
+def mx_host(domain):
+    """'nxdomain' when the domain does not exist, 'none' when it has no MX record, else who runs
+    its mail: 'google_workspace', 'microsoft_365' or 'other'. '' when the lookup itself failed."""
+    try:
+        d = _doh_mx(domain)
+    except Exception:
+        return ""
+    if d.get("Status") == 3:
+        return "nxdomain"
+    mx = " ".join(a.get("data", "") for a in d.get("Answer") or [] if a.get("type") == 15).lower()
+    if not mx:
+        return "none" if d.get("Status") == 0 else ""
+    if "google.com" in mx or "googlemail.com" in mx:
+        return "google_workspace"
+    return "microsoft_365" if "outlook.com" in mx else "other"
+
+def verify_emails(rows):
+    """Drop addresses on domains that do not exist; label the rest with email_host."""
+    def work(r):
+        kept = [(e, mx_host(e.rpartition("@")[2])) for e in r["emails"].split(", ") if e]
+        kept = [(e, h) for e, h in kept if h != "nxdomain"]
+        r["emails"] = ", ".join(e for e, _ in kept)
+        r["email_host"] = kept[0][1] if kept else ""
+    _each_site([r for r in rows if r.get("emails")], work, "email domains", workers=8)
+
+
+def keep_row(r, a):
+    """The row filters, minus --has-email (applied after the crawl). A missing rating or review
+    count reads as 0, so --min-rating and --min-reviews drop unrated listings."""
+    return not ((a.min_rating and _num(r.get("review_rating")) < a.min_rating)
+                or (a.min_reviews and _num(r.get("review_count"), int) < a.min_reviews)
+                or (a.no_website and r.get("website"))
+                or (a.has_phone and not r.get("phone")))
+
+
+def scrape_place(a, body, city, keywords):
+    """All the engine jobs for one place: a single job, or --grid tiles one at a time clipped to the
+    city box -> (first job id or None, rows, failed tile count, tile count)."""
+    lat, lon, bbox, cells = a.lat, a.lon, None, None
+    if a.grid:  # always geocodes, because it needs the bounding box
+        print(f"▶ Geocoding \"{city}\"…")
+        geo = geocode(city, with_bbox=True)
+        if not geo or not geo[2]:
+            print("✗ Could not resolve a bounding box. Try a clearer --city.")
+            return None, [], 0, 0
+        lat, lon, bbox = geo
+        cells = grid_cells(bbox, a.grid)
+        print(f"  → bbox S{bbox[0]} N{bbox[1]} W{bbox[2]} E{bbox[3]}, {len(cells)} tiles")
+    elif city or not (lat and lon):  # explicit lat/lon, else geocode --city, else the first keyword
+        place = city or keywords[0]
+        print(f"▶ Geocoding \"{place}\"…")
+        coords = geocode(place)
+        if not coords:
+            print("✗ Could not resolve coordinates. Pass lat/lon or a clearer --city.")
+            return None, [], 0, 0
+        lat, lon = coords
+        print(f"  → {lat}, {lon}")
+    body = dict(body, lat=str(lat), lon=str(lon))
+    for k in keywords:
+        print(f"    • {k}")
+    if not cells:
+        print(f"▶ Creating job: {len(keywords)} keyword(s) @ {lat},{lon} depth={a.depth}")
+        try:
+            job_id, rows = run_job(body)
+        except RuntimeError as e:
+            print(str(e))
+            return None, [], 0, 0
+        return job_id, rows, 0, 0
+    print(f"▶ Grid {a.grid}x{a.grid}: {len(cells)} jobs, one at a time, {len(keywords)} keyword(s) depth={a.depth}")
+    job_id, rows, skipped = None, [], 0
+    for i, cell in enumerate(cells, 1):  # sequential on purpose: never parallel jobs against Google
+        print(f"▶ Cell {i}/{len(cells)} @ {cell['lat']},{cell['lon']} radius={cell['radius']}m")
+        try:
+            jid, cell_rows = run_job(dict(body, **cell))
+        except Exception as e:
+            print(f"\n  ⚠ cell {i}/{len(cells)} skipped: {str(e).strip()}")
+            skipped += 1
+            continue
+        job_id = job_id or jid
+        rows = dedupe(rows + cell_rows)
+        print(f"  cell {i}/{len(cells)}: {len(cell_rows)} rows, {len(rows)} unique so far")
+    # radius does not clip results in normal mode, so tiles leak outside the city
+    kept = [r for r in rows if in_bbox(r, bbox)]
+    print(f"  dropped {len(rows) - len(kept)} rows outside the city box")
+    return job_id, kept, skipped, len(cells)
 
 
 def main():
@@ -538,7 +722,11 @@ def main():
     ap.add_argument("lon", nargs="?", help="longitude (optional if --city given)")
     ap.add_argument("--keyword", dest="also", action="append", help="extra keyword (repeatable)")
     ap.add_argument("--keywords-file", help="file with one keyword per line (batch)")
-    ap.add_argument("--city", help="city/place to auto-geocode for lat/lon")
+    ap.add_argument("--city", action="append",
+                    help="city/place to auto-geocode for lat/lon; repeatable, one run per city into one file")
+    ap.add_argument("--proxy", action="append", metavar="URL",
+                    help="proxy for the engine, repeatable (socks5://, socks5h://, http://, https://, "
+                         "user:pass@ allowed); the engine rotates them")
     ap.add_argument("--depth", type=int, default=5)
     # The engine passes this to Google as the interface language, which decides the language of
     # the category names it returns (and nudges which listings come back). It has to match the
@@ -549,8 +737,7 @@ def main():
                          "(default: en; use the local language, e.g. pt, es, de)")
     # Emails are ON by default (they're the most valuable lead field): the script crawls each
     # business website after the Maps job. --no-email skips the crawl.
-    ap.add_argument("--email", dest="email", action="store_true", default=True, help=argparse.SUPPRESS)
-    ap.add_argument("--no-email", dest="email", action="store_false",
+    ap.add_argument("--no-email", dest="email", action="store_false", default=True,
                     help="skip the website crawl for emails (emails are on by default)")
     ap.add_argument("--no-deep-emails", dest="deep_emails", action="store_false",
                     help="check homepages only, not contact and about pages")
@@ -568,8 +755,22 @@ def main():
     ap.add_argument("--socials", action="store_true",
                     help="also find Instagram/Facebook/LinkedIn from each website (0 LLM tokens; slower)")
     ap.add_argument("--tech", action="store_true",
-                    help="also detect Meta Pixel, Google Ads tag, analytics, site platform and mobile "
-                         "support on each website, and sort by an intent_score (0 LLM tokens; slower)")
+                    help="also detect Meta Pixel, Google Ads tag, analytics, Bing, LinkedIn and TikTok "
+                         "pixels, site platform and mobile support on each website, and sort by an "
+                         "intent_score (0 LLM tokens; slower)")
+    ap.add_argument("--verify-emails", action="store_true",
+                    help="check each email domain's MX record over DNS (dns.google, no key): drops "
+                         "addresses on domains that do not exist and adds an email_host column "
+                         "(google_workspace, microsoft_365, other, none)")
+    f = ap.add_argument_group("filters", "applied before the email crawl, except --has-email")
+    f.add_argument("--min-rating", type=float, metavar="X", help="keep rows rated X or higher")
+    f.add_argument("--min-reviews", type=int, metavar="N", help="keep rows with N or more reviews")
+    f.add_argument("--no-website", action="store_true", help="keep only businesses without a website")
+    f.add_argument("--has-phone", action="store_true", help="keep only rows with a phone number")
+    f.add_argument("--has-email", action="store_true", help="keep only rows where an email was found")
+    f.add_argument("--exclude", action="append", metavar="FILE",
+                   help="drop places already in this earlier results file (.csv or .json); repeatable")
+    f.add_argument("--limit", type=int, metavar="N", help="stop at N rows after filtering")
     a = ap.parse_args()
 
     keywords = collect_keywords(a)
@@ -585,28 +786,14 @@ def main():
         if not 1 <= a.grid <= 10:
             sys.exit("✗ --grid must be between 1 and 10 (10 x 10 = 100 jobs is the ceiling).")
 
-    # Resolve coordinates: explicit lat/lon, else geocode --city, else geocode first keyword.
-    # --grid always geocodes --city, because it needs the city's bounding box.
-    lat, lon = a.lat, a.lon
-    if a.grid:
-        print(f"▶ Geocoding \"{a.city}\"…")
-        geo = geocode(a.city, with_bbox=True)
-        if not geo or not geo[2]:
-            sys.exit("✗ Could not resolve a bounding box. Try a clearer --city.")
-        lat, lon, bbox = geo
-        cells = grid_cells(bbox, a.grid)
-        print(f"  → bbox S{bbox[0]} N{bbox[1]} W{bbox[2]} E{bbox[3]}, {len(cells)} tiles")
-    elif not (lat and lon):
-        place = a.city or keywords[0]
-        print(f"▶ Geocoding \"{place}\"…")
-        coords = geocode(place)
-        if not coords:
-            sys.exit("✗ Could not resolve coordinates. Pass lat/lon or a clearer --city.")
-        lat, lon = coords
-        print(f"  → {lat}, {lon}")
+    cities = a.city or [None]
+    try:
+        excluded = [r for p in a.exclude or [] for r in load_rows(p)]
+    except (OSError, ValueError) as e:
+        sys.exit(f"✗ Cannot read --exclude file: {e}")
 
     # --- WARN, don't block: flag high-volume jobs (proceed anyway) ---
-    if a.depth >= 15 or len(keywords) >= 10 or (a.grid or 1) ** 2 >= 4:
+    if a.depth >= 15 or len(keywords) >= 10 or (a.grid or 1) ** 2 >= 4 or len(cities) >= 3:
         print("⚠️  Heads-up: this is a large job (high depth, many keywords or a grid).")
         print("    Running it back-to-back without proxies can get your IP temporarily rate-limited by")
         print("    Google (clears in minutes–hours; returns empty/failed jobs meanwhile). For big or")
@@ -619,43 +806,28 @@ def main():
         sys.exit(f"✗ Scraper not reachable at {BASE} — run 'docker compose up -d' first.\n  ({e})")
 
     body = {"name": "scrape-py", "keywords": keywords, "lang": a.lang, "zoom": 15,
-            "lat": str(lat), "lon": str(lon), "fast_mode": False, "radius": 10000,
+            "fast_mode": False, "radius": 10000,
             # The engine's own email pass visits every website in a browser, one per worker: it took
             # most of each job and found fewer emails than the crawl below (OpenLeadFinder's
             # approach), so the engine only reads Google Maps.
             "depth": a.depth, "email": False, "max_time": a.max_time}
-    skipped = []  # grid tiles that failed
-    if not a.grid:
-        print(f"▶ Creating job: {len(keywords)} keyword(s) @ {lat},{lon} depth={a.depth}")
-        for k in keywords:
-            print(f"    • {k}")
-        try:
-            job_id, rows = run_job(body)
-        except RuntimeError as e:
-            sys.exit(str(e))
-    else:
-        print(f"▶ Grid {a.grid}x{a.grid}: {len(cells)} jobs, one at a time, "
-              f"{len(keywords)} keyword(s) depth={a.depth}")
-        for k in keywords:
-            print(f"    • {k}")
-        job_id, rows = None, []
-        for i, cell in enumerate(cells, 1):  # sequential on purpose: never parallel jobs against Google
-            print(f"▶ Cell {i}/{len(cells)} @ {cell['lat']},{cell['lon']} radius={cell['radius']}m")
-            try:
-                jid, cell_rows = run_job(dict(body, **cell))
-            except Exception as e:
-                print(f"\n  ⚠ cell {i}/{len(cells)} skipped: {str(e).strip()}")
-                skipped.append(i)
-                continue
-            job_id = job_id or jid
-            rows = dedupe(rows + cell_rows)
-            print(f"  cell {i}/{len(cells)}: {len(cell_rows)} rows, {len(rows)} unique so far")
-        if job_id is None:
-            sys.exit("✗ Every grid cell failed. You may be rate-limited — wait or add proxies.")
-        # radius does not clip results in normal mode, so tiles leak outside the city
-        kept = [r for r in rows if in_bbox(r, bbox)]
-        print(f"  dropped {len(rows) - len(kept)} rows outside the city box")
-        rows = kept
+    if a.proxy:
+        body["proxies"] = a.proxy
+    job_id, rows, skipped, ncells = None, [], 0, 0
+    for city in cities:  # one place at a time, like the grid tiles
+        jid, place_rows, s, n = scrape_place(a, body, city, keywords)
+        job_id, skipped, ncells = job_id or jid, skipped + s, ncells + n
+        rows = dedupe(rows + place_rows)
+    if job_id is None:
+        sys.exit("✗ No job finished. You may be rate-limited — wait or add proxies.")
+    for r in rows:
+        r["website"] = clean_website(r.get("website", ""))
+    before = len(rows)
+    rows = [r for r in dedupe(rows, exclude=excluded) if keep_row(r, a)]
+    if len(rows) != before:
+        print(f"  filters and --exclude kept {len(rows)} of {before} rows")
+    if a.limit and not a.has_email:
+        rows = rows[:a.limit]
     if a.full:
         fields = list(rows[0].keys()) if rows else LEAD
     elif a.fields:
@@ -664,8 +836,7 @@ def main():
         fields = LEAD
     print(f"✓ Done — {len(rows)} businesses (fields: {', '.join(fields)}).")
     if skipped:
-        print(f"⚠ Incomplete: {len(skipped)} of {len(cells)} tiles failed (cells "
-              f"{', '.join(map(str, skipped))}), so those parts of the city are missing. Rerun later.")
+        print(f"⚠ Incomplete: {skipped} of {ncells} tiles failed, so parts of the area are missing. Rerun later.")
 
     if a.email and "emails" in fields:  # on the raw rows, so --fields without website still works
         pages = "homepage, then contact and about pages" if a.deep_emails else "homepage only"
@@ -673,10 +844,19 @@ def main():
         enrich_emails(rows, deep=a.deep_emails)
         total, n = sum(1 for r in rows if r.get("emails")), len(rows)
         print(f"  emails found for {total}/{n} businesses ({round(100 * total / n) if n else 0}%)")
+        if a.verify_emails:
+            print("▶ Checking each email domain's MX record over DNS (dns.google)…")
+            verify_emails(rows)
+            fields = fields + ["email_host"]
+            dead = total - sum(1 for r in rows if r.get("emails"))
+            print(f"  dropped {dead} addresses on domains that do not exist")
+    if a.has_email:
+        rows = [r for r in rows if r.get("emails")][:a.limit or None]
+        print(f"  --has-email kept {len(rows)} rows")
     results = [{k: r.get(k, "") for k in fields} for r in rows]
 
     if a.socials:
-        print("▶ Finding socials (Instagram / Facebook / LinkedIn) on each website…")
+        print("▶ Finding socials (Instagram / Facebook / LinkedIn / TikTok / YouTube / X) on each website…")
         print("  ℹ Cost: this runs in CODE = 0 LLM tokens. It only adds ~40–50 tokens per business")
         print("    IF you load the results into an AI's context (negligible if you keep the file on disk).")
         enrich_sites(results, _find_socials, SOCIAL_FIELDS, "socials")

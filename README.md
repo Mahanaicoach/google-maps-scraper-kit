@@ -17,8 +17,8 @@
 
 **Google Maps Scraper Kit is a free, open-source Google Maps scraper for lead generation that runs on
 your own machine.** Name a business type and a city. Get back an outreach-ready CSV with name, phone,
-email, website, category, address, rating and review count. Add `--socials` for Instagram, Facebook
-and LinkedIn.
+email, website, category, address, rating and review count. Add `--socials` for Instagram, Facebook,
+LinkedIn, TikTok, YouTube and X, or `--no-website` for the businesses that still need a site.
 
 No Google Maps API key, no SaaS credits, no data leaving your computer. One Docker command starts the
 engine. Then run it from the terminal, or let Claude Code, Codex or Cursor drive it for you in plain
@@ -29,7 +29,7 @@ English.
 | Price and license | Free. MIT licensed. No API key, account or credits |
 | Engine | [gosom/google-maps-scraper](https://github.com/gosom/google-maps-scraper) v1.18.1 (MIT), run as its official Docker image |
 | Runs on | macOS (native on Apple Silicon), Linux and Windows, anywhere Docker and Python 3 run |
-| Output | CSV with 8 lead fields. `--socials` adds Instagram, Facebook and LinkedIn. `--full` keeps all 36 raw fields |
+| Output | CSV with 8 lead fields. `--socials` adds Instagram, Facebook, LinkedIn, TikTok, YouTube and X. `--full` keeps all 36 raw fields |
 | Results | About 120 places per search (Google's cap). `--grid` covers a whole city, deduped |
 | Speed | 20 Denver dentists with emails in 48 s, measured 2026-10-30 ([PR #31](https://github.com/Mahanaicoach/google-maps-scraper-kit/pull/31)) |
 | AI agents | Claude Code skill and slash commands. Codex, Cursor and other Agent Skills tools via `npx skills add` |
@@ -109,9 +109,10 @@ python3 scripts/scrape.py "dentists in Denver CO" --city "Denver, CO" --grid 3
 | Example Roasters | +1 512-555-0101 | hello@example.com | example.com | Coffee shop | 100 Congress Ave, Austin, TX | 4.7 | 812 |
 | Sample Espresso Bar | +1 512-555-0102 | info@example.org | example.org | Cafe | 200 S Lamar Blvd, Austin, TX | 4.5 | 356 |
 
-`--socials` adds `instagram`, `facebook` and `linkedin` columns. `--tech` adds `fb_pixel`,
-`google_ads_tag`, `analytics`, `cms`, `mobile_friendly` and `intent_score`, and sorts the hottest
-leads first. `--full` keeps all 36 raw fields, including opening hours, coordinates, price range and
+`--socials` adds `instagram`, `facebook`, `linkedin`, `tiktok`, `youtube` and `x` columns. `--tech` adds
+`fb_pixel`, `google_ads_tag`, `analytics`, `bing_ads`, `linkedin_insight`, `tiktok_pixel`, `cms`,
+`mobile_friendly` and `intent_score`, and sorts the hottest leads first. `--verify-emails` adds
+`email_host`. `--full` keeps all 36 raw fields, including opening hours, coordinates, price range and
 reviews.
 
 Full walkthrough, platform notes and troubleshooting: [SETUP.md](SETUP.md).
@@ -167,11 +168,13 @@ scrapes Google Maps business listings only. It does not scrape social platforms 
 | **8 lead fields by default** | name, phone, email, website, category, address, rating, review count. The engine captures 36 raw fields; `--full` keeps them all. |
 | **Email extraction, on by default** | After the Maps job, the script crawls every business website, 16 at a time: the homepage, then its contact and about pages if the homepage shows no email. It prints your found rate. On four saved jobs it found 45 emails where the engine's own option found 24 ([PR #31](https://github.com/Mahanaicoach/google-maps-scraper-kit/pull/31)). |
 | **Beyond the 120 cap** | `--grid 3` splits the city into 3 x 3 map tiles, runs them one at a time and dedupes on `place_id`. |
-| **Social enrichment** | `--socials` finds Instagram, Facebook and LinkedIn profiles in code (HTTP + regex). Zero AI tokens. |
-| **Who already advertises** | `--tech` spots a Meta Pixel, Google Ads tag and analytics on each website, plus its platform (WordPress, Shopify, Wix…) and mobile support, then ranks leads by an `intent_score` from 0 to 100. Zero AI tokens. |
-| **Auto-geocoding** | Type a city name. Coordinates are resolved for you via OpenStreetMap. |
+| **Social enrichment** | `--socials` finds Instagram, Facebook, LinkedIn, TikTok, YouTube and X profiles in code (HTTP + regex). Zero AI tokens. |
+| **Who already advertises** | `--tech` spots a Meta Pixel, Google Ads tag, analytics, Bing Ads, LinkedIn Insight and TikTok pixels on each website, plus its platform (WordPress, Shopify, Wix…) and mobile support, then ranks leads by an `intent_score` from 0 to 100. Zero AI tokens. |
+| **Filters** | `--no-website` (businesses that still need a site), `--min-rating`, `--min-reviews`, `--has-phone`, `--has-email`, `--limit`. `--exclude earlier.csv` skips the places you already have, so a weekly re-run returns only new leads. |
+| **Email checks** | `--verify-emails` looks up each domain's MX record over DNS (no key), drops dead domains and labels the mail host (`google_workspace`, `microsoft_365`, `other`). |
+| **Auto-geocoding** | Type a city name. Coordinates are resolved for you via OpenStreetMap. Repeat `--city` to run several cities into one file. |
 | **Batch jobs** | Many keywords, one job, one CSV. The engine lists a place found by several keywords once. |
-| **Proxy rotation** | Built into the engine for large or repeated runs. `socks5`, `socks5h`, `http`, `https`. |
+| **Proxy rotation** | Built into the engine for large or repeated runs: `--proxy URL` (repeatable). `socks5`, `socks5h`, `http`, `https`. |
 | **Agent-native** | A skill plus four slash commands. The agent handles create, poll, download, clean and present. |
 | **Safe defaults** | API bound to `127.0.0.1`, and the proxy refuses requests from other websites in your browser (DNS rebinding, cross-site posts). Results git-ignored; website fetches skip private addresses; rate-limit and data-law guardrails built into the skill. |
 
@@ -218,7 +221,7 @@ One keyword per line. One job. One CSV.
 | Cost | Free (MIT) | Free | Per-result credits or subscription | Free |
 | API key or account | None | Account | Required | None |
 | Where data goes | Stays on your machine | Provider's servers | Provider's servers | Your machine |
-| Rows per query | Whole city with --grid, deduped | Close to zero | Up to ~120 per keyword, unlimited keywords | A handful |
+| Rows per query | Whole city with --grid, deduped | Close to zero | Whole city with a location input, billed per result | A handful |
 | Emails and socials | Built in | No | Often a paid add-on | Manual |
 | Output | Clean CSV, 8 lead fields | Chat text | CSV or JSON | Spreadsheet |
 | Driven by an AI agent | Yes, skill included | n/a | No | No |
@@ -301,7 +304,7 @@ as untrusted, and a re-audit is requested in
 ### What data do I get for each business?
 
 Name, phone, email, website, category, address, rating and review count by default. Add `--socials`
-for Instagram, Facebook and LinkedIn, or `--full` for all 36 raw fields.
+for Instagram, Facebook, LinkedIn, TikTok, YouTube and X, or `--full` for all 36 raw fields.
 
 ### How do I scrape emails from Google Maps?
 Google Maps listings have no email field, so the kit reads each business website after the Maps job:
@@ -336,7 +339,8 @@ your IP **temporarily rate-limited** (minutes to hours). Your Google account is 
 
 - Run one job at a time. Start at `depth 5` and raise only when needed.
 - Watch for block signals: `failed` jobs, empty results, or far fewer rows than an identical earlier run.
-- Add proxies for large or repeated runs. The engine rotates them automatically. Sponsor
+- Add proxies for large or repeated runs: `--proxy socks5://user:pass@host:port` on the script
+  (repeatable), or the `"proxies"` array on the raw API. The engine rotates them automatically. Sponsor
   [Swiftproxy](https://www.swiftproxy.net/?ref=googlemapsscraperkit) takes 10% off with code `PROXY90`:
   ```json
   "proxies": ["socks5://user:pass@host:port", "http://host2:port2"]
@@ -372,7 +376,9 @@ google-maps-scraper-kit/
 ├── .env.example            config template
 ├── scripts/
 │   ├── scrape.py           Python CLI: single, batch, geocoding, socials, CSV
-│   └── scrape.sh           bash CLI: single query
+│   ├── scrape.sh           bash CLI: single query
+│   └── test_scrape.py      offline tests, no network: python3 scripts/test_scrape.py
+├── docs/                   guides and recipes
 ├── examples/               sample job body and batch keyword list
 ├── .claude/
 │   ├── settings.json       pre-approved local commands for hands-free runs

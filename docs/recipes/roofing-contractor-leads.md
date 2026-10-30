@@ -63,7 +63,7 @@ Illustrative rows only:
 
 ## What to expect
 
-- Overlapping terms can return the same business twice. The script dedupes on `place_id` only in `--grid` runs, so check a plain batch CSV for repeats.
+- Overlapping terms find the same business more than once. The engine lists each place once per job, and the script dedupes on `place_id` as well, so the CSV has no repeats.
 - Emails appear only when a business publishes one on its website.
 - A grid with three keywords is a large job. The script prints a rate-limit warning and proceeds.
 - Add proxies for large or repeated runs. Heavy use without them can get your IP temporarily rate-limited.
