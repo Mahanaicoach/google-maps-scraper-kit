@@ -14,7 +14,7 @@ Install these once:
 | **Docker Desktop** | runs the scraper container | https://www.docker.com/products/docker-desktop |
 | **Python 3** | runs `scrape.py` and `scrape.sh` (standard library only, no `pip install`) | https://www.python.org/downloads |
 | **Claude Code** *(optional but recommended)* | lets Claude drive the scraper for you | https://claude.com/claude-code |
-| **git** *(optional)* | only if you'll push this to GitHub | https://git-scm.com |
+| **git** | clones the kit and runs `scripts/update.sh` later | https://git-scm.com |
 
 Check that Docker is running:
 ```bash
@@ -56,7 +56,7 @@ docker compose up -d
 The first run pulls the `gosom/google-maps-scraper` image once: about 600 MB to download, 2.4 GB on disk. When it finishes, check it:
 
 ```bash
-docker ps | grep gmaps-scraper          # should show it "Up"
+docker compose ps                       # both services should show "Up" or "running"
 curl http://localhost:8080/api/v1/jobs  # should print null (no jobs yet) or a JSON list of jobs
 ```
 
@@ -192,7 +192,7 @@ curl -X DELETE http://localhost:8080/api/v1/jobs/<job-id>
 | `Cannot connect to the Docker daemon` / `docker: command not found` | Docker Desktop is not running (or not installed). Open Docker Desktop, wait until its whale icon stops animating, then run `docker compose up -d` again. |
 | `502 Bad Gateway` right after `docker compose up -d` | The engine is still starting, about 10 seconds. The scripts wait for it; in the browser, reload the page. |
 | `Permission denied` running `./scripts/scrape.sh` | The file lost its execute bit (a ZIP download does that). Run `bash scripts/scrape.sh …` instead. |
-| `port is already allocated` / something else already uses 8080 | Set `SCRAPER_PORT=8081` in `.env`, then `docker compose up -d`. Compose publishes the scraper on that host port and `scripts/scrape.sh` and `scripts/scrape.py` read the same file, so nothing else needs editing. The port inside the container stays 8080 (do not change the right-hand side of the mapping). If your `.env` still has a `SCRAPER_BASE_URL` line, delete it or update its port: it overrides `SCRAPER_PORT`. The slash commands and the skill show `localhost:8080` in their examples, so tell Claude the port you picked. |
+| `port is already allocated` / something else already uses 8080 | Set `SCRAPER_PORT=8081` in `.env`, then `docker compose up -d`. Compose publishes the scraper on that host port and `scripts/scrape.sh` and `scripts/scrape.py` read the same file, so nothing else needs editing. The port inside the container stays 8080 (do not change the right-hand side of the mapping). If your `.env` still has a `SCRAPER_BASE_URL` line, delete it or update its port: it overrides `SCRAPER_PORT`. The slash commands and the skill show `localhost:8080` in their examples, so tell Claude the port you picked; its pre-approved `curl` rules are pinned to 8080 too, so add `Bash(curl http://localhost:8081/:*)` to `.claude/settings.json` if you want it to stop asking. **A second copy of the kit on the same machine** (a fork next to the original, a test clone): also set `COMPOSE_PROJECT_NAME` and `SCRAPER_CONTAINER` in `.env`, as `.env.example` shows, or `docker compose up -d` adopts the other copy's containers. |
 | `422 missing max time` | Job body needs `max_time` (in **seconds**, e.g. `300`). |
 | `422 missing geo coordinates` | Job body needs `lat` and `lon` as **strings**, e.g. `"30.2672"`. |
 | `422 missing name` / `422 missing lang` | Job body needs `name` (any label) and `lang` (`"en"`). All six required fields: `name`, `keywords`, `lang`, `lat`, `lon`, `max_time`. |
@@ -264,3 +264,4 @@ The skill holds the full rules. These are the essentials:
   faster run without them.
 - Add proxies for big jobs. The engine rotates them for you.
 - Never commit result files. They are git-ignored for you.
+- Changed something? `python3 scripts/test_scrape.py` runs the offline checks in about a second, no engine needed.

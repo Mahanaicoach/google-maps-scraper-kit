@@ -368,6 +368,7 @@ class EmailCrawl(unittest.TestCase):
              mock.patch.object(sys, "argv", argv), redirect_stdout(io.StringIO()):
             scrape.main()
         self.assertIs(sent[0]["email"], False)
+        self.assertEqual(sent[0]["name"], "dentists in Austin TX")  # the web UI lists this name
 
 
 class IsRealEmail(unittest.TestCase):
@@ -702,6 +703,12 @@ class ArgumentBounds(unittest.TestCase):
              self.assertRaises(SystemExit) as cm:
             scrape.main()
         return str(cm.exception)
+
+    def test_nothing_listening_fails_in_ten_seconds_not_sixty(self):
+        refused = scrape.urllib.error.URLError(ConnectionRefusedError(61, "Connection refused"))
+        with mock.patch.object(scrape, "req", side_effect=refused), mock.patch.object(scrape.time, "sleep") as slept:
+            self.assertIn("Docker Desktop", self.run_main())
+        self.assertEqual(slept.call_count, 4)  # five tries, two seconds apart
 
     def test_has_email_needs_the_crawl(self):
         self.assertIn("--has-email", self.run_main("--has-email", "--no-email"))

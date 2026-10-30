@@ -778,7 +778,8 @@ def scrape_place(a, body, city, keywords):
             return None, [], 0, 0
         lat, lon = coords
         print(f"  → {lat}, {lon}")
-    body = dict(body, lat=str(lat), lon=str(lon))
+    # The job name is what the web UI lists, so make it say what the job was.
+    body = dict(body, lat=str(lat), lon=str(lon), name=(f"{keywords[0]} @ {city}" if city else keywords[0])[:80])
     for k in keywords:
         print(f"    • {k}")
     if not cells:
@@ -907,11 +908,14 @@ def main():
         print("    Google (clears in minutes–hours; returns empty/failed jobs meanwhile). For big or")
         print("    repeated runs, add proxies. Proceeding…\n")
 
-    # Health check. Right after `docker compose up -d` the proxy answers 502 for a few seconds while
-    # the engine starts, and the README's next line runs at once, so wait up to a minute for it.
+    # Health check. Right after `docker compose up -d` the proxy answers 502 while the engine starts
+    # (up to a minute), and the README's next line runs at once, so wait for that. Nothing listening at
+    # all (connection refused) means the stack is down: say so after 10 s, not after a minute of dots.
+    refused, err = 0, None
     for i in range(30):
         try:
             req("GET", "/api/v1/jobs")
+            err = None
             break
         except urllib.error.HTTPError as e:
             if e.code < 500:  # the engine is up but refuses us (wrong API key, wrong URL): say so at once
@@ -919,15 +923,18 @@ def main():
             err = e
         except Exception as e:
             err = e
+            refused += isinstance(getattr(e, "reason", e), ConnectionRefusedError)
+        if refused >= 5:
+            break
         print("\r  waiting for the engine to start" + "." * (i + 1), end="", flush=True)
         time.sleep(2)
-    else:
+    if err is not None:
         sys.exit(f"\n✗ Scraper not reachable at {BASE}. Is Docker Desktop open? Start the engine with "
                  f"'docker compose up -d' in the kit folder, wait 10 seconds, then try again.\n  ({err})")
     if i:
         print()
 
-    body = {"name": "scrape-py", "keywords": keywords, "lang": a.lang, "zoom": 15,
+    body = {"keywords": keywords, "lang": a.lang, "zoom": 15,
             "fast_mode": False, "radius": 10000,
             # The engine's own email pass visits every website in a browser, one per worker: it took
             # most of each job and found fewer emails than the crawl below (OpenLeadFinder's
@@ -965,7 +972,7 @@ def main():
     if skipped:
         print(f"⚠ Incomplete: {skipped} of {ncells} tiles failed, so parts of the area are missing. Rerun later.")
 
-    if a.email and "emails" in fields:  # on the raw rows, so --fields without website still works
+    if a.email and "emails" in fields and not a.no_website:  # no website, nothing to crawl
         pages = "homepage, then contact and about pages" if a.deep_emails else "homepage only"
         print(f"▶ Emails: checking each business website ({pages}, {SITE_WORKERS} at a time)…")
         enrich_emails(rows, deep=a.deep_emails)
@@ -984,8 +991,6 @@ def main():
     # Enrichment runs on the raw rows, which always carry the website, whatever --fields keeps.
     if a.socials:
         print("▶ Finding socials (Instagram / Facebook / LinkedIn / TikTok / YouTube / X) on each website…")
-        print("  ℹ Cost: this runs in CODE = 0 LLM tokens. It only adds ~40–50 tokens per business")
-        print("    IF you load the results into an AI's context (negligible if you keep the file on disk).")
         enrich_sites(rows, _find_socials, SOCIAL_FIELDS, "socials")
         fields = fields + SOCIAL_FIELDS
         found = sum(1 for r in rows if any(r.get(k) for k in SOCIAL_FIELDS))
