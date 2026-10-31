@@ -106,10 +106,10 @@ python3 scripts/scrape.py "cafes in Austin TX" --city "Austin, TX" --depth 5
 python3 scripts/scrape.py --keywords-file examples/queries.example.txt --city "Denver, CO"
 ```
 
-**Go past Google's ~120 results per search.** `--grid 3` splits the city into a 3 x 3 grid of map
-tiles. That is 9 jobs, run one at a time, with duplicates removed. Any search or tile that comes back
-full (100 rows or more) splits into 4 closer searches on its own, up to 2 levels deep; add `--no-split`
-to keep exactly one job per search or tile:
+**Go past Google's ~20 results per search.** Signed-out Google Maps shows about 20 places per search,
+so a search that comes back full is re-run as 4 closer searches on its own (5 jobs; `--no-split` keeps
+one). `--grid 3` splits the city into a 3 x 3 grid of map tiles instead. That is 9 jobs, run one at a
+time, with duplicates removed:
 ```bash
 python3 scripts/scrape.py "plumbers in Phoenix AZ" --city "Phoenix, AZ" --grid 3
 ```

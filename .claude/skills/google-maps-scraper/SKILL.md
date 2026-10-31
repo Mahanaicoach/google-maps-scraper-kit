@@ -145,7 +145,7 @@ the curl flow above):
 - **Proxies:** `--proxy socks5://user:pass@host:port` (repeatable; `socks5h`, `http`, `https` too).
 Use the manual curl flow only for custom job bodies.
 
-**Whole-city runs:** when the user says all, every or entire city, or a run returns about 120 rows
+**Whole-city runs:** when the user says all, every or entire city, or a run returns about 100 rows (5 searches of 20 after the automatic split)
 (Google's per-search cap), use `python3 scripts/scrape.py "<keyword>" --city "<City, ST>" --grid 3`.
 It splits the city into 3 x 3 tiles (9 jobs) and dedupes on `place_id`. Tiles run one at a time, so a
 grid is slower and more likely to trip rate limits: warn once, don't block.

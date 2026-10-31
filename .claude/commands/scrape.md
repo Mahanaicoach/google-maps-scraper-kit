@@ -16,7 +16,7 @@ Use the `google-maps-scraper` skill and follow these steps:
 5. **Poll to completion in the background.** The Bash tool blocks foreground `sleep`, so use `run_in_background: true` and read the output file when notified. Then download the CSV.
 6. **Save a CSV file.** `scripts/scrape.py` writes `results-<id>.csv` by default. If you use the raw API, save the parsed lead fields to a `.csv` yourself. Then **present only the 8 lead fields** in a clean markdown table: `name (title), phone, emails, website, category, address, review_rating, review_count`, plus `instagram, facebook, linkedin, tiktok, youtube, x` if socials were requested. **Drop everything else**, especially `latitude`/`longitude`, IDs, hours, images and review blobs. Never dump the full 36-column CSV into chat. Show a few sample rows and give the CSV path. Include dropped fields only if the user explicitly asks.
 
-**All, every or entire city:** add `--grid 3` (3 x 3 map tiles, one job at a time, deduped) to get past Google's ~120 results per search. Warn once that it is slower and more likely to trip rate limits, then proceed.
+**All, every or entire city:** add `--grid 3` (3 x 3 map tiles, one job at a time, deduped) to get past Google's ~20 results per search (about 100 after the automatic split). Warn once that it is slower and more likely to trip rate limits, then proceed.
 
 **Emails:** on by default. The script crawls each business website after the Maps job, 16 at a time. Some businesses publish no email, so coverage is partial. For a deliberately fast run without emails, pass `--no-email`.
 

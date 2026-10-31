@@ -153,12 +153,13 @@ def grid_cells(bbox, n):
     return cells
 
 
-# Saturation splitting, OpenLeadFinder's fix for the ~120-per-search ceiling: a search that comes
-# back "full" is hiding more, so it is re-run as 4 quarter tiles one zoom level closer, and those
-# may split again up to SPLIT_LEVELS. The raw row count before dedupe is the signal. MAX_JOBS bounds
-# grid tiles plus splits per place, so a dense metro cannot run forever.
-SATURATION_ROWS = 100
-SPLIT_LEVELS = 2
+# Saturation splitting, OpenLeadFinder's fix for Google's per-search ceiling. Since 2026 Google Maps
+# shows signed-out visitors a "limited view": about 20 places per search and no further scrolling,
+# whatever depth asks for. A search that comes back full is hiding more, so it is re-run as 4 quarter
+# tiles one zoom level closer, and those may split again up to SPLIT_LEVELS. The raw row count per
+# keyword before dedupe is the signal. MAX_JOBS bounds grid tiles plus splits per place.
+SATURATION_ROWS = 20   # the limited view's page size
+SPLIT_LEVELS = 1       # a full search becomes 5 jobs, about 100 places; --grid covers a whole city
 MAX_JOBS = 128
 POINT_SPAN_DEG = 0.06  # what one plain search at zoom 15 roughly covers, about 6.5 km
 
@@ -180,6 +181,11 @@ def split_cell(cell):
                  radius=max(1000, math.ceil(cell["radius"] / 2)), zoom=min(19, cell["zoom"] + 1),
                  _dlat=cell["_dlat"] / 2, _dlon=cell["_dlon"] / 2, _level=cell["_level"] + 1)
             for i in (-1, 1) for j in (-1, 1)]
+
+
+BAN_HINT = ("  0 places from Google: a typo in the keyword, a spot with none, or Google rate-limiting this\n"
+            "  IP (a block looks exactly like an empty market). Check the keyword on the Google Maps\n"
+            "  website; if places show there, wait 15-30 minutes or add a proxy and run it again.")
 
 
 def filters_active(a):
@@ -350,25 +356,34 @@ def run_job(body):
 
 
 def _get(path):
-    """GET with three tries: a poll or a download must survive a passing 502 or timeout."""
-    for attempt in range(3):
+    """GET with six tries over about 30 s: a poll or a download must survive a passing 502, a timeout
+    or an engine restart."""
+    for attempt in range(6):
         try:
             return req("GET", path)
         except urllib.error.HTTPError as e:
-            if e.code < 500 or attempt == 2:
+            if e.code < 500 or attempt == 5:
                 raise
         except OSError:
-            if attempt == 2:
+            if attempt == 5:
                 raise
-        time.sleep(3)
+        time.sleep(5)
 
 
 def _run_job_once(body, restarted=False):
     since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    try:
-        _, raw = req("POST", "/api/v1/jobs", body)
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"✗ Create failed: HTTP {e.code} — {e.read().decode()[:200]}")
+    for attempt in (1, 2):  # one retry: the proxy answers 502 for a moment while the engine restarts
+        try:
+            _, raw = req("POST", "/api/v1/jobs", body)
+            break
+        except urllib.error.HTTPError as e:
+            if e.code < 500 or attempt == 2:
+                raise RuntimeError(f"✗ Create failed: HTTP {e.code} — {e.read().decode()[:200]}")
+            time.sleep(5)
+        except OSError:
+            if attempt == 2:
+                raise
+            time.sleep(5)
     job_id = json.loads(raw).get("id")
     if not job_id:
         raise RuntimeError("✗ No job id returned.")
@@ -480,7 +495,10 @@ _SKIP_HANDLE = {"", "home", "pages", "people", "help", "about", "policies", "pol
                 "legal", "tos", "privacy", "settings", "sharer", "tr", "profile.php",
                 "plugins", "dialog", "intent", "login", "share.php", "permalink.php",
                 "p", "reel", "reels", "explore", "stories", "tv", "watch", "events",
-                "groups", "marketplace", "gaming", "photo", "hashtag", "search", "share", "i"}
+                "groups", "marketplace", "gaming", "photo", "hashtag", "search", "share", "i",
+                # website builders link to their own profiles from every site they host
+                "wix", "wixcom", "squarespace", "wordpress", "wordpressdotcom", "godaddy", "shopify",
+                "weebly", "duda", "webflow"}
 
 def _is_public_ip(ip):
     try:
@@ -568,8 +586,32 @@ def _fetch_html(url, timeout=10):
 
 @functools.lru_cache(maxsize=256)  # ponytail: homepages only (up to 400 KB each); evicted pages just refetch
 def _fetch_cached(url):
-    """Homepage fetch shared by the email crawl, --socials and --tech (one fetch per site)."""
-    return _fetch_html(url, timeout=8)
+    """Homepage fetch shared by the email crawl, --socials and --tech (one fetch per site). A site that
+    fails as listed is retried on the other scheme and with www. toggled: many apex domains have no
+    A record, and many hosts answer on https only."""
+    html = _fetch_html(url, timeout=8)
+    if html:
+        return html
+    p = urllib.parse.urlsplit(url if "://" in url else "http://" + url)
+    host = p.hostname or ""
+    if not host:
+        return ""
+    other = host[4:] if host.startswith("www.") else "www." + host
+    scheme2 = "https" if p.scheme == "http" else "http"
+    for variant in (f"{scheme2}://{host}{p.path}", f"{p.scheme}://{other}{p.path}", f"{scheme2}://{other}{p.path}"):
+        html = _fetch_html(variant, timeout=8)
+        if html:
+            return html
+    return ""
+
+_SOCIAL_HOSTS = ("facebook.com", "instagram.com", "linkedin.com", "x.com", "twitter.com", "tiktok.com",
+                 "youtube.com", "yelp.com")
+
+def is_social(url):
+    """True when the "website" is a social or review profile, not the business's own site: nothing
+    to crawl for emails or pixels, and no MX lookup on facebook.com."""
+    h = _host(url or "")
+    return any(h == s or h.endswith("." + s) for s in _SOCIAL_HOSTS)
 
 def _find_socials(html):
     out = {k: "" for k in SOCIAL_FIELDS}
@@ -605,7 +647,10 @@ def enrich_sites(results, find, fields, label, workers=None):
     for r in results:                       # make sure every row has the keys
         for k in fields:
             r.setdefault(k, "")
-    _each_site([r for r in results if r.get("website")],
+    for r in results:  # a Facebook or Instagram page in the website slot IS the social profile
+        if r.get("website") and is_social(r["website"]):
+            r.update({k: v for k, v in _find_socials(r["website"]).items() if v})
+    _each_site([r for r in results if r.get("website") and not is_social(r["website"])],
                lambda r: r.update(find(_fetch_cached(r["website"]))), label, workers)
 
 
@@ -670,8 +715,11 @@ _JUNK_DOMAIN = ("example", "sentry", "wixpress", "wix.com", "godaddy", "squaresp
                 "domain.com", "email.com", "yourdomain", "mysite.com", "schema.org", "w3.org", "sentry.io",
                 # link-in-bio pages and website agencies: their support address is not the business's
                 "linktr.ee", "linkin.bio", "beacons.ai", "officite")
+_JUNK_DOMAIN += ("gov", "mil", "hubspot", "mailchimp", "constantcontact", "sendgrid", "yext",
+                 "birdeye", "podium", "zocdoc")
 _JUNK_LOCAL = {"name", "email", "user", "you", "someone", "example", "username",
-               "youremail", "yourname", "firstname", "lastname", "sample"}
+               "youremail", "yourname", "firstname", "lastname", "sample",
+               "noreply", "no-reply", "donotreply", "do-not-reply", "mailer-daemon", "postmaster"}
 # A JSON-escaped <, >, ", ' or & glued to the address (">orders@x.com" in page source),
 # which the regex reads as part of the local part: u003eorders@x.com.
 _ESCAPE_PREFIX = re.compile(r"^(?:u00(?:3c|3e|22|27|26))+")
@@ -706,12 +754,21 @@ def clean_website(url):
     query = p.query if len(kept) == len(q) else urllib.parse.urlencode(kept)
     return urllib.parse.urlunsplit(p._replace(query=query, fragment=frag))
 
+def csv_safe(v):
+    """Excel and Sheets run a cell that starts with = + - @ as a formula, so a scraped name such as
+    "=HYPERLINK(...)" gets a leading quote. A phone number ("+1 512 555 0101") is left alone."""
+    s = "" if v is None else str(v)
+    if s[:1] in ("=", "@", "\t", "\r") or (s[:1] in ("+", "-") and not re.fullmatch(r"[+-][\d\s().-]*", s)):
+        return "'" + s
+    return s
+
+
 def is_real_email(e):
     """False for anything not worth sending to: a template placeholder (user@domain.com,
     example@gmail.com), a vendor/boilerplate domain, or an image path that parsed as an address."""
     local, _, dom = e.rpartition("@")
-    if not EMAIL_RE.fullmatch(e) or e.endswith(_JUNK_EXT):
-        return False
+    if not EMAIL_RE.fullmatch(e) or e.endswith(_JUNK_EXT) or re.fullmatch(r"[0-9a-f]{16,}", local):
+        return False  # a 16+ hex local part is a tracking token, not an inbox
     labels = re.split(r"[.-]", dom)  # whole labels: sentry.wixpress.com is junk, sentrysecurity.com is not
     junk = any((dom == j or dom.endswith("." + j)) if "." in j else j in labels for j in _JUNK_DOMAIN)
     return local not in _JUNK_LOCAL and not junk
@@ -726,20 +783,34 @@ _TLD = (r"(?:com|net|org|co|io|biz|info|us|uk|ca|au|de|fr|es|it|nl|eu|edu|gov|me
         r"shop|online|store|xyz|ai)")
 _DEOBF_RE = re.compile(rf"(?<!{_LOCAL})({_LOCAL}+)\s*{_AT}\s*([A-Za-z0-9.\-]+?)\s*{_DOT}\s*({_TLD})\b", re.I)
 
+_CFEMAIL_RE = re.compile(r'data-cfemail="([0-9a-fA-F]+)"|/cdn-cgi/l/email-protection#([0-9a-fA-F]+)')
+
+def _cf_decode(hexstr):
+    """Cloudflare's email protection: every byte XOR the first one. One of the biggest reasons a site
+    'has no email' (OpenLeadFinder)."""
+    try:
+        key = int(hexstr[:2], 16)
+        return bytes(int(hexstr[i:i + 2], 16) ^ key for i in range(2, len(hexstr) - 1, 2)).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return ""
+
+def _on_site(e, site):
+    return bool(site) and (e.endswith("@" + site) or e.endswith("." + site))
+
 def extract_emails(html, site_host):
-    """Emails from mailto: links, plain text and obfuscated spans, junk dropped, site-domain first,
-    max 3. HTML entities are decoded first, so info&#64;site.com counts."""
+    """Emails from mailto: links, plain text, obfuscated spans and Cloudflare-protected links, junk
+    dropped, site-domain first, max 3. HTML entities are decoded first, so info&#64;site.com counts."""
     site = _host(site_host or "")
     text = _html.unescape(html or "")[:400_000]
     found = []
     deobf = [f"{m[0]}@{m[1]}.{m[2]}" for m in _DEOBF_RE.findall(text)]
+    deobf += [_cf_decode(a or b) for a, b in _CFEMAIL_RE.findall(text)]
     for e in MAILTO_RE.findall(text) + EMAIL_RE.findall(text) + deobf:
         e = _ESCAPE_PREFIX.sub("", urllib.parse.unquote(e).strip().lower())
         if not is_real_email(e) or e in found:
             continue
         found.append(e)
-    on_site = lambda e: site and (e.endswith("@" + site) or e.endswith("." + site))
-    return sorted(found, key=lambda e: not on_site(e))[:3]
+    return sorted(found, key=lambda e: not _on_site(e, site))[:3]
 
 def contact_links(html, base_url):
     """Up to 3 same-site contact/about URLs: discovered links first, then fixed fallbacks."""
@@ -749,7 +820,7 @@ def contact_links(html, base_url):
     if not host:  # malformed or empty website: nothing to join the paths onto
         return out
     for href, text in HREF_RE.findall(html or ""):
-        if not re.search(r"contact|about|team|staff|support", href + " " + text, re.I):
+        if not re.search(r"contact|about|team|staff|support|location|impressum|kontakt", href + " " + text, re.I):
             continue
         try:
             url = urllib.parse.urldefrag(urllib.parse.urljoin(base_url, href.strip()))[0]
@@ -757,7 +828,7 @@ def contact_links(html, base_url):
             continue
         if url.startswith(("http://", "https://")) and _host(url) == host and url not in out:
             out.append(url)
-    for path in ("/contact", "/contact-us", "/about", "/about-us"):
+    for path in ("/contact", "/contact-us", "/about", "/about-us", "/locations", "/team", "/impressum", "/kontakt"):
         url = urllib.parse.urljoin(base_url, path)
         if len(out) < 3 and url not in out:
             out.append(url)
@@ -769,11 +840,12 @@ def enrich_emails(results, deep=True, workers=None):
         site = r["website"]
         home = _fetch_cached(site)
         found = extract_emails(home, site)
-        if deep and home and not found:
+        if deep and home and not any(_on_site(e, site) for e in found):  # a gmail on the homepage is not the end
             pages = "\n".join(_fetch_html(u, timeout=8) for u in contact_links(home, site))
-            found = extract_emails(pages, site)
+            found = extract_emails(home + "\n" + pages, site)
         r["emails"] = ", ".join(found)
-    _each_site([r for r in results if r.get("website") and not r.get("emails")], work, "emails", workers)
+    _each_site([r for r in results if r.get("website") and not r.get("emails") and not is_social(r["website"])],
+               work, "emails", workers)
 
 
 # ── Optional email domain check (--verify-emails): can the domain receive mail, and who hosts it ──
@@ -853,6 +925,7 @@ def scrape_place(a, body, city, keywords):
     queue = list(cells or [point_cell(lat, lon)])
     job_id, rows, skipped, i, total, capped, warned = None, [], 0, 0, len(queue), False, False
     enough = a.limit if a.limit and not filters_active(a) else None  # rows wanted; None = all
+    ok_cells = empty_cells = 0
     while queue:  # sequential on purpose: never parallel jobs against Google
         cell, i = queue.pop(0), i + 1
         tiled = bool(cells) or cell["_level"] > 0
@@ -875,6 +948,13 @@ def scrape_place(a, body, city, keywords):
         rows = dedupe(rows + cell_rows)
         if tiled:
             print(f"  cell {i}/{total}: {len(cell_rows)} rows, {len(rows)} unique so far")
+        ok_cells, empty_cells = ok_cells + bool(cell_rows), empty_cells + (not cell_rows)
+        if not ok_cells and empty_cells >= 3 and queue:  # three empty areas in a row: a block, not a market
+            print(f"  ⚠ {empty_cells} areas in a row returned 0 places: Google is most likely rate-limiting this IP, "
+                  f"so the remaining {len(queue)} job(s) are skipped. Wait 15-30 minutes or add a proxy, then rerun.")
+            skipped += len(queue)
+            queue.clear()
+            break
         if enough and len(rows) >= enough:
             print(f"  --limit {enough} reached: skipping the remaining {len(queue)} job(s)")
             total -= len(queue)
@@ -897,6 +977,8 @@ def scrape_place(a, body, city, keywords):
         kept = [r for r in rows if in_bbox(r, bbox)]
         print(f"  dropped {len(rows) - len(kept)} rows outside the city box")
         rows = kept
+    if job_id and not rows and not skipped:
+        print(BAN_HINT)
     return job_id, rows, skipped, total
 
 
@@ -1133,7 +1215,7 @@ def main():
             with open(path, "w", newline="", encoding="utf-8-sig") as f:
                 w = csv.DictWriter(f, fieldnames=fields)
                 w.writeheader()
-                w.writerows(results)
+                w.writerows([{k: csv_safe(v) for k, v in r.items()} for r in results])
     try:
         write(out)
     except OSError as e:  # the target is locked (open in Excel) or unwritable: never lose a finished scrape

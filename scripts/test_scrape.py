@@ -90,10 +90,39 @@ class Saturation(unittest.TestCase):
         self.assertTrue(all(not k.startswith("_") for b in sent for k in b))  # geometry stays local
         self.assertIn("dense area (120 rows)", log)
 
-    def test_splits_two_levels_deep_only(self):
+    def test_splits_one_level_by_default_two_when_asked(self):
         sent, *_ = self.run_place({15: 120, 16: 120, 17: 120})
+        self.assertEqual(len(sent), 5)  # 1 + 4; the children are full too but SPLIT_LEVELS is 1
+        with mock.patch.object(scrape, "SPLIT_LEVELS", 2):
+            sent, *_ = self.run_place({15: 120, 16: 120, 17: 120})
         self.assertEqual(len(sent), 21)  # 1 + 4 + 16; level-2 tiles never split
         self.assertEqual([b["zoom"] for b in sent].count(17), 16)
+
+    def test_limited_view_page_is_full(self):
+        sent, *_ = self.run_place({15: 20})  # exactly the limited view's 20: hiding more
+        self.assertEqual(len(sent), 5)
+        sent, *_ = self.run_place({15: 19})
+        self.assertEqual(len(sent), 1)
+
+    def test_three_empty_tiles_in_a_row_stop_the_grid(self):
+        sent = []
+        def fake_run_job(body):
+            sent.append(body)
+            return "j", []
+        ns = dict(lat=None, lon=None, city="Denver, CO", grid=2, depth=1, split=True, limit=None)
+        with mock.patch.object(scrape, "run_job", fake_run_job), \
+             mock.patch.object(scrape, "geocode", return_value=("30.25", "-97.75", BBOX)), \
+             redirect_stdout(io.StringIO()) as log:
+            _, rows, skipped, total = scrape.scrape_place(argparse.Namespace(**ns), {"keywords": ["dentists"]},
+                                                          "Denver, CO", ["dentists"])
+        self.assertEqual(sent[0]["keywords"], ["dentists"])  # the keyword reaches the engine unchanged
+        self.assertEqual((len(sent), rows, skipped, total), (3, [], 1, 4))  # the fourth tile is skipped
+        self.assertIn("returned 0 places: Google is most likely rate-limiting", log.getvalue())
+
+    def test_empty_single_search_prints_the_block_hint(self):
+        sent, rows, _, _, log = self.run_place({15: 0})
+        self.assertEqual((len(sent), rows), (1, []))
+        self.assertIn("0 places from Google", log)
 
     def test_no_split_keeps_one_job(self):
         sent, rows, *_ = self.run_place({15: 120}, split=False)
@@ -106,9 +135,9 @@ class Saturation(unittest.TestCase):
         self.assertIn("3 jobs reached", log)
 
     def test_batch_is_full_per_keyword_not_in_total(self):
-        sent, *_ = self.run_place({15: 120}, keywords=3)  # 40 rows per keyword: nobody hit the cap
+        sent, *_ = self.run_place({15: 45}, keywords=3)  # 15 rows per keyword: nobody hit the cap
         self.assertEqual(len(sent), 1)
-        sent, *_ = self.run_place({15: 300}, keywords=3)  # 100 each: full
+        sent, *_ = self.run_place({15: 60}, keywords=3)  # 20 each: full
         self.assertEqual(len(sent), 5)
 
     def test_limit_stops_the_fan_out_unless_filters_need_more(self):
@@ -129,6 +158,62 @@ class Saturation(unittest.TestCase):
         with mock.patch.object(sys, "argv", argv), redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
             scrape.main()
         self.assertIn("must be numbers", str(cm.exception))
+
+
+class CsvSafe(unittest.TestCase):
+    def test_formulas_quoted_phones_kept(self):
+        self.assertEqual(scrape.csv_safe("=HYPERLINK(\"http://x\")"), "'=HYPERLINK(\"http://x\")")
+        self.assertEqual(scrape.csv_safe("@SUM(1)"), "'@SUM(1)")
+        self.assertEqual(scrape.csv_safe("-2+3"), "'-2+3")
+        self.assertEqual(scrape.csv_safe("+1 (512) 555-0101"), "+1 (512) 555-0101")
+        self.assertEqual(scrape.csv_safe("Joe's Pizza"), "Joe's Pizza")
+        self.assertEqual(scrape.csv_safe(None), "")
+
+
+class CloudflareEmails(unittest.TestCase):
+    def test_cfemail_decoded_and_ranked(self):
+        enc = "".join(f"{b ^ 0x5a:02x}" for b in b"hello@acme.com")
+        html = f'<a href="/cdn-cgi/l/email-protection#5a{enc}">[email protected]</a>'
+        self.assertEqual(scrape.extract_emails(html, "https://acme.com"), ["hello@acme.com"])
+        html2 = f'<span class="__cf_email__" data-cfemail="5a{enc}">[email protected]</span> <a href="mailto:sales@other.net">x</a>'
+        self.assertEqual(scrape.extract_emails(html2, "acme.com"), ["hello@acme.com", "sales@other.net"])
+        self.assertEqual(scrape._cf_decode("zz"), "")
+
+    def test_more_junk(self):
+        for e in ("noreply@acme.com", "do-not-reply@acme.com", "a1b2c3d4e5f6a7b8c9d0@acme.com",
+                  "info@cdc.gov", "news@mailchimp.com", "x@sentry.wixpress.com"):
+            self.assertFalse(scrape.is_real_email(e), e)
+        for e in ("info@sentrysecurity.com", "hi@examplecafe.com", "abc123@acme.com", "info@mygovernor.com"):
+            self.assertTrue(scrape.is_real_email(e), e)
+
+
+class SocialWebsite(unittest.TestCase):
+    def test_profile_in_website_slot_is_not_crawled(self):
+        rows = [{"website": "https://www.facebook.com/joespizza", "emails": ""},
+                {"website": "https://instagram.com/joes.pizza/", "emails": ""},
+                {"website": "https://joespizza.com", "emails": ""}]
+        fetched = []
+        def fake_fetch(url):
+            fetched.append(url)
+            return '<a href="https://instagram.com/from_site">ig</a>'
+        with mock.patch.object(scrape, "_fetch_cached", fake_fetch), redirect_stdout(io.StringIO()):
+            scrape.enrich_sites(rows, scrape._find_socials, scrape.SOCIAL_FIELDS, "socials")
+            scrape.enrich_emails(rows, deep=False)
+        self.assertEqual(fetched, ["https://joespizza.com", "https://joespizza.com"])  # one fetch per real site
+        self.assertEqual(rows[0]["facebook"], "https://www.facebook.com/joespizza")
+        self.assertEqual(rows[1]["instagram"], "https://instagram.com/joes.pizza")
+        self.assertEqual(rows[2]["instagram"], "https://instagram.com/from_site")
+        self.assertTrue(scrape.is_social("m.facebook.com/x") and not scrape.is_social("facebook.com.evil.biz"))
+
+    def test_homepage_retried_on_other_scheme_and_www(self):
+        tried = []
+        def fake(url, timeout=8):
+            tried.append(url)
+            return "<html>ok</html>" if url == "https://www.acme.com" else ""
+        scrape._fetch_cached.cache_clear()
+        with mock.patch.object(scrape, "_fetch_html", fake):
+            self.assertEqual(scrape._fetch_cached("http://acme.com"), "<html>ok</html>")
+        self.assertEqual(tried, ["http://acme.com", "https://acme.com", "http://www.acme.com", "https://www.acme.com"])
 
 
 class Dedupe(unittest.TestCase):

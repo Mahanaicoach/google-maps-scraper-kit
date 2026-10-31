@@ -23,11 +23,11 @@ On Windows, run the same commands with `py` or `python3`. Python is only the cli
 | `keyword` | The search, with the place baked in, e.g. `"coffee shops in Austin TX"`. |
 | `lat`, `lon` | Coordinates. Optional when you pass `--city`. |
 | `--city` | Geocodes a city name to coordinates via OpenStreetMap. Repeat it to run several cities, one after another, into one deduped file. |
-| `--depth` | How far to scroll each search. Default `5`. Higher is slower and more likely to be blocked. |
+| `--depth` | How far to scroll each search. Default `5`. Signed-out Google Maps stops at about 20 places whatever the depth, so more map points (the automatic split, `--grid`) matter more than depth. |
 | `--no-email` | Skips email extraction for a faster run. Emails are on by default. |
 | `--no-deep-emails` | Checks homepages only for emails, not contact and about pages. |
 | `--grid N` | Splits the `--city` area into N x N map tiles, one job each, deduped. Needs `--city`. Max 10. |
-| `--no-split` | Keeps one job per search or tile. By default a search that returns 100 rows or more is re-run as 4 closer searches, up to 2 levels deep and 128 jobs per place. |
+| `--no-split` | Keeps one job per search or tile. By default a search that comes back full (about 20 rows, Google's signed-out page) is re-run as 4 closer searches, at most 128 jobs per place. |
 | `--max-time` | Job time limit in seconds. Default `600`. |
 | `--out` | Output path. Default `results-<short job id>.csv`. A `.json` extension writes JSON. |
 | `--json` | Writes JSON instead of CSV. |
@@ -60,7 +60,7 @@ Illustrative rows only:
 
 ## What to expect
 
-- Google Maps returns about 120 listings per search. Use `--grid 3` to cover a whole city past that cap.
+- Signed-out Google Maps returns about 20 listings per search. A full search is re-run as 4 closer searches on its own; use `--grid 3` to cover a whole city.
 - Grid tiles run one at a time, so a grid is slower and more likely to trip rate limits than one search.
 - Emails appear only when a business publishes one on its website. Many rows will have an empty `emails` cell.
 - Heavy use without proxies can get your IP temporarily rate-limited by Google. Your Google account is not affected.

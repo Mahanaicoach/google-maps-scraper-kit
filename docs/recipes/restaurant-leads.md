@@ -23,7 +23,7 @@ python3 scripts/scrape.py "restaurants in Austin TX" --keyword "cafes in Austin 
   --keyword "pizza in Austin TX" --city "Austin, TX"
 ```
 
-For a whole city past the ~120 per search cap, add `--grid 3`. It splits the city into 9 map tiles, runs them one at a time and dedupes on `place_id`.
+For a whole city past the ~20 per search cap, add `--grid 3`. It splits the city into 9 map tiles, runs them one at a time and dedupes on `place_id`.
 
 ## Step 3: Add hours and price range for qualification
 

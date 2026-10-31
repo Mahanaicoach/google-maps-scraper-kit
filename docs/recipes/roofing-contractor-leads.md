@@ -35,7 +35,7 @@ python3 scripts/scrape.py --keywords-file roofing.txt --city "Phoenix, AZ"
 
 ## Step 3: Cover the whole city
 
-Each search stops at about 120 listings. Add `--grid 3` to split the city into 9 map tiles, run one at a time, with duplicates removed on `place_id`:
+Each search stops at about 20 listings (about 100 after the automatic split). Add `--grid 3` to split the city into 9 map tiles, run one at a time, with duplicates removed on `place_id`:
 
 ```bash
 python3 scripts/scrape.py --keywords-file roofing.txt --city "Phoenix, AZ" --grid 3
