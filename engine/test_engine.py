@@ -628,6 +628,8 @@ class LaunchChrome(unittest.TestCase):
             b = browser.Browser(path=self.exe, profile=profile, headless=False, timeout=5)
         self.assertIsNone(b)
         self.assertIn("--window-position=-3000,-3000", self.launches()[0])  # a window, out of sight
+        self.assertTrue(browser.always_headless(browser.shell_path("linux64")))
+        self.assertFalse(browser.always_headless("/usr/bin/google-chrome"))
         self.assertNotIn("--headless", self.launches()[0])
         out = subprocess.run(["ps", "-axo", "command"], capture_output=True, text=True).stdout
         self.assertNotIn(self.exe, out)  # the fake Chrome was stopped

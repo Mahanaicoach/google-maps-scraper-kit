@@ -537,6 +537,9 @@ def main():
         f"{a.host}:{port} in this container, published on the host's 127.0.0.1"
     log(f"engine {VERSION} on {where} (browser: {chrome or 'none found'}{'' if headless else ', as a window'}"
         f"{', API key required' if env['SCRAPER_API_KEY'] else ''})")
+    if not headless and browser.always_headless(chrome):
+        log("SCRAPER_HEADLESS=0 is set, but the only browser is the downloaded headless shell, which cannot "
+            "open a window: install Google Chrome (or Chromium, Edge, Brave) for window mode")
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     for s in servers[1:]:
         threading.Thread(target=s.serve_forever, daemon=True).start()

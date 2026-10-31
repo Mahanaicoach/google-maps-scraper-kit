@@ -537,9 +537,9 @@ class Worker(threading.Thread):
                 n = self.add_reviews(rows, d, deadline, stop, proxies, save)
                 self.store.rewrite(jid, rows, cols)  # keep the reviews if the engine stops during the next pass
                 self.log(f"job {jid}: reviews for {n}/{sum(1 for r in rows if r.get('place_id'))} places")
-                if not n and self.headless:
+                if not n and (self.headless or browser.always_headless(self._browser.path)):
                     notes.append("no reviews: Google's limited view, which a headless Chrome gets, shows none; "
-                                 "set SCRAPER_HEADLESS=0 to run Chrome as a window")
+                                 "set SCRAPER_HEADLESS=0, with an installed Chrome, to run it as a window")
             if stage == "reviews" and not stop.is_set():
                 stage = "websites"
                 save(stage=stage)

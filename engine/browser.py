@@ -96,6 +96,11 @@ def find_chrome():
     return shell_path() if os.path.isfile(shell_path()) else None
 
 
+def always_headless(path):
+    """True for Chrome for Testing's headless shell, which cannot open a window (SCRAPER_HEADLESS=0)."""
+    return "headless-shell" in os.path.basename(path or "")
+
+
 def is_snap(path):
     """True for a snap browser: /snap/bin/chromium, or Ubuntu's /usr/bin/chromium-browser script
     that runs it."""
@@ -262,7 +267,7 @@ class Browser:
                 "--metrics-recording-only", "--no-pings", "--disable-client-side-phishing-detection",
                 "--disable-blink-features=AutomationControlled", "--window-size=1280,900",
                 f"--lang={lang}", "--disable-dev-shm-usage"]
-        if headless and "headless-shell" not in os.path.basename(self.path):  # the shell is always headless
+        if headless and not always_headless(self.path):  # the shell is always headless
             args.append("--headless=new")
         elif not headless:
             args.append("--window-position=-3000,-3000")  # a real window, kept out of sight

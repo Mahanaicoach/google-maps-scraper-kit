@@ -76,6 +76,8 @@ jobs:
           sys.exit(0 if rows and counts["tunnels"] and counts["refused"] else 1)
           PY
       - name: window mode (SCRAPER_HEADLESS=0) with the reviews pass
+        # ubuntu-24.04-arm has no Chrome, only the downloaded headless shell, which cannot open a window
+        if: matrix.os != 'ubuntu-24.04-arm'
         env:
           SCRAPER_HEADLESS: "0"
         run: |
