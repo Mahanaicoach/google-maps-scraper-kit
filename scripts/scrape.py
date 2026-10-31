@@ -23,7 +23,7 @@ Notes:
 - Geocoding uses OpenStreetMap Nominatim (free, no key). It allows ~1 request/sec and requires a
   descriptive User-Agent (set below). Do not loop it aggressively.
 """
-import argparse, csv, functools, io, ipaddress, json, math, os, re, shutil, socket, subprocess, sys, time
+import argparse, csv, functools, io, ipaddress, json, math, os, re, socket, sys, time
 import html as _html, http.client, urllib.request, urllib.parse, urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
@@ -37,7 +37,7 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):   # not a reconfigurable stream (pytest capture, a pipe wrapper)
         pass
 
-ENV_KEYS = ("SCRAPER_BASE_URL", "SCRAPER_PORT", "SCRAPER_API_KEY", "SCRAPER_CONTAINER")
+ENV_KEYS = ("SCRAPER_BASE_URL", "SCRAPER_PORT", "SCRAPER_API_KEY")
 
 
 def load_env_file():
@@ -74,24 +74,25 @@ UA = "google-maps-scraper-kit/1.6 (https://github.com/Mahanaicoach/google-maps-s
 # different small sites, not Google, so this does not raise the rate-limit risk.
 SITE_WORKERS = 16
 
-POLL_EVERY = 8            # seconds between status checks
-POLL_GRACE = 120          # the engine still has to flush results and flip the status
+POLL_EVERY = 3            # seconds between status checks (the engine is local, a check is cheap)
+POLL_GRACE = 120          # past max_time: the engine's watchdog stops Chrome 90 s after it at the latest
 POLL_CEILING = 7200       # never wait longer than 2h, whatever --max-time asked for
-ENGINE_MIN_RUNTIME = 180  # the engine floors anything below this (runner/webrunner)
-# container_name in docker-compose.yml and SETUP's docker run; the one the script reads the log of
-# and restarts. SCRAPER_CONTAINER in .env for a renamed container or a second stack.
-ENGINE_CONTAINER = os.environ.get("SCRAPER_CONTAINER") or "gmaps-scraper"
+PY = "py" if os.name == "nt" else "python3"  # what the user types; the README says `py` on Windows
+RESTART = f"{PY} scripts/engine.py restart (Docker: docker compose restart)"
+# Messages of a job whose Chrome never started (engine/browser.py). Retrying fails the same way, and
+# Google has nothing to do with it.
+CHROME_START = ("No Chrome", "Chrome cannot start", "Chrome exited at once", "Could not start Chrome",
+                "Chrome did not open its DevTools port", "Could not connect to Chrome's DevTools port")
+BLOCKED = "unusual-traffic page"  # the engine's Error when Google refused this IP
 
 
 def poll_attempts(max_time):
     """How many status checks to make before giving up on a job.
 
     Derived from the job's own max_time, because that is how long the engine is allowed to
-    work: waiting any less abandons a job that is still running normally. The engine floors
-    max_time at ENGINE_MIN_RUNTIME, so even a tiny --max-time needs that much patience, and
-    POLL_CEILING stops an absurd value from parking the script for a day."""
-    engine_runtime = max(ENGINE_MIN_RUNTIME, int(max_time or 0))
-    budget = min(POLL_CEILING, engine_runtime + POLL_GRACE)
+    work: waiting any less abandons a job that is still running normally. POLL_CEILING stops an
+    absurd value from parking the script for a day."""
+    budget = min(POLL_CEILING, max(1, int(max_time or 0)) + POLL_GRACE)
     return max(1, budget // POLL_EVERY)
 
 
@@ -189,93 +190,7 @@ def load_rows(path):
     return rows
 
 
-def _local_docker():
-    return urllib.parse.urlparse(BASE).hostname in ("localhost", "127.0.0.1", "::1") \
-        and shutil.which("docker") is not None
-
-def engine_run_ended(since):
-    """True if the local engine's log shows a scraper run ending after `since` (UTC, ISO 8601).
-    The scripts run one job at a time, so that is this job's run."""
-    if not _local_docker():
-        return False
-    try:
-        out = subprocess.run(["docker", "logs", "--since", since, ENGINE_CONTAINER],
-                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return out.returncode == 0 and "scrapemate exited" in out.stdout + out.stderr
-
-def engine_error(job_id):
-    """The engine's own reason for a failed job, from the local log: "error scraping job <id>: ...".
-    A proxy typo, for example, otherwise surfaces only as a generic "failed"."""
-    if not _local_docker():
-        return ""
-    try:
-        out = subprocess.run(["docker", "logs", "--since", "15m", ENGINE_CONTAINER],
-                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
-    except (OSError, subprocess.SubprocessError):
-        return ""
-    if out.returncode != 0:
-        return ""
-    for line in reversed((out.stdout + out.stderr).splitlines()):
-        if f"error scraping job {job_id}" in line:
-            return line.split(f"job {job_id}:", 1)[-1].strip()[:200]
-    return ""
-
-def restart_engine():
-    """Restart the local engine and wait until its API answers again. Without the wait, the next
-    grid tile hit the proxy while the engine was still starting and failed with HTTP 502."""
-    if not _local_docker():
-        return False
-    try:
-        if subprocess.run(["docker", "restart", ENGINE_CONTAINER],
-                          capture_output=True, timeout=90).returncode != 0:
-            return False
-    except (OSError, subprocess.SubprocessError):
-        return False
-    for _ in range(30):  # up to a minute; it usually answers within a few seconds
-        try:
-            req("GET", "/api/v1/jobs")
-            return True
-        except Exception:
-            time.sleep(2)
-    return False
-
-def recover_stuck_job(job_id):
-    """Engine v1.18.x can finish a job, rows written, without marking it done, and then holds every
-    later job on "pending" until it restarts (gosom/google-maps-scraper#346). Keep the rows and
-    restart the local engine so the next scrape runs."""
-    rows = download_rows(job_id)
-    print(f"\n⚠ The engine finished this job but did not mark it done (gosom/google-maps-scraper#346); "
-          f"keeping its {len(rows)} rows.")
-    try:  # otherwise it sits in the job list as "working" forever, with no Download button in the web UI
-        req("DELETE", f"/api/v1/jobs/{job_id}")
-        print("  Deleted the stuck job from the engine's list; its rows are in your file.")
-    except Exception:
-        print(f"  Remove it from the job list yourself: curl -X DELETE {BASE}/api/v1/jobs/{job_id}")
-    if restart_engine():
-        print("  Restarted the engine, which would otherwise hold every later job on \"pending\".")
-    else:
-        print("  If the next scrape stays \"pending\", run: docker restart " + ENGINE_CONTAINER)
-    return rows
-
-PENDING_RESTART_AFTER = 6  # polls (~48 s) a new job may sit on "pending" before an idle engine is judged stuck
-FAILED_RETRY_WAIT = 60     # seconds before the one retry of a "failed" job (usually a passing Google block)
-
-
-def engine_idle(seconds=45):
-    """True if the local engine logged no scraper activity in the last `seconds`. A job that stays
-    "pending" on an idle engine means an earlier job (web UI, raw API) left it wedged
-    (gosom/google-maps-scraper#346); a busy engine is just finishing another job first."""
-    if not _local_docker():
-        return False
-    try:
-        out = subprocess.run(["docker", "logs", "--since", f"{seconds}s", ENGINE_CONTAINER],
-                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    # A failing `docker logs` (wrong container name, daemon down) must not read as "idle".
-    return out.returncode == 0 and "scrapemate" not in out.stdout + out.stderr
+FAILED_RETRY_WAIT = 60     # seconds before the one retry of a "failed" job (usually a passing error)
 
 
 class JobFailed(RuntimeError):
@@ -284,20 +199,28 @@ class JobFailed(RuntimeError):
 
 def run_job(body):
     """Create one engine job, poll it, download it -> (job_id, raw CSV rows). A job the engine marks
-    "failed" (usually a passing Google block) is retried once after a pause. Raises RuntimeError."""
+    "failed" is retried once after a pause, unless its Error says a retry cannot help (Chrome would
+    not start, the proxy failed, Google refused this IP). Raises RuntimeError."""
     for attempt in (1, 2):
         try:
             return _run_job_once(body)
         except JobFailed as e:
-            reason = e.args[1] if len(e.args) > 1 else engine_error(e.args[0])
-            said = f" The engine says: {reason}." if reason else ""
-            if "proxy" in reason.lower():  # a bad proxy fails the same way every time: do not retry
+            reason = e.args[1].strip().rstrip(".")
+            said = f" The engine says: {reason}." if reason else " The engine gave no reason."
+            if reason.startswith(CHROME_START):
+                raise RuntimeError(f"\n✗ Job failed: the engine could not start Chrome.{said}\n"
+                                   f"  Fix that and scrape again. If it fails the same way, restart the "
+                                   f"engine: {RESTART}")
+            if any(k in reason.upper() for k in ("PROXY", "SOCKS", "TUNNEL")):
                 raise RuntimeError(f"\n✗ Job failed: the proxy did not work.{said}\n"
-                                   "  This engine needs user:pass for socks5 proxies; an http:// proxy works without.")
+                                   "  Check its host and port; this engine takes no user:pass yet, so the "
+                                   "proxy must allow your IP address.")
+            if BLOCKED in reason:  # more searches from a rate-limited IP only extend the block
+                raise RuntimeError(f"\n✗ Job failed.{said}")
             if attempt == 2:
-                raise RuntimeError(f"\n✗ Job failed twice.{said} You may be rate-limited — wait or add proxies.")
-            print(f"\n⚠ Job failed.{said or ' Google may be throttling this IP.'} "
-                  f"Waiting {FAILED_RETRY_WAIT} s, then retrying once…")
+                raise RuntimeError(f"\n✗ Job failed twice.{said}\n  The engine's log has more: "
+                                   ".engine/engine.log (Docker: docker compose logs)")
+            print(f"\n⚠ Job failed.{said} Waiting {FAILED_RETRY_WAIT} s, then retrying once…")
             time.sleep(FAILED_RETRY_WAIT)
 
 
@@ -315,8 +238,7 @@ def _get(path):
         time.sleep(3)
 
 
-def _run_job_once(body, restarted=False):
-    since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+def _run_job_once(body):
     try:
         _, raw = req("POST", "/api/v1/jobs", body)
     except urllib.error.HTTPError as e:
@@ -328,73 +250,58 @@ def _run_job_once(body, restarted=False):
 
     attempts = poll_attempts(body.get("max_time"))
     print(f"▶ Polling (up to ~{attempts * POLL_EVERY // 60} min)…")
-    status, ended, pending, n_rows, last_rows = None, 0, 0, None, None
+    status = None
     for i in range(attempts):
         _, raw = _get(f"/api/v1/jobs/{job_id}")
-        status = json.loads(raw).get("Status")
+        job = json.loads(raw)
+        # Error: why the job failed, or why an "ok" job stopped early (max_time, a Google block).
+        status, error = job.get("Status"), str(job.get("Error") or "")
         progress = ""
         if status == "working":  # the engine writes rows as it goes, so the download shows progress
             try:
-                n_rows = len(download_rows(job_id))
-                progress = f", {n_rows} rows so far"
+                progress = f", {len(download_rows(job_id))} rows so far"
             except Exception:
                 pass
         print(f"\r  status: {str(status):<10} (attempt {i + 1}{progress})", end="", flush=True)
         if status == "ok":
-            print(); break
+            print()
+            if error:
+                print(f"ℹ The engine says: {error}")
+            return job_id, download_rows(job_id)
         if status == "failed":
-            raise JobFailed(job_id)
-        if status == "working" and not n_rows:
-            # A job the engine could not even start (a bad proxy, a driver error) stays "working"
-            # forever with no rows, and holds every later job on "pending". Read the engine's reason,
-            # drop the dead job, restart the engine and report.
-            reason = engine_error(job_id)
-            if reason:
-                try:
-                    req("DELETE", f"/api/v1/jobs/{job_id}")
-                except Exception:
-                    pass
-                restart_engine()
-                raise JobFailed(job_id, reason)
-        # Stuck (gosom#346): the engine log says the run ended and the row count has stopped moving.
-        # The second condition guards against a Docker VM clock that runs ahead of the host.
-        if status == "working" and n_rows == last_rows and engine_run_ended(since):
-            ended += 1
-            if ended > 2:  # the status normally flips within seconds of the run ending
-                return job_id, recover_stuck_job(job_id)
-        last_rows = n_rows
-        if status == "pending":
-            pending += 1
-            if pending % PENDING_RESTART_AFTER == 0 and not restarted and engine_idle():
-                # Delete the pending job first, or the restarted engine runs it as well as the new one.
-                print("\n⚠ The engine has not started this job and shows no activity: an earlier job left it "
-                      "stuck (gosom/google-maps-scraper#346). Restarting the engine and re-creating the job…")
-                try:
-                    req("DELETE", f"/api/v1/jobs/{job_id}")
-                except Exception:
-                    pass
-                if not restart_engine():
-                    raise RuntimeError(f"\n✗ The engine never started this job and could not be restarted. "
-                                       f"Run: docker restart {ENGINE_CONTAINER}")
-                return _run_job_once(body, restarted=True)
+            print()
+            try:  # the engine keeps the rows of a job it was stopped in the middle of
+                rows = download_rows(job_id)
+            except Exception:
+                rows = []
+            if rows:
+                print(f"⚠ The job failed part way ({error or 'no reason given'}); keeping its {len(rows)} rows.")
+                return job_id, rows
+            raise JobFailed(job_id, error)
         time.sleep(POLL_EVERY)
-    else:
-        # The engine writes rows as it goes, and v1.18.x can leave a finished job stuck on
-        # "working" (gosom/google-maps-scraper#346), so take whatever is on disk.
-        rows = download_rows(job_id)
-        if not rows:
-            raise RuntimeError(
-                f"\n✗ Gave up waiting after ~{attempts * POLL_EVERY // 60} min with no rows yet. The "
-                f"engine keeps the job, so check it later:\n"
-                f"    curl {BASE}/api/v1/jobs/{job_id}\n"
-                f"  and once its Status is \"ok\", download the CSV with\n"
-                f"    curl -o results.csv {BASE}/api/v1/jobs/{job_id}/download")
-        print(f"\n⚠ Job still \"{status}\" after ~{attempts * POLL_EVERY // 60} min; "
-              f"keeping the {len(rows)} rows it has written. If the next scrape stays \"pending\", "
-              f"restart the engine: docker restart {ENGINE_CONTAINER}")
-        return job_id, rows
+    # Still pending or working: the engine may have run an earlier job first. It keeps this one, so
+    # take whatever it has written.
+    rows = download_rows_or_none(job_id)
+    if not rows:
+        raise RuntimeError(
+            f"\n✗ Gave up waiting after ~{attempts * POLL_EVERY // 60} min with no rows yet (status "
+            f"\"{status}\"). The engine keeps the job, so check it later:\n"
+            f"    curl {BASE}/api/v1/jobs/{job_id}\n"
+            f"  and once its Status is \"ok\", download the CSV with\n"
+            f"    curl -o results.csv {BASE}/api/v1/jobs/{job_id}/download")
+    print(f"\n⚠ Job still \"{status}\" after ~{attempts * POLL_EVERY // 60} min; keeping the {len(rows)} "
+          f"rows it has written. It keeps running in the engine: {BASE}/api/v1/jobs/{job_id}")
+    return job_id, rows
 
-    return job_id, download_rows(job_id)
+
+def download_rows_or_none(job_id):
+    """The rows so far, or None when the engine has written none (404 until its first keyword)."""
+    try:
+        return download_rows(job_id)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise
 
 
 def download_rows(job_id):
@@ -808,7 +715,7 @@ def scrape_place(a, body, city, keywords):
         job_id = job_id or jid
         rows = dedupe(rows + cell_rows)
         print(f"  cell {i}/{len(cells)}: {len(cell_rows)} rows, {len(rows)} unique so far")
-    # radius does not clip results in normal mode, so tiles leak outside the city
+    # the engine does not clip results to the tile, so tiles leak outside the city
     kept = [r for r in rows if in_bbox(r, bbox)]
     print(f"  dropped {len(rows) - len(kept)} rows outside the city box")
     return job_id, kept, skipped, len(cells)
@@ -824,8 +731,8 @@ def main():
     ap.add_argument("--city", action="append",
                     help="city/place to auto-geocode for lat/lon; repeatable, one run per city into one file")
     ap.add_argument("--proxy", action="append", metavar="URL",
-                    help="proxy for the engine, repeatable: http://, https://, socks5:// or socks5h://; "
-                         "this engine needs user:pass@ for socks5; the engine rotates them")
+                    help="proxy for the engine: http://, https://, socks5:// or socks5h://host:port, "
+                         "without user:pass (not supported yet); repeatable, the engine uses the first")
     ap.add_argument("--depth", type=int, default=5)
     # The engine passes this to Google as the interface language, which decides the language of
     # the category names it returns (and nudges which listings come back). It has to match the
@@ -863,7 +770,9 @@ def main():
                          "(google_workspace, microsoft_365, other, none)")
     f = ap.add_argument_group("filters", "applied before the email crawl, except --has-email")
     f.add_argument("--min-rating", type=float, metavar="X", help="keep rows rated X or higher")
-    f.add_argument("--min-reviews", type=int, metavar="N", help="keep rows with N or more reviews")
+    f.add_argument("--min-reviews", type=int, metavar="N",
+                   help="keep rows with N or more reviews (ignored while review_count is empty, as with "
+                        "this engine)")
     f.add_argument("--no-website", action="store_true", help="keep only businesses without a website")
     f.add_argument("--has-phone", action="store_true", help="keep only rows with a phone number")
     f.add_argument("--has-email", action="store_true", help="keep only rows where an email was found")
@@ -881,7 +790,7 @@ def main():
     if a.depth < 1:
         sys.exit("✗ --depth must be 1 or more.")
     if a.max_time < 1:
-        sys.exit("✗ --max-time must be 1 or more seconds (the engine runs a job for at least 180).")
+        sys.exit("✗ --max-time must be 1 or more seconds.")
     if a.limit is not None and a.limit < 1:
         sys.exit("✗ --limit must be 1 or more.")
     if a.has_email and not a.email:
@@ -913,9 +822,9 @@ def main():
         print("    Google (clears in minutes–hours; returns empty/failed jobs meanwhile). For big or")
         print("    repeated runs, add proxies. Proceeding…\n")
 
-    # Health check. Right after `docker compose up -d` the proxy answers 502 while the engine starts
-    # (up to a minute), and the README's next line runs at once, so wait for that. Nothing listening at
-    # all (connection refused) means the stack is down: say so after 10 s, not after a minute of dots.
+    # Health check. Right after `docker compose up -d` Docker accepts connections and drops them while
+    # the engine starts (a few seconds), and the README's next line runs at once, so wait for that.
+    # Nothing listening at all (connection refused) means no engine: say so after 10 s, not a minute.
     refused, err = 0, None
     for i in range(30):
         try:
@@ -934,16 +843,16 @@ def main():
         print("\r  waiting for the engine to start" + "." * (i + 1), end="", flush=True)
         time.sleep(2)
     if err is not None:
-        sys.exit(f"\n✗ Scraper not reachable at {BASE}. Is Docker Desktop open? Start the engine with "
-                 f"'docker compose up -d' in the kit folder, wait 10 seconds, then try again.\n  ({err})")
+        sys.exit(f"\n✗ Scraper not reachable at {BASE}. Start the engine in the kit folder with "
+                 f"'{PY} scripts/engine.py start' (or 'docker compose up -d' with Docker Desktop open), "
+                 f"then try again.\n  ({err})")
     if i:
         print()
 
     body = {"keywords": keywords, "lang": a.lang, "zoom": 15,
             "fast_mode": False, "radius": 10000,
-            # The engine's own email pass visits every website in a browser, one per worker: it took
-            # most of each job and found fewer emails than the crawl below (OpenLeadFinder's
-            # approach), so the engine only reads Google Maps.
+            # The engine's own email pass reads homepages only; the crawl below also reads contact and
+            # about pages and decodes obfuscated addresses, so the engine only reads Google Maps.
             "depth": a.depth, "email": False, "max_time": a.max_time}
     if a.proxy:
         body["proxies"] = a.proxy
@@ -959,6 +868,12 @@ def main():
         print(f"⚠ Incomplete: {failed_places} of {len(cities)} places returned nothing (see the ✗ lines above).")
     for r in rows:
         r["website"] = clean_website(r.get("website", ""))
+    if a.min_reviews and rows and not any(r.get("review_count") for r in rows):
+        # The engine leaves review_count empty: Google shows a signed-out headless browser no review
+        # counts. Filtering on it would read every count as 0 and drop every row.
+        print("⚠ --min-reviews ignored: this engine leaves review_count empty (Google shows it no review "
+              "counts), so the filter would drop every row. --min-rating works.")
+        a.min_reviews = None
     before = len(rows)
     rows = [r for r in dedupe(rows, exclude=excluded) if keep_row(r, a)]
     if len(rows) != before:

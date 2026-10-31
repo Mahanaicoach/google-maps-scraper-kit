@@ -7,7 +7,7 @@ No network, no Chrome, no Docker.
     python3 engine/test_engine.py
 """
 import csv, hashlib, http.client, importlib.util, io, json, os, re, shutil, socket, subprocess, sys, tempfile
-import threading, time, unittest, zipfile
+import threading, time, unittest, unittest.mock, zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -409,6 +409,24 @@ class ApiKey(Server):
         self.assertEqual(self.call("GET", "/")[0], 200)  # the page holds no data; it asks for the key
 
 
+class Bind(Fakes):
+    """--host 0.0.0.0 is for the Docker image; elsewhere the engine keeps to loopback."""
+
+    def test_any_address_has_no_ipv6_twin(self):
+        # Mocked: a real 0.0.0.0 bind would open a port to the network on the machine running the tests.
+        with unittest.mock.patch.object(serve, "Server") as v4, unittest.mock.patch.object(serve, "Server6") as v6:
+            serve.make_servers(0, self.store, self.worker, host="0.0.0.0")
+        v4.assert_called_once_with(("0.0.0.0", 0), serve.Handler)
+        v6.assert_not_called()
+
+    def test_any_address_refused_outside_a_container(self):
+        argv = ["serve.py", "--host", "0.0.0.0", "--port", "0", "--data", self.dir]
+        with unittest.mock.patch.object(serve, "in_container", return_value=False), \
+             unittest.mock.patch.object(sys, "argv", argv), self.assertRaises(SystemExit) as cm:
+            serve.main()
+        self.assertIn("Docker image only", str(cm.exception))
+
+
 class ScrapeClient(Server):
     """scripts/scrape.py's own create, poll and download against this engine, with the worker running."""
 
@@ -420,7 +438,6 @@ class ScrapeClient(Server):
             import scrape
             scrape.BASE = os.environ["SCRAPER_BASE_URL"]
             scrape.POLL_EVERY = 1
-            scrape._local_docker = lambda: False  # never touch a real Docker engine from a test
             self.worker.start()
             out = io.StringIO()
             saved, sys.stdout = sys.stdout, out

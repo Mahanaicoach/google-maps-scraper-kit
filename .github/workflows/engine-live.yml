@@ -1,7 +1,7 @@
-# The kit's own engine against real Google Maps, once per platform: start it the way a user does,
-# run one small scrape through scripts/scrape.py, and require places back. Runs when the engine
-# changes, or by hand (Actions > engine-live > Run workflow). The logs print counts only: scraped
-# names, phones and emails never reach them.
+# The kit's own engine against real Google Maps, once per platform and once in Docker: start it the
+# way a user does, run one small scrape through scripts/scrape.py, and require places back. Runs when
+# the engine or the scripts change, or by hand (Actions > engine-live > Run workflow). The logs print
+# counts only: scraped names, phones and emails never reach them.
 name: engine-live
 on:
   workflow_dispatch:
@@ -9,6 +9,9 @@ on:
     paths:
       - "engine/**"
       - "scripts/engine.py"
+      - "scripts/scrape.py"
+      - "Dockerfile"
+      - "docker-compose.yml"
       - ".github/workflows/engine-live.yml"
 permissions:
   contents: read
@@ -57,3 +60,28 @@ jobs:
       - name: stop
         if: always()
         run: python scripts/engine.py stop
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker compose up (builds the engine image), as SETUP.md says
+        run: docker compose up -d --build
+      - name: scrape (depth 2, no email crawl)
+        run: |
+          start=$(date +%s)
+          python3 scripts/scrape.py "coffee shops in Austin TX" 30.2672 -97.7431 --depth 2 --no-email --out leads.csv > scrape.log 2>&1 || true
+          echo "seconds=$(( $(date +%s) - start ))"
+          grep -v "^  •" scrape.log | tr '\r' '\n' | grep -v "^  status:" || true
+          python3 - <<'PY'
+          import csv, sys
+          rows = list(csv.DictReader(open("leads.csv", encoding="utf-8-sig")))
+          fill = {k: sum(1 for r in rows if r.get(k)) for k in ("title", "phone", "website", "address", "review_rating")}
+          print(f"places={len(rows)}", fill)
+          sys.exit(0 if rows else 1)
+          PY
+      - name: engine log (counts only)
+        if: always()
+        run: docker compose logs --no-log-prefix || true
+      - if: always()
+        run: docker compose down -v

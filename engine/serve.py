@@ -4,10 +4,11 @@
     python3 engine/serve.py               # port from SCRAPER_PORT (environment, then .env), default 8080
     python3 engine/serve.py --port 8190
 
-Normally started by `python3 scripts/engine.py start`. It speaks the API of the engine the kit used
+Normally started by `python3 scripts/engine.py start`, or by `docker compose up -d` (the Dockerfile). It speaks the API of the engine the kit used
 before (POST/GET/DELETE /api/v1/jobs, /api/v1/jobs/{id}/download, the same job body and "Status"
 values), so scripts/scrape.py, the skill and the slash commands work unchanged. It listens on
-127.0.0.1 (and ::1) only and refuses a foreign Host (DNS rebinding, 421) or Origin (cross-site
+127.0.0.1 (and ::1) only, or on 0.0.0.0 inside the Docker image, where Docker publishes the port on
+the host's 127.0.0.1 only. Either way it refuses a foreign Host (DNS rebinding, 421) or Origin (cross-site
 posts, 403); with SCRAPER_API_KEY set it also wants that X-API-Key (401). No telemetry: it talks to
 Google Maps, and for email: true jobs to the businesses' own websites, nothing else.
 Standard library only.
@@ -217,7 +218,7 @@ class Handler(BaseHTTPRequestHandler):
         self.reply(code, {"code": code, "message": message})
 
     def guard(self):
-        """The checks ui-branding.conf made in front of the old engine, plus the optional key."""
+        """Host (DNS rebinding) and Origin (cross-site posts) checks, plus the optional key."""
         if not HOST_OK.match(self.headers.get("Host", "")):
             self.close_connection = True
             self.fail(421, "this engine answers to localhost only")
@@ -341,16 +342,22 @@ class Server6(Server):
     address_family = socket.AF_INET6
 
 
-def make_servers(port, store, worker, api_key=""):
-    """The server on 127.0.0.1:port, plus one on [::1]:port when this machine has IPv6 loopback
-    (Windows tries ::1 first for "localhost" and waits ~2 s before falling back to 127.0.0.1)."""
+def in_container():
+    """True inside a Docker or Podman container (each leaves its marker file at the root)."""
+    return os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
+
+
+def make_servers(port, store, worker, api_key="", host="127.0.0.1"):
+    """The server on host:port. On 127.0.0.1 also one on [::1]:port when this machine has IPv6
+    loopback (Windows tries ::1 first for "localhost" and waits ~2 s before falling back)."""
     if port and port_taken(port):
         raise OSError(f"something already listens on port {port}")
-    servers = [Server(("127.0.0.1", port), Handler)]
-    try:
-        servers.append(Server6(("::1", servers[0].server_address[1]), Handler))
-    except OSError:
-        pass
+    servers = [Server((host, port), Handler)]
+    if host == "127.0.0.1":
+        try:
+            servers.append(Server6(("::1", servers[0].server_address[1]), Handler))
+        except OSError:
+            pass
     for s in servers:
         s.store, s.worker, s.api_key = store, worker, api_key
     return servers
@@ -360,7 +367,15 @@ def main():
     ap = argparse.ArgumentParser(description="The kit's Google Maps engine (local HTTP API and web UI).")
     ap.add_argument("--port", type=int, help="default: SCRAPER_PORT from the environment or .env, else 8080")
     ap.add_argument("--data", default=os.path.join(browser.HOME, "data"), help="jobs and results folder")
+    ap.add_argument("--host", default="127.0.0.1", choices=("127.0.0.1", "0.0.0.0"),
+                    help="0.0.0.0 is for the Docker image only, where Docker publishes the port on the "
+                         "host's 127.0.0.1 (default: 127.0.0.1)")
     a = ap.parse_args()
+    if a.host != "127.0.0.1" and not in_container():
+        # On a laptop or server 0.0.0.0 opens the engine to the network: the Host check stops DNS
+        # rebinding from a browser, not a machine that sends "Host: localhost" itself.
+        sys.exit("✗ --host 0.0.0.0 is for the Docker image only. On this machine the engine listens on "
+                 "127.0.0.1, which keeps other machines out.")
     env = read_env()
     try:
         port = a.port or int(env["SCRAPER_PORT"] or 8080)
@@ -373,12 +388,14 @@ def main():
         log(f"{n} job(s) were still working when the engine last stopped: marked failed, rows kept")
     worker = jobs.Worker(store, log)
     try:
-        servers = make_servers(port, store, worker, env["SCRAPER_API_KEY"])
+        servers = make_servers(port, store, worker, env["SCRAPER_API_KEY"], a.host)
     except OSError as e:
-        sys.exit(f"✗ Cannot listen on 127.0.0.1:{port}: {e}")
+        sys.exit(f"✗ Cannot listen on {a.host}:{port}: {e}")
     worker.start()
     chrome = browser.find_chrome()
-    log(f"engine {VERSION} on http://localhost:{port} (browser: {chrome or 'none found'}"
+    where = f"http://localhost:{port}" if a.host == "127.0.0.1" else \
+        f"{a.host}:{port} in this container, published on the host's 127.0.0.1"
+    log(f"engine {VERSION} on {where} (browser: {chrome or 'none found'}"
         f"{', API key required' if env['SCRAPER_API_KEY'] else ''})")
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     for s in servers[1:]:

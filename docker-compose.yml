@@ -1,48 +1,24 @@
-# Runs the kit's engine, the open-source Google Maps scraper (gosom/google-maps-scraper), locally.
+# Runs the kit's own Google Maps engine (engine/serve.py with Debian's Chromium, see Dockerfile).
 # Serves the web UI and API on http://localhost:8080. Host port: SCRAPER_PORT in .env, default 8080.
-# The image has no built-in auth, so the port is bound to 127.0.0.1 only. That localhost binding is
-# the security boundary. Do not change the mapping to 0.0.0.0 or a public interface without an auth
-# proxy in front.
+# The port is published on 127.0.0.1 only, so other machines cannot reach it: that localhost binding
+# is the security boundary. Inside the container the engine listens on 0.0.0.0 so Docker can forward
+# to it, and refuses any request whose Host or Origin is not localhost. Do not change the mapping to
+# 0.0.0.0 or a public interface.
+# No Docker? `python3 scripts/engine.py start` runs the same engine directly on this machine.
 
 services:
   google-maps-scraper:
-    # Engine image, pinned to a known-good release so runs are reproducible. Bump it deliberately.
-    # Bumped from v1.15.0 on 2026-09-23: that build's embedded Playwright driver (1.57.0)
-    # returns 404 from Microsoft's CDN, which purges old driver builds. v1.18.1 ships a driver
-    # version that is still hosted.
-    # v1.18.1 publishes both amd64 and arm64, so Apple Silicon (M1/M2/M3) runs it natively.
-    # Only older tags are amd64 and need the 'platform' line below. Default: commented out.
-    image: gosom/google-maps-scraper:v1.18.1
-    # platform: linux/amd64
-    # SCRAPER_CONTAINER in .env renames both containers, for a second copy of the kit on one machine.
-    # The scripts read the same variable, so the stuck-job recovery restarts the right engine.
-    container_name: ${SCRAPER_CONTAINER:-gmaps-scraper}
+    build: .
     restart: unless-stopped
-    # -c: parallel workers. The engine's own default resolves to 1 in this image, so a depth 5 job
-    # with emails visits every listing and website one at a time (~8 min). Most of that is business
-    # websites, not Google. Lower it if Google starts throttling you; raise it with proxies.
-    command: ["-web", "-data-folder", "/gmapsdata", "-c", "4"]
-    # No published port: the engine is reached only through the ui service below.
-    volumes:
-      # Only job results. Do not mount a named volume over /opt: the image already ships Chromium at
-      # /opt/browsers and the Playwright driver at /opt/ms-playwright-go, so a volume there shadows
-      # both, and after an image bump it keeps serving the OLD browsers from the volume — which is
-      # how the driver-mismatch failures mentioned above come back. Restarts download nothing
-      # either way: the browsers are baked into the image.
-      - gmaps_data:/gmapsdata
-
-  # Serves the engine's UI and API with the kit's own GitHub and sponsor links (ui-branding.conf).
-  ui:
-    image: nginx:1.27-alpine
-    container_name: ${SCRAPER_CONTAINER:-gmaps-scraper}-ui
-    restart: unless-stopped
-    depends_on:
-      - google-maps-scraper
+    init: true  # reaps Chromium's helper processes, which the engine would leave as zombies as PID 1
+    environment:
+      # Blank by default. When set in .env, the engine wants it as an X-API-Key header.
+      SCRAPER_API_KEY: ${SCRAPER_API_KEY:-}
     ports:
       # Host port comes from SCRAPER_PORT in .env (default 8080). The container side stays 8080.
       - "127.0.0.1:${SCRAPER_PORT:-8080}:8080"   # localhost only, see the warning above
     volumes:
-      - ./ui-branding.conf:/etc/nginx/conf.d/default.conf:ro
+      - engine_data:/kit/.engine/data  # jobs and results, kept across restarts and rebuilds
 
 volumes:
-  gmaps_data:
+  engine_data:

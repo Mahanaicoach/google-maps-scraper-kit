@@ -7,7 +7,7 @@
     python3 scripts/engine.py stop
 
 Standard library only. The engine (engine/serve.py) serves http://localhost:8080 (SCRAPER_PORT in
-.env) with the same API the scripts, slash commands and web UI use with Docker. It drives an
+.env), the same engine and API that `docker compose up -d` runs in a container. It drives an
 installed Chrome, Chromium, Edge or Brave; on a machine with none, `start` downloads Chrome for
 Testing's headless shell, pinned by version and SHA-256. Everything lives in .engine/ in the kit
 folder; delete it to remove the engine and its results.
@@ -47,7 +47,8 @@ def public_port():
 
 
 def probe(port, timeout=2):
-    """"ours" (this kit's engine answers), "other" (something else, e.g. the Docker engine) or None."""
+    """"ours" (this kit's engine answers, here or in Docker), "other" (something else, such as the
+    kit's 1.x Docker engine) or None."""
     try:
         with _NO_PROXY.open(f"http://127.0.0.1:{port}/api/v1/jobs", timeout=timeout) as r:
             return "ours" if (r.headers.get("X-Engine") or "").startswith(MARK) else "other"
@@ -161,7 +162,7 @@ def trim_log():
 
 def busy(port):
     hint = f"netstat -ano | findstr :{port}" if os.name == "nt" else f"lsof -nP -iTCP:{port} -sTCP:LISTEN"
-    sys.exit(f"✗ Port {port} is in use. Is the Docker engine running? Stop it with `docker compose stop`,\n"
+    sys.exit(f"✗ Port {port} is in use. Is the kit's older Docker engine running? Stop it with `docker compose stop`,\n"
              f"  or set SCRAPER_PORT in .env to a free port. To see what holds it: {hint}")
 
 
@@ -241,7 +242,12 @@ def stop(quiet=False):
     st = read_state()
     if not st:
         if not quiet:
-            print("The engine is not running.")
+            port = public_port()
+            if probe(port) == "ours":  # started by docker compose, not by this script
+                print(f"ℹ The engine on port {port} was not started by engine.py; it runs in Docker, probably.\n"
+                      "  Stop that one with: docker compose stop")
+            else:
+                print("The engine is not running.")
         return
     if st.get("pid") and not kill(st["pid"]):
         how = "taskkill /PID {} /T /F" if os.name == "nt" else "kill {}"
@@ -262,7 +268,7 @@ def status():
         st = read_state() or {}
         print(f"✓ Running on http://localhost:{port}" + (f"  (browser: {st['chrome']})" if st.get("chrome") else ""))
     elif seen == "other":
-        print(f"ℹ Port {port} answers, but not as this kit's engine (the Docker engine, probably).")
+        print(f"ℹ Port {port} answers, but not as this kit's engine (the kit's older Docker engine, probably).")
         sys.exit(1)
     else:
         print(f"✗ Not running. Start it with: {PY} scripts/engine.py start")

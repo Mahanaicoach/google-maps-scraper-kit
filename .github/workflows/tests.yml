@@ -1,6 +1,7 @@
 # Two jobs, no Google traffic. "offline" is the Python client and the kit's own engine on the three
-# desktop platforms a new user installs on. "fresh-install" is a new user's first ten minutes on Linux minus the scrape:
-# clone, docker compose up, the health check, the patched web UI and API docs, the proxy's checks.
+# desktop platforms a new user installs on. "fresh-install" is a new user's first ten minutes on Linux
+# minus the scrape: clone, docker compose up (builds the engine image), the health check, the web UI,
+# the engine's own checks. engine-live.yml runs the scrapes.
 name: tests
 on:
   push:
@@ -29,23 +30,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: a .env and a results file the image must never contain
+        run: |
+          echo "SCRAPER_PORT=8080" > .env
+          echo "title,phone" > results-ci.csv
       - run: docker compose config -q
-      - run: docker compose up -d
+      - run: docker compose up -d --build
       - name: health check prints null, as SETUP.md says
         run: |
           for i in $(seq 1 45); do curl -sf http://localhost:8080/api/v1/jobs >/dev/null && break; sleep 2; done
           test "$(curl -s http://localhost:8080/api/v1/jobs)" = null
-      - name: web UI is patched (kit links, emails on, Redoc pinned)
+      - name: the kit's engine, published on 127.0.0.1 only, not root, nothing but the engine in the image
         run: |
-          curl -s http://localhost:8080/ | grep -q 'github.com/Mahanaicoach/google-maps-scraper-kit'
-          curl -s http://localhost:8080/ | grep -q 'id="email" name="email" checked'
-          curl -s http://localhost:8080/api/docs | grep -q 'redoc/v2.5.0/'
-          curl -s http://localhost:8080/ | grep -q 'assets/sponsors/sponsors.json'
-      - name: proxy refuses other hosts and other sites
+          curl -s -D - -o /dev/null http://localhost:8080/api/v1/jobs | grep -qi '^x-engine: gmskit-engine/'
+          test "$(docker compose port google-maps-scraper 8080)" = 127.0.0.1:8080
+          test "$(docker compose exec -T google-maps-scraper id -u)" != 0
+          test "$(docker compose exec -T google-maps-scraper ls -A /kit | tr '\n' ' ')" = ".engine engine "
+      - name: web UI links the kit
+        run: curl -s http://localhost:8080/ | grep -q 'github.com/Mahanaicoach/google-maps-scraper-kit'
+      - name: engine refuses other hosts and other sites
         run: |
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.com' http://localhost:8080/api/v1/jobs)" = 421
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Origin: https://evil.com' http://localhost:8080/api/v1/jobs)" = 403
-      - name: engine validates a job body through the proxy
+      - name: engine validates a job body
         run: |
           curl -s -X POST -H 'Content-Type: application/json' -d '{}' http://localhost:8080/api/v1/jobs | grep -q 'missing name'
       - if: always()

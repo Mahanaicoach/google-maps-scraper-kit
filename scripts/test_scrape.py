@@ -10,7 +10,6 @@ _spec = importlib.util.spec_from_file_location(
     "scrape", os.path.join(os.path.dirname(os.path.abspath(__file__)), "scrape.py"))
 scrape = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(scrape)
-scrape.ENGINE_CONTAINER = "kit-tests-no-such-container"  # never read or restart a real engine
 
 BBOX = ["30.0", "30.5", "-98.0", "-97.5"]  # Nominatim order: south, north, west, east
 
@@ -71,172 +70,131 @@ class InBbox(unittest.TestCase):
 
 class PollAttempts(unittest.TestCase):
     def test_follows_max_time(self):
-        # The budget tracks max_time instead of the old fixed 120 attempts (960s), which
-        # gave up on a batch the engine was still working through.
-        self.assertEqual(scrape.poll_attempts(600), (600 + 120) // 8)      # 90
-        self.assertEqual(scrape.poll_attempts(3600), (3600 + 120) // 8)    # 465, was 120
-        self.assertGreater(scrape.poll_attempts(3600), 120)
-
-    def test_floors_at_engine_minimum(self):
-        # The engine runs a job for at least 180s however small max_time is, so waiting
-        # only max_time would abandon it.
-        for tiny in (1, 60, 179, 180):
-            self.assertEqual(scrape.poll_attempts(tiny), (180 + 120) // 8)
-        self.assertEqual(scrape.poll_attempts(0), (180 + 120) // 8)
-        self.assertEqual(scrape.poll_attempts(None), (180 + 120) // 8)
+        # The budget tracks max_time instead of a fixed number of attempts, which gave up on a
+        # batch the engine was still working through.
+        self.assertEqual(scrape.poll_attempts(600), (600 + 120) // scrape.POLL_EVERY)
+        self.assertEqual(scrape.poll_attempts(3600), (3600 + 120) // scrape.POLL_EVERY)
+        self.assertEqual(scrape.poll_attempts(1), (1 + 120) // scrape.POLL_EVERY)  # no 180 s floor any more
+        self.assertEqual(scrape.poll_attempts(None), scrape.poll_attempts(1))
 
     def test_ceiling_and_never_zero(self):
-        self.assertEqual(scrape.poll_attempts(10 ** 9), 7200 // 8)         # clamped at 2h
+        self.assertEqual(scrape.poll_attempts(10 ** 9), 7200 // scrape.POLL_EVERY)  # clamped at 2h
         self.assertGreaterEqual(scrape.poll_attempts(-5), 1)
 
 
-class StuckJob(unittest.TestCase):
-    """A job the engine never flips to "ok" (gosom/google-maps-scraper#346) keeps its written rows."""
-    def run_stuck(self, csv_body, run_ended=False, attempts=2):
-        polls, deleted = [], []
-        def fake_req(method, path, body=None):
-            if method == "POST":
-                return 201, b'{"id":"stuck"}'
-            if method == "DELETE":
-                deleted.append(path)
-                return 200, b""
-            if path.endswith("/download"):
-                return 200, csv_body
-            polls.append(path)
-            return 200, b'{"Status":"working"}'
-        with mock.patch.object(scrape, "req", fake_req), mock.patch.object(scrape.time, "sleep"), \
-             mock.patch.object(scrape, "poll_attempts", return_value=attempts), \
-             mock.patch.object(scrape, "engine_run_ended", return_value=run_ended), \
-             mock.patch.object(scrape, "restart_engine", return_value=True) as restart, \
-             redirect_stdout(io.StringIO()):
-            job_id, rows = scrape.run_job({"max_time": 1})
-        return rows, len(polls), restart.called, deleted
-
-    def test_keeps_written_rows(self):
-        rows, _, restarted, deleted = self.run_stuck(b"title,phone\nA,1\nB,2\n")
-        self.assertEqual([r["title"] for r in rows], ["A", "B"])
-        self.assertFalse(restarted)
-        self.assertEqual(deleted, [])  # the budget ran out, but the job may still be running
-
-    def test_no_rows_still_errors(self):
-        with self.assertRaises(RuntimeError):
-            self.run_stuck(b"")
-
-    def test_ended_run_recovered_in_seconds_and_engine_restarted(self):
-        # The engine log says the run ended and the row count has stopped moving for 3 polls: stop
-        # after 4 polls (about 32 s) instead of the whole budget, keep the rows, restart the engine.
-        rows, polls, restarted, deleted = self.run_stuck(b"title\nA\n", run_ended=True, attempts=90)
-        self.assertEqual([r["title"] for r in rows], ["A"])
-        self.assertEqual(polls, 4)
-        self.assertTrue(restarted)
-        self.assertEqual(deleted, ["/api/v1/jobs/stuck"])  # no longer a "working" ghost in the job list
-
-    def test_remote_engine_is_never_restarted(self):
-        with mock.patch.object(scrape, "BASE", "http://scraper.example:8080"):
-            self.assertFalse(scrape.engine_run_ended("2026-01-01T00:00:00Z"))
-            self.assertFalse(scrape.engine_idle())
-            self.assertFalse(scrape.restart_engine())
+def run_jobs(jobs, attempts=50, downloads=None):
+    """Drive scrape.run_job against a fake engine. `jobs` holds one list of (Status, Error) polls per
+    job the script creates; `downloads` maps a job id to its CSV (404 when missing).
+    -> (result or the RuntimeError, job count, the sleeps, the printed text)."""
+    posts, it, out = [], None, io.StringIO()
+    downloads = downloads or {}
+    def fake_req(method, path, body=None):
+        nonlocal it
+        if method == "POST":
+            posts.append(body)
+            it = iter(jobs[len(posts) - 1])
+            return 201, b'{"id":"j%d"}' % len(posts)
+        jid = path.split("/")[4]
+        if path.endswith("/download"):
+            if jid not in downloads:
+                raise scrape.urllib.error.HTTPError(path, 404, "no results", {}, io.BytesIO(b""))
+            return 200, downloads[jid]
+        status, error = next(it)
+        return 200, json.dumps({"ID": jid, "Status": status, "Error": error}).encode()
+    with mock.patch.object(scrape, "req", fake_req), mock.patch.object(scrape.time, "sleep") as slept, \
+         mock.patch.object(scrape, "poll_attempts", return_value=attempts), redirect_stdout(out):
+        try:
+            result = scrape.run_job({"max_time": 1})
+        except RuntimeError as e:
+            result = e
+    return result, len(posts), slept, out.getvalue()
 
 
-class PendingAndFailed(unittest.TestCase):
-    def run_statuses(self, statuses, idle=True):
-        """Drive run_job through a status sequence; count job creations and engine restarts."""
-        posts, deleted, it = [], [], iter(statuses)
-        def fake_req(method, path, body=None):
-            if method == "POST":
-                posts.append(body)
-                return 201, b'{"id":"j%d"}' % len(posts)
-            if method == "DELETE":
-                deleted.append(path)
-                return 200, b""
-            if path.endswith("/download"):
-                return 200, b"title\nA\n"
-            return 200, json.dumps({"Status": next(it)}).encode()
-        with mock.patch.object(scrape, "req", fake_req), mock.patch.object(scrape.time, "sleep") as slept, \
-             mock.patch.object(scrape, "poll_attempts", return_value=50), \
-             mock.patch.object(scrape, "engine_run_ended", return_value=False), \
-             mock.patch.object(scrape, "engine_idle", return_value=idle), \
-             mock.patch.object(scrape, "restart_engine", return_value=True) as restart, \
-             redirect_stdout(io.StringIO()):
-            job_id, rows = scrape.run_job({"max_time": 1})
-        return job_id, rows, len(posts), restart.call_count, slept, deleted
+class JobOutcomes(unittest.TestCase):
+    """What the script does with each Status and Error the engine reports."""
+    CSV = b"title,phone\nA,1\nB,2\n"
 
-    def test_engine_error_reads_the_failed_job_line(self):
-        log = mock.Mock(returncode=0, stdout="x\n2026/10/30 22:38:59 error scraping job j9: failed to start auth proxy for socks5://h:1: username and password are required\n", stderr="")
-        with mock.patch.object(scrape, "_local_docker", return_value=True), \
-             mock.patch.object(scrape.subprocess, "run", return_value=log):
-            self.assertTrue(scrape.engine_error("j9").startswith("failed to start auth proxy"))
-            self.assertEqual(scrape.engine_error("other"), "")
+    def test_ok(self):
+        (jid, rows), posts, _, text = run_jobs([[("pending", ""), ("working", ""), ("ok", "")]],
+                                               downloads={"j1": self.CSV})
+        self.assertEqual((jid, [r["title"] for r in rows], posts), ("j1", ["A", "B"], 1))
+        self.assertNotIn("engine says", text)
 
-    def test_pending_on_idle_engine_restarts_once(self):
-        # An earlier web UI job wedged the engine: our job never leaves "pending". Delete it, restart,
-        # create it again, and never loop on a second pending streak.
-        statuses = ["pending"] * scrape.PENDING_RESTART_AFTER + ["pending"] * (scrape.PENDING_RESTART_AFTER + 2) + ["working", "ok"]
-        job_id, rows, posts, restarts, _, deleted = self.run_statuses(statuses)
-        self.assertEqual((job_id, posts, restarts, deleted), ("j2", 2, 1, ["/api/v1/jobs/j1"]))
-        self.assertEqual([r["title"] for r in rows], ["A"])
-
-    def test_pending_on_busy_engine_waits(self):
-        # The engine is still running someone else's job: pending is normal, never restart.
-        statuses = ["pending"] * (scrape.PENDING_RESTART_AFTER + 3) + ["ok"]
-        _, _, posts, restarts, _, _ = self.run_statuses(statuses, idle=False)
-        self.assertEqual((posts, restarts), (1, 0))
-
-    def test_bad_proxy_fails_at_once_with_the_engine_reason(self):
-        reason = "failed to start auth proxy for socks5://127.0.0.1:1: username and password are required"
-        with mock.patch.object(scrape, "engine_error", return_value=reason), \
-             self.assertRaises(RuntimeError) as cm:
-            self.run_statuses(["failed"])
-        self.assertIn("username and password", str(cm.exception))
-        self.assertIn("user:pass", str(cm.exception))
-
-    def test_dead_working_job_is_reported_from_the_engine_log(self):
-        # The engine logged "error scraping job", left the job on "working" with no rows and never
-        # flipped it: delete it, restart the engine, tell the user the engine's reason.
-        reason = "failed to start auth proxy for socks5://h:1: username and password are required"
-        deletes = []
-        def fake_req(method, path, body=None):
-            if method == "POST":
-                return 201, b'{"id":"j1"}'
-            if method == "DELETE":
-                deletes.append(path)
-                return 200, b""
-            if path.endswith("/download"):
-                return 200, b"title\n"  # header only: zero rows
-            return 200, b'{"Status":"working"}'
-        with mock.patch.object(scrape, "req", fake_req), mock.patch.object(scrape.time, "sleep"), \
-             mock.patch.object(scrape, "poll_attempts", return_value=50), \
-             mock.patch.object(scrape, "engine_run_ended", return_value=False), \
-             mock.patch.object(scrape, "engine_error", return_value=reason), \
-             mock.patch.object(scrape, "restart_engine", return_value=True) as restart, \
-             redirect_stdout(io.StringIO()), self.assertRaises(RuntimeError) as cm:
-            scrape.run_job({"max_time": 1})
-        self.assertIn("username and password", str(cm.exception))
-        self.assertEqual((deletes, restart.call_count), (["/api/v1/jobs/j1"], 1))
+    def test_ok_with_a_note_says_why_it_stopped_early(self):
+        note = "stopped at max_time; the rows found so far are kept"
+        (_, rows), _, _, text = run_jobs([[("ok", note)]], downloads={"j1": self.CSV})
+        self.assertEqual(len(rows), 2)
+        self.assertIn(f"The engine says: {note}", text)
 
     def test_failed_job_is_retried_once(self):
-        job_id, rows, posts, _, slept, _ = self.run_statuses(["failed", "working", "ok"])
-        self.assertEqual((job_id, posts), ("j2", 2))
+        reason = "Page.navigate: no reply within 30 s"
+        (jid, rows), posts, slept, text = run_jobs([[("failed", reason)], [("working", ""), ("ok", "")]],
+                                                   downloads={"j2": self.CSV})
+        self.assertEqual((jid, posts), ("j2", 2))
         slept.assert_any_call(scrape.FAILED_RETRY_WAIT)
-        self.assertEqual([r["title"] for r in rows], ["A"])
-        with self.assertRaises(RuntimeError):
-            self.run_statuses(["failed", "failed"])
+        self.assertIn(reason, text)
+        err, posts, _, _ = run_jobs([[("failed", reason)], [("failed", reason)]])
+        self.assertIsInstance(err, RuntimeError)
+        self.assertEqual(posts, 2)
+        self.assertIn("failed twice", str(err))
+        self.assertIn(reason, str(err))
 
-    def test_restart_waits_until_engine_answers(self):
-        # Right after `docker restart` the proxy answers 502 for a few seconds; the next grid tile
-        # used to hit that and fail. restart_engine must only return once the API answers.
-        answers = iter([OSError("502"), OSError("502"), (200, b"null")])
-        def fake_req(method, path, body=None):
-            a = next(answers)
-            if isinstance(a, Exception):
-                raise a
-            return a
-        done = mock.Mock(returncode=0)
-        with mock.patch.object(scrape, "_local_docker", return_value=True), \
-             mock.patch.object(scrape.subprocess, "run", return_value=done), \
-             mock.patch.object(scrape, "req", fake_req), mock.patch.object(scrape.time, "sleep") as slept:
-            self.assertTrue(scrape.restart_engine())
-        self.assertEqual(slept.call_count, 2)
+    def test_chrome_start_error_is_not_retried_or_blamed_on_google(self):
+        for reason in ("Chrome exited at once (code 1): /usr/bin/chromium: Trace/breakpoint trap",
+                       "Chrome cannot start: libnss3.so: cannot open shared object file\n  Install the libraries",
+                       "No Chrome, Chromium, Edge or Brave found. Run `python3 scripts/engine.py start`"):
+            err, posts, slept, text = run_jobs([[("failed", reason)]])
+            self.assertIsInstance(err, RuntimeError, reason)
+            self.assertEqual(posts, 1)
+            slept.assert_not_called()
+            self.assertIn("could not start Chrome", str(err))
+            self.assertIn("scripts/engine.py restart", str(err))
+            self.assertNotIn("throttl", (str(err) + text).lower())
+            self.assertNotIn("rate-limit", (str(err) + text).lower())
+
+    def test_proxy_error_is_not_retried(self):
+        reason = "1 keyword(s) failed: navigate https://www.google.com/maps/search/x: net::ERR_PROXY_CONNECTION_FAILED"
+        err, posts, _, _ = run_jobs([[("failed", reason)]])
+        self.assertEqual(posts, 1)
+        self.assertIn("proxy did not work", str(err))
+        self.assertIn("ERR_PROXY_CONNECTION_FAILED", str(err))
+
+    def test_google_block_is_not_retried(self):
+        reason = ("Google answered with its unusual-traffic page: this IP is rate-limited for now. "
+                  "Wait, or add proxies")
+        err, posts, slept, _ = run_jobs([[("failed", reason)]])
+        self.assertEqual(posts, 1)
+        slept.assert_not_called()
+        self.assertIn("unusual-traffic page", str(err))
+
+    def test_failed_part_way_keeps_its_rows(self):
+        # The engine was stopped while the job ran: it marks the job failed and keeps the rows.
+        reason = "the engine stopped while this job ran; its rows so far are kept"
+        (jid, rows), posts, _, text = run_jobs([[("working", ""), ("failed", reason)]],
+                                               downloads={"j1": self.CSV})
+        self.assertEqual((jid, len(rows), posts), ("j1", 2, 1))
+        self.assertIn(reason, text)
+
+    def test_budget_runs_out_keeps_written_rows(self):
+        (jid, rows), posts, _, text = run_jobs([[("working", "")] * 3], attempts=3, downloads={"j1": self.CSV})
+        self.assertEqual((jid, len(rows), posts), ("j1", 2, 1))
+        self.assertIn("keeps running in the engine", text)
+
+    def test_budget_runs_out_with_no_rows_is_a_clean_error(self):
+        for jobs in ([[("pending", "")] * 3], [[("working", "")] * 3]):
+            err, _, _, _ = run_jobs(jobs, attempts=3)  # the download answers 404: no rows yet
+            self.assertIsInstance(err, RuntimeError)
+            self.assertIn("Gave up waiting", str(err))
+
+
+class NoDockerPaths(unittest.TestCase):
+    def test_script_never_reads_or_restarts_a_container(self):
+        # The old engine's workarounds read `docker logs` and ran `docker restart`, which could restart
+        # another Docker engine on this machine while the script talked to an engine on another port.
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "scrape.py"), encoding="utf-8") as f:
+            src = f.read()
+        for banned in ("subprocess", "docker logs", "docker restart", '"docker"', "SCRAPER_CONTAINER"):
+            self.assertNotIn(banned, src)
 
 
 class ExtractEmails(unittest.TestCase):
@@ -534,7 +492,7 @@ class NothingLeft(unittest.TestCase):
         srv = ThreadingHTTPServer(("127.0.0.1", 0), MockEngine)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         out = os.path.join(tempfile.mkdtemp(), "leads.csv")
-        argv = ["scrape.py", "plumbers in Austin TX", "30.2", "-97.7", "--no-email", "--min-reviews", "999", "--out", out]
+        argv = ["scrape.py", "plumbers in Austin TX", "30.2", "-97.7", "--no-email", "--min-rating", "5", "--out", out]
         log = io.StringIO()
         try:
             with mock.patch.object(scrape, "BASE", f"http://127.0.0.1:{srv.server_port}"), \
@@ -544,6 +502,37 @@ class NothingLeft(unittest.TestCase):
             srv.shutdown(); srv.server_close()
         self.assertIn("Nothing left: the filters and --exclude dropped all 3 rows", log.getvalue())
         self.assertNotIn("✓ Done", log.getvalue())
+
+    def run_min_reviews(self, counts):
+        """--min-reviews 10 over the mock engine's three rows, with these review_count values."""
+        MockEngine.created, MockEngine.polls = 0, {}
+        saved = CELL_ROWS["job-1"]
+        CELL_ROWS["job-1"] = [dict(_row(p), review_count=c) for p, c in zip("ABC", counts)]
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), MockEngine)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        out = os.path.join(tempfile.mkdtemp(), "leads.csv")
+        argv = ["scrape.py", "plumbers in Austin TX", "30.2", "-97.7", "--no-email", "--min-reviews", "10", "--out", out]
+        log = io.StringIO()
+        try:
+            with mock.patch.object(scrape, "BASE", f"http://127.0.0.1:{srv.server_port}"), \
+                 mock.patch.object(scrape.time, "sleep"), mock.patch.object(sys, "argv", argv), redirect_stdout(log):
+                scrape.main()
+        finally:
+            srv.shutdown(); srv.server_close()
+            CELL_ROWS["job-1"] = saved
+        with open(out, newline="", encoding="utf-8-sig") as f:
+            return [r["title"] for r in csv.DictReader(f)], log.getvalue()
+
+    def test_min_reviews_warns_instead_of_dropping_every_row(self):
+        # The engine leaves review_count empty, which would read as 0 and drop every row.
+        titles, text = self.run_min_reviews(["", "", ""])
+        self.assertEqual(titles, ["Biz A", "Biz B", "Biz C"])
+        self.assertIn("--min-reviews ignored", text)
+
+    def test_min_reviews_still_filters_real_counts(self):
+        titles, text = self.run_min_reviews(["12", "3", "1,204"])
+        self.assertEqual(titles, ["Biz A", "Biz C"])
+        self.assertNotIn("--min-reviews ignored", text)
 
 
 class Filters(unittest.TestCase):
@@ -610,30 +599,6 @@ class Resilience(unittest.TestCase):
         self.assertEqual(slept.call_count, 2)
         with mock.patch.object(scrape, "req", side_effect=e404), self.assertRaises(scrape.urllib.error.HTTPError):
             scrape._get("/api/v1/jobs/x")  # a 4xx is final, no retry
-
-    def test_pending_restart_failure_raises_instead_of_polling_a_deleted_job(self):
-        statuses = iter(["pending"] * 20)
-        def fake_req(method, path, body=None):
-            if method == "POST":
-                return 201, b'{"id":"j1"}'
-            if method == "DELETE":
-                return 200, b""
-            return 200, json.dumps({"Status": next(statuses)}).encode()
-        with mock.patch.object(scrape, "req", fake_req), mock.patch.object(scrape.time, "sleep"), \
-             mock.patch.object(scrape, "poll_attempts", return_value=50), \
-             mock.patch.object(scrape, "engine_run_ended", return_value=False), \
-             mock.patch.object(scrape, "engine_idle", return_value=True), \
-             mock.patch.object(scrape, "restart_engine", return_value=False), \
-             redirect_stdout(io.StringIO()), self.assertRaises(RuntimeError) as cm:
-            scrape.run_job({"max_time": 1})
-        self.assertIn("docker restart", str(cm.exception))
-
-    def test_failing_docker_logs_is_not_idle(self):
-        failed = mock.Mock(returncode=1, stdout="", stderr="Error: No such container")
-        with mock.patch.object(scrape, "_local_docker", return_value=True), \
-             mock.patch.object(scrape.subprocess, "run", return_value=failed):
-            self.assertFalse(scrape.engine_idle())
-            self.assertFalse(scrape.engine_run_ended("2026-01-01T00:00:00Z"))
 
 
 class VerifyEmails(unittest.TestCase):
@@ -727,7 +692,7 @@ class ArgumentBounds(unittest.TestCase):
     def test_nothing_listening_fails_in_ten_seconds_not_sixty(self):
         refused = scrape.urllib.error.URLError(ConnectionRefusedError(61, "Connection refused"))
         with mock.patch.object(scrape, "req", side_effect=refused), mock.patch.object(scrape.time, "sleep") as slept:
-            self.assertIn("Docker Desktop", self.run_main())
+            self.assertIn("scripts/engine.py start", self.run_main())
         self.assertEqual(slept.call_count, 4)  # five tries, two seconds apart
 
     def test_has_email_needs_the_crawl(self):

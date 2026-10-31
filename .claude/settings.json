@@ -1,5 +1,5 @@
 {
-  "$comment": "Pre-approves the safe, local commands this kit uses so Claude can scrape on autopilot without a permission prompt each time. All entries are local-only (localhost / this folder's scripts / docker). Nothing here can reach the public internet except the scraper's own outbound calls, and `scripts/engine.py start` on a machine with no Chrome, which downloads Chrome for Testing once, pinned by SHA-256.",
+  "$comment": "Pre-approves the safe, local commands this kit uses so Claude can scrape on autopilot without a permission prompt each time. All entries are local-only (localhost / this folder's scripts / docker compose in this folder). Nothing here can reach the public internet except the scraper's own outbound calls, `docker compose up` building the engine image (python:3.12-slim and Debian's chromium), and `scripts/engine.py start` on a machine with no Chrome, which downloads Chrome for Testing once, pinned by SHA-256.",
   "permissions": {
     "allow": [
       "Bash(docker compose up:*)",
@@ -8,6 +8,8 @@
       "Bash(docker compose start:*)",
       "Bash(docker compose ps:*)",
       "Bash(docker ps:*)",
+      "Bash(docker compose restart)",
+      "Bash(docker compose logs)",
       "Bash(curl http://localhost:8080/:*)",
       "Bash(curl -s http://localhost:8080/:*)",
       "Bash(curl http://127.0.0.1:8080/:*)",
@@ -33,8 +35,7 @@
       "Bash(bash scripts/scrape.sh:*)",
       "Bash(python3 scripts/scrape.py:*)",
       "Bash(python scripts/scrape.py:*)",
-      "Bash(py scripts/scrape.py:*)",
-      "Bash(docker restart:*)"
+      "Bash(py scripts/scrape.py:*)"
     ],
     "deny": []
   }
