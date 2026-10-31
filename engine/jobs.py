@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 import browser, details, maps
 from cdp import CDPError, Page
 
+csv.field_size_limit(2 ** 31 - 1)  # a long cell (a description, a 1.x file) can pass csv's 128 KB default
+
 # Kit 1.x's CSV header, in its order, so files and scripts that read the old engine's output keep
 # working. Our own columns follow.
 COLUMNS = ["input_id", "link", "title", "category", "address", "open_hours", "popular_times", "website",
@@ -305,7 +307,6 @@ class Store:
                 old.close()
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
-        csv.field_size_limit(2 ** 31 - 1)  # a 1.x cell (a long description) can pass csv's 128 KB default
         n = 0
         for jid, name, status, data, created in rows:
             try:

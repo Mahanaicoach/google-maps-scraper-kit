@@ -100,8 +100,12 @@ def open_hours(days):
     return json.dumps({name: spans for _, (name, spans) in sorted(week.items())}, ensure_ascii=False)
 
 
+IMAGES_MAX, IMAGE_URL_MAX = 20, 1000  # keeps the cell far below csv's 128 KB field limit
+
+
 def images(entity):
-    """Photo URLs already supplied by Maps, as the existing images column's JSON objects."""
+    """Photo URLs already supplied by Maps, as the existing images column's JSON objects: plain https
+    links (no login, no whitespace), at most IMAGES_MAX of them."""
     found, seen = [], set()
     # Search cards and panels use different gallery layouts. Never include reviewer profiles.
     groups = [(dig(entity, (171, 0)), (3, 0, 6, 0), (2,)),
@@ -112,17 +116,20 @@ def images(entity):
             continue
         for item in items:
             url = dig(item, path)
-            if not isinstance(url, str) or url in seen:
+            if (not isinstance(url, str) or url in seen or len(url) > IMAGE_URL_MAX
+                    or any(c.isspace() or ord(c) < 32 for c in url)):
                 continue
             try:
                 parsed = urllib.parse.urlsplit(url)
-                if parsed.scheme != "https" or not parsed.hostname:
+                if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
                     continue
             except ValueError:
                 continue
             seen.add(url)
             title = _text(dig(item, title_path)) if title_path else ""
             found.append({"title": title, "image": url})
+            if len(found) == IMAGES_MAX:
+                return json.dumps(found, ensure_ascii=False)
     return json.dumps(found, ensure_ascii=False) if found else ""
 
 

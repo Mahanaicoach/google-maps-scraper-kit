@@ -25,6 +25,8 @@ Notes:
 """
 import argparse, csv, functools, io, ipaddress, json, math, os, re, socket, sys, time
 import html as _html, http.client, urllib.request, urllib.parse, urllib.error
+
+csv.field_size_limit(2 ** 31 - 1)  # a long cell (a description) can pass csv's 128 KB default
 from concurrent.futures import ThreadPoolExecutor
 
 # The status lines below use ▶ ✓ ℹ •, and every file this script writes can hold accented business

@@ -993,6 +993,12 @@ class ExtraDetailsParser(unittest.TestCase):
         photo[6] = ["javascript:alert(1)"]
         e[171] = None
         self.assertNotIn("images", details.parse_entity(e))
+        for bad in ("https://u:p@lh3.googleusercontent.com/x", "https://a.com/x\ny", "https://a.com/" + "x" * 1000):
+            photo[6] = [bad]
+            self.assertNotIn("images", details.parse_entity(e))
+        many = [[None] * 6 + [[f"https://lh3.googleusercontent.com/{n}"]] for n in range(50)]
+        e[37] = [many]
+        self.assertEqual(len(json.loads(details.parse_entity(e)["images"])), details.IMAGES_MAX)
 
 class FullView(unittest.TestCase):
     """details.py fields that only Google's full view carries (a Chrome window), from made-up data."""
