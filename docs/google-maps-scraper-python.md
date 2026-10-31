@@ -30,7 +30,7 @@ On Windows, run the same commands with `py` or `python3`. The engine needs Pytho
 | `--max-time` | Job time limit in seconds. Default `600`. |
 | `--out` | Output path. Default `results-<short job id>.csv`. A `.json` extension writes JSON. |
 | `--json` | Writes JSON instead of CSV. |
-| `--full` | Keeps all raw columns (the 36 classic ones plus `categories`) instead of the 8 lead fields. Review counts and the week's opening hours are empty by default; window mode (`SCRAPER_HEADLESS=0`, [SETUP §3](../SETUP.md#review-counts-hours-and-reviews-window-mode)) fills them. Review texts stay empty: the script does not ask for them. |
+| `--full` | Keeps all raw columns (the 36 classic ones plus `categories`) instead of the 8 lead fields. Review counts and weekly opening hours work headless ([SETUP §3](../SETUP.md#review-counts-hours-and-reviews)). Review texts stay empty: the script does not ask for them. |
 | `--fields` | Comma-separated columns to keep, overriding the lead fields. |
 | `--socials` | Adds Instagram, Facebook, LinkedIn, TikTok, YouTube and X from each website. Slower. Zero AI tokens. |
 | `--tech` | Adds `fb_pixel`, `google_ads_tag`, `analytics`, `bing_ads`, `linkedin_insight`, `tiktok_pixel` (yes/no, blank if the site did not load), `cms`, `mobile_friendly` and a 0-100 `intent_score`, and sorts by that score. Shares the homepage fetch with `--socials`. Zero AI tokens. |
@@ -39,7 +39,7 @@ On Windows, run the same commands with `py` or `python3`. The engine needs Pytho
 | `--country` | Two-letter country Google ranks and formats results for, e.g. `us`, `de`, `br`. Default: the country of your IP address. |
 | `--keywords-file` | Reads one keyword per line from a file. One job, one CSV. |
 | `--proxy` | Proxy URL for the engine: `http://[user:pass@]host:port`, `https://[user:pass@]host:port`, `socks5://` or `socks5h://host:port`. URL-encode special characters in the username or password. SOCKS5 with a username and password is refused (422). Repeatable: the keywords take turns, and a keyword Google refuses, or whose proxy fails, is retried through the next one. A wrong proxy, or a wrong username or password, fails the job; the script prints the engine's reason and does not retry. |
-| `--min-rating`, `--min-reviews` | Keep rows rated X or higher, or with N or more reviews. Unrated rows drop. `review_count` is empty by default, so `--min-reviews` is ignored with a warning; with window mode (`SCRAPER_HEADLESS=0`) it works. |
+| `--min-rating`, `--min-reviews` | Keep rows rated X or higher, or with N or more reviews. Unrated rows drop. `--min-reviews` works headless; if Google omits every count, it is skipped with a warning. |
 | `--no-website` | Keep only businesses without a website: the classic web-design prospect list. |
 | `--has-phone`, `--has-email` | Keep only rows with a phone, or rows where an email was found. |
 | `--exclude FILE` | Drop places already in an earlier results file (`.csv` or `.json`), repeatable. Matches on `place_id`, `cid`, link, or name plus address, so the lean 8-column CSV works. |

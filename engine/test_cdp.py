@@ -243,6 +243,41 @@ class Parser(unittest.TestCase):
         self.assertFalse(maps.BATCH_URL.match("https://www.google.com/search?q=plain"))
 
 
+class PageUserAgent(unittest.TestCase):
+    def test_user_agent_applied_to_every_context_before_navigation(self):
+        class Connection:
+            user_agent = "Mozilla/5.0 Chrome/156.0.0.0"
+            def __init__(self):
+                self.calls = []
+            def send(self, method, params=None, session_id=None, timeout=None):
+                self.calls.append((method, params, session_id))
+                return {"targetId": "T", "sessionId": "S"}
+        conn = Connection()
+        for context in (None, "proxy-context", "reviews-context"):
+            conn.calls.clear()
+            cdp.Page(conn, context=context)
+            self.assertEqual(conn.calls[-1], ("Emulation.setUserAgentOverride",
+                             {"userAgent": conn.user_agent}, "S"))
+            self.assertEqual(conn.calls[0][1].get("browserContextId"), context)
+        conn.calls.clear()
+        conn.user_agent = None
+        cdp.Page(conn)
+        self.assertNotIn("Emulation.setUserAgentOverride", [c[0] for c in conn.calls])
+
+    def test_initial_url_loads_after_tab_configuration(self):
+        from unittest.mock import Mock
+        conn = Mock(user_agent="Mozilla/5.0 Chrome/156.0.0.0")
+        conn.send.return_value = {"targetId": "T", "sessionId": "S"}
+        conn.wait_event.return_value = {}
+        cdp.Page(conn, url="https://example.com", context="proxy-context")
+        calls = conn.send.call_args_list
+        self.assertEqual(calls[0].args, ("Target.createTarget",
+                         {"url": "about:blank", "browserContextId": "proxy-context"}))
+        methods = [c.args[0] for c in calls]
+        self.assertLess(methods.index("Emulation.setUserAgentOverride"), methods.index("Page.navigate"))
+        self.assertEqual(calls[-1].args[:2], ("Page.navigate", {"url": "https://example.com"}))
+
+
 class FakeCDP:
     def __init__(self):
         self.closed, self.q = None, queue.Queue()

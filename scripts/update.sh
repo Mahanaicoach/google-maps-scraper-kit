@@ -55,7 +55,7 @@ else
 fi
 
 # A new kit version can change the engine. Rebuild and restart a running one so it takes effect.
-# --remove-orphans drops the nginx container of kit 1.x, which would otherwise keep the port.
+# --remove-orphans drops the containers of services the kit no longer has.
 if [ "$BEFORE" != "$(git rev-parse HEAD)" ] && command -v docker >/dev/null 2>&1 \
   && [ -n "$(docker compose ps -q 2>/dev/null)" ]; then
   docker compose up -d --build --remove-orphans

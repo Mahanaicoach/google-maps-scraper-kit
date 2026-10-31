@@ -29,7 +29,7 @@ For a whole city past the ~120 per search cap, add `--grid 3`. It splits the cit
 
 ## Step 3: Add price range for qualification
 
-`--full` keeps all raw columns, including `price_range` and `status` (open or closed now). Opening hours stay empty by default; [window mode](../../SETUP.md#review-counts-hours-and-reviews-window-mode) fills them:
+`--full` keeps all raw columns, including `price_range` and `status` (open or closed now). Weekly opening hours work [headless](../../SETUP.md#review-counts-hours-and-reviews) when Google supplies them:
 
 ```bash
 python3 scripts/scrape.py "restaurants in Austin TX" --city "Austin, TX" --full
@@ -57,7 +57,7 @@ Illustrative rows only:
 - `category`: splits restaurants, cafes and pizza places so you can tailor each message.
 - `price_range`: a quick read on the kind of venue. Needs `--full` or `--fields`.
 - `status`: whether the venue is open right now, so you can time a call. Needs `--full` or `--fields`.
-- `review_rating`: a signal of reputation. `review_count` stays empty by default: Google shows the engine's headless browser no review counts. [Window mode](../../SETUP.md#review-counts-hours-and-reviews-window-mode) fills it.
+- `review_rating`: a signal of reputation. `review_count` works [headless](../../SETUP.md#review-counts-hours-and-reviews) and supports `--min-reviews` filtering.
 - `phone`, `emails` and `website`: the contact channels.
 
 ## What to expect

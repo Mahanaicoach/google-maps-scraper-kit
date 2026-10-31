@@ -840,8 +840,7 @@ def main():
     f = ap.add_argument_group("filters", "applied before the email crawl, except --has-email")
     f.add_argument("--min-rating", type=float, metavar="X", help="keep rows rated X or higher")
     f.add_argument("--min-reviews", type=int, metavar="N",
-                   help="keep rows with N or more reviews (ignored while review_count is empty: the engine "
-                        "fills it only with SCRAPER_HEADLESS=0)")
+                   help="keep rows with N or more reviews (ignored with a warning if all review counts are missing)")
     f.add_argument("--no-website", action="store_true", help="keep only businesses without a website")
     f.add_argument("--has-phone", action="store_true", help="keep only rows with a phone number")
     f.add_argument("--has-email", action="store_true", help="keep only rows where an email was found")
@@ -947,11 +946,9 @@ def main():
     for r in rows:
         r["website"] = clean_website(r.get("website", ""))
     if a.min_reviews and rows and not any(r.get("review_count") for r in rows):
-        # A headless Chrome gets Google's limited view, which has no review counts. Filtering on it would
-        # read every count as 0 and drop every row.
-        print("⚠ --min-reviews ignored: review_count is empty (Google shows a headless Chrome no review counts; "
-              "SCRAPER_HEADLESS=0 in .env runs it as a window, which gets them), so the filter would drop every "
-              "row. --min-rating works.")
+        # Missing counts read as 0 and would otherwise drop every row.
+        print("⚠ --min-reviews ignored: Google returned no review_count values, so the filter would drop "
+              "every row. --min-rating works.")
         a.min_reviews = None
     before = len(rows)
     rows = [r for r in dedupe(rows, exclude=excluded) if keep_row(r, a)]

@@ -8,11 +8,12 @@ and built by Mahan ([@Mahanaicoach](https://github.com/Mahanaicoach)), MIT licen
 ## History: gosom/google-maps-scraper
 
 Kit versions 1.x ran [gosom/google-maps-scraper](https://github.com/gosom/google-maps-scraper) by
-Georgios Komninos ([@gosom](https://github.com/gosom)), MIT License, Copyright (c) 2023 Georgios
-Komninos, as its official Docker image, unmodified. That engine shaped this kit: the job API
-(`/api/v1/jobs`, the job body, the `Status` values) and the 36 CSV column names are its design, kept
-so that scripts and files made for kit 1.x keep working. The kit's own engine contains none of its
-code. To support its author, star the repository: https://github.com/gosom/google-maps-scraper
+Georgios Komninos ([@gosom](https://github.com/gosom)), an MIT-licensed Go scraper, as its official
+Docker image, unmodified. That engine shaped this kit: the job API (`/api/v1/jobs`, the job body, the
+`Status` values) and the 36 CSV column names are its design, kept so that scripts and files made for
+kit 1.x keep working. Kit 2.0's own engine contains none of its code, so this repository no longer
+carries its license notice. To support its author, star the repository:
+https://github.com/gosom/google-maps-scraper
 
 ## Chrome for Testing
 
@@ -39,12 +40,11 @@ The `--tech` detection patterns, the intent score and the obfuscated-email patte
 self-hosted lead finder. It is released under the MIT License, Copyright (c) 2026 OpenLeadFinder
 contributors, with the license text below.
 
-## MIT License text (gosom/google-maps-scraper, OpenLeadFinder)
+## MIT License text (OpenLeadFinder)
 
 ```
 MIT License
 
-Copyright (c) 2023 Georgios Komninos
 Copyright (c) 2026 OpenLeadFinder contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy

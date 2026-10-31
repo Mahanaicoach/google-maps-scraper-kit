@@ -13,10 +13,10 @@ import json
 # Index path of each field inside a place entity. Checked on live batches in the spike
 # (2026-10-31): title, category, address, rating, lat/lon, place_id, data_id, timezone, thumbnail
 # filled on 60/60 entities, website 55/60, phone 46/60 (listings without one).
-# review_count, reviews_link and the week of opening hours come only with Google's full view: a
-# headless Chrome (the default) gets its "limited view", which leaves (4, 8) and (4, 3) empty and
-# lists today's hours only. A Chrome window (SCRAPER_HEADLESS=0) gets the full view: count at (4, 8)
-# on 20/20 entities, 7 days of hours on 19/20 (2026-10-31). (37, 1) is the photo count, not reviews.
+# review_count (4, 8), reviews_link (4, 3, 0) and the week of opening hours come only with Google's
+# full view: a browser whose user agent says HeadlessChrome gets its "limited view", which leaves them
+# empty and lists today's hours only (browser.py sends Chrome/ instead, see there). Full view
+# (2026-10-31): count on 20/20 entities, 7 days of hours on 19/20. (37, 1) is the photo count.
 FIELDS = {
     "title": (11,),
     "category": (13, 0),

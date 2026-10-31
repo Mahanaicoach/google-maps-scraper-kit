@@ -34,8 +34,9 @@ clearly abusive use (surveilling individuals, spam). The skill has the full guid
 - The create response is `{"id":"<uuid>"}` (lowercase `id`). Check status with `GET /api/v1/jobs/{id}`; its field is `"Status"`, and it becomes `"ok"` when done.
   Its `"Error"` field says why a job failed, or why an `ok` job stopped early.
 - `depth` is result batches of about 20 places each: depth 1 ≈ 20, depth 5 up to about 100 (Google stops near 120).
-- `review_count` is empty by default (headless): Google shows a headless browser no review counts. It is
-  filled only when the user runs the engine with `SCRAPER_HEADLESS=0`; do not promise it otherwise.
+- `review_count` is filled headless: the engine sends Chrome's own user agent with `HeadlessChrome`
+  replaced by `Chrome`, which gets Google's full view. Google can still omit counts; `--min-reviews`
+  warns and skips filtering if all are missing.
 - **Poll in the background.** The Bash tool blocks foreground `sleep`. Run the poll loop as a
   background command (`run_in_background: true`) and read its output file when notified.
 - Before a big job (high depth, many keywords), tell the user the cost once: time and IP rate-limit risk. Then proceed.

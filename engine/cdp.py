@@ -133,6 +133,7 @@ class CDP:
     (session, name) and are dropped otherwise, so a long job holds no unread events."""
 
     def __init__(self, ws_url, timeout=30):
+        self.user_agent = None  # optional browser-wide user agent, applied to each attached tab
         self.ws = WebSocket(ws_url, timeout=timeout)
         self.timeout = timeout
         self._id = 0
@@ -230,13 +231,17 @@ class Page:
 
     def __init__(self, cdp, url="about:blank", context=None):
         self.cdp = cdp
-        params = {"url": url}
+        params = {"url": "about:blank"}  # configure the tab before its first network request
         if context:
             params["browserContextId"] = context
         self.target = cdp.send("Target.createTarget", params)["targetId"]
         self.sid = cdp.send("Target.attachToTarget", {"targetId": self.target, "flatten": True})["sessionId"]
         for domain in ("Page", "Runtime", "Network"):
             cdp.send(f"{domain}.enable", session_id=self.sid)
+        if cdp.user_agent:
+            self.send("Emulation.setUserAgentOverride", {"userAgent": cdp.user_agent})
+        if url != "about:blank":
+            self.navigate(url)
 
     def send(self, method, params=None, timeout=None):
         return self.cdp.send(method, params, self.sid, timeout)

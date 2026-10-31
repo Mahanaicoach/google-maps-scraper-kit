@@ -109,7 +109,7 @@ Illustrative rows:
 | Example Roasters | +1 512-555-0101 | hello@example.com | example.com | Coffee shop | 100 Congress Ave, Austin, TX | 4.7 | |
 | Sample Espresso Bar | +1 512-555-0102 | info@example.org | example.org | Cafe | 200 S Lamar Blvd, Austin, TX | 4.5 | |
 
-`review_count` stays empty by default; window mode fills it: see [Honest limits](#honest-limits).
+`review_count` works in headless mode; see [Honest limits](#honest-limits).
 
 `--socials` adds `instagram`, `facebook`, `linkedin`, `tiktok`, `youtube` and `x` columns. `--tech` adds
 `fb_pixel`, `google_ads_tag`, `analytics`, `bing_ads`, `linkedin_insight`, `tiktok_pixel`, `cms`,
@@ -168,7 +168,7 @@ scrapes Google Maps business listings only. It does not scrape social platforms 
 
 | | |
 |---|---|
-| **8 lead fields by default** | name, phone, email, website, category, address, rating, review count (empty by default). The engine writes 37 raw columns; `--full` keeps them all. |
+| **8 lead fields by default** | name, phone, email, website, category, address, rating, review count. The engine writes 37 raw columns; `--full` keeps them all. |
 | **Email extraction, on by default** | After the Maps job, the script crawls every business website, 16 at a time: the homepage, then its contact and about pages if the homepage shows no email. It prints your found rate. |
 | **Beyond the 120 cap** | `--grid 3` splits the city into 3 x 3 map tiles, runs them one at a time and dedupes on `place_id`. |
 | **Social enrichment** | `--socials` finds Instagram, Facebook, LinkedIn, TikTok, YouTube and X profiles in code (HTTP + regex). Zero AI tokens. |
@@ -201,18 +201,14 @@ One keyword per line. One job. One CSV.
   runs one search per tile in a single batch, and dedupes the results on `place_id`. Tiles run one at a
   time, so a grid is slower and more likely to trip rate limits than a single search. Each depth step
   adds a batch of about 20 places.
-- **Review counts, hours and reviews need window mode.** Signed out, Google shows a headless
-  browser its "limited view": ratings, but no review counts, no week of opening hours and no
-  reviews. The kit does not disguise its browser to get them, and changes no user agent. So by
-  default `review_count`, `open_hours` and `reviews_link` stay empty, and `--min-reviews` is ignored
-  with a warning; `--min-rating` works. Set `SCRAPER_HEADLESS=0` in `.env` and restart the engine,
-  and Chrome runs as a normal window placed off-screen. Google gives a normal window its full view,
-  so those columns fill and `--min-reviews` works. Window mode needs a desktop with a display, not
-  Docker (its image stays headless) and not a server without one, and an installed Chrome,
-  Chromium, Edge or Brave (the downloaded headless shell has no window). On macOS a second Chrome icon
-  shows in the Dock, and the window may take focus when a job starts. Review texts come through the
-  raw API's `reviews_max` (up to 5 per place, window mode only). Photos stay empty. Setup:
-  [SETUP §3](SETUP.md#review-counts-hours-and-reviews-window-mode).
+- **Review counts come with a changed user agent.** Google gives a browser whose user agent says
+  `HeadlessChrome` its "limited view": no review counts, today's hours only, no reviews. So the
+  engine's headless Chrome sends its own user agent with `HeadlessChrome` replaced by `Chrome` (same
+  OS, same version, nothing else changed), and Google returns `review_count`, the week's
+  `open_hours` and `reviews_link`. Google can still leave a field out; if every count is missing,
+  `--min-reviews` warns and skips that filter. Review texts come through the raw API's
+  `reviews_max` (up to 5 per place, one page load each). Photos stay empty. Rather run a real
+  window, with the agent unchanged? [SETUP §3](SETUP.md#review-counts-hours-and-reviews).
 - **Emails only when a business publishes one.** The script reads the business homepage, then its
   contact and about pages. Listings with no site, or a site with no visible
   email, return an empty `emails` cell. Instagram bios are not read. Expect emails on a fraction of
@@ -271,14 +267,14 @@ need Python and Chrome on your own machine, or Docker.
 **Do I need a Google Maps API key or the Google Places API?**
 No. The kit drives a headless browser against Google Maps directly, so there is no API quota or billing.
 
-**How is this different from gosom/google-maps-scraper?**
-Kit 1.x ran [gosom/google-maps-scraper](https://github.com/gosom/google-maps-scraper) in Docker. Kit
-2.0 has its own engine, written from scratch in standard-library Python around a headless Chrome. It
-runs without Docker, works on Windows and on arm64 Linux, needs no workarounds for jobs that never
-finish, and sends no telemetry. It keeps the same job API and column names, so scripts and files made
-for 1.x still work. On top sits the lead-focused layer: a dependency-free Python CLI with geocoding
-and batching, email and social enrichment to a clean 8-column CSV, and a Claude Code skill with slash
-commands and safety guardrails. See [CREDITS.md](CREDITS.md).
+**How is this different from kit 1.x?**
+Kit 1.x ran another open-source scraper's engine in Docker. Kit 2.0 has its own engine, written
+from scratch in standard-library Python around a headless Chrome. It runs without Docker, works on
+Windows and on arm64 Linux, needs no workarounds for jobs that never finish, and sends no telemetry.
+It keeps the same job API and column names, so scripts and files made for 1.x still work, and an
+update from 1.x brings the old jobs along. On top sits the lead-focused layer: a dependency-free
+Python CLI with geocoding and batching, email and social enrichment to a clean 8-column CSV, and a
+Claude Code skill with slash commands and safety guardrails. See [CREDITS.md](CREDITS.md).
 
 **Do I need Claude Code to use it?**
 No. Claude Code makes it hands-free through a skill and slash commands, but `scripts/scrape.py` and
@@ -297,7 +293,7 @@ as untrusted, and a re-audit is requested in
 [vercel-labs/skills#2624](https://github.com/vercel-labs/skills/issues/2624).
 
 **What data do I get for each business?**
-Name, phone, email, website, category, address, rating and review count (empty unless window mode is on) by default. Add `--socials`
+Name, phone, email, website, category, address, rating and review count by default. Add `--socials`
 for Instagram, Facebook, LinkedIn, TikTok, YouTube and X, or `--full` for every raw column.
 
 **How many leads can I scrape?**
@@ -405,6 +401,9 @@ py scripts/engine.py restart
 ```
 
 With Docker, run `docker compose up -d --build --remove-orphans` in place of the second line.
+
+Coming from kit 1.x? The same command moves you to the own engine, and your old jobs and their CSVs
+appear in the new web UI. Details: [SETUP.md, upgrading from 1.x](SETUP.md#upgrading-from-kit-1x).
 
 ## Support
 

@@ -7,7 +7,7 @@ It drives a headless browser against the public Google Maps site and returns a C
 
 The kit never calls the Google Maps Platform or the Places API. So there is no key to create and no API quota or billing to manage.
 
-Instead, the engine opens Google Maps the way a browser does. The engine is the kit's own, in `engine/`: Python and a headless Chrome on your own machine. It searches, scrolls the result list and reads the listings Google Maps sends the page. The kit then trims the output to the 8 lead fields: name, phone, email, website, category, address, rating and review count. Review counts stay empty by default, because Google shows a signed-out headless browser none; window mode (`SCRAPER_HEADLESS=0`, see [SETUP §3](../SETUP.md#review-counts-hours-and-reviews-window-mode)) fills them.
+Instead, the engine opens Google Maps the way a browser does. The engine is the kit's own, in `engine/`: Python and a headless Chrome on your own machine. It searches, scrolls the result list and reads the listings Google Maps sends the page. The kit then trims the output to the 8 lead fields: name, phone, email, website, category, address, rating and review count. Review counts work headless: each tab uses Chrome's user agent with `HeadlessChrome` replaced by `Chrome` ([SETUP §3](../SETUP.md#review-counts-hours-and-reviews)).
 
 City names are turned into coordinates by OpenStreetMap Nominatim, which is free and also needs no key.
 

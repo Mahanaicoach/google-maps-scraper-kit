@@ -159,33 +159,27 @@ python3 scripts/scrape.py "plumbers in Phoenix AZ" --city "Phoenix, AZ" --grid 3
 and `--country` the 2-letter country Google ranks and formats results for (default: the country of
 your IP address): `--lang de --country de`.
 
-### Review counts, hours and reviews: window mode
+### Review counts, hours and reviews
 
-By default `review_count`, `open_hours` and `reviews_link` stay empty: signed out, Google shows a
-headless browser its "limited view", with no review counts, and the kit does not disguise its
-browser. `--min-reviews` is then ignored with a warning; `--min-rating` works.
+Signed out, Google gives a browser whose user agent says `HeadlessChrome` its "limited view": no
+review counts, today's opening hours only, no reviews. The engine runs Chrome headless, so it sends
+that Chrome's own user agent with `HeadlessChrome` replaced by `Chrome` (same OS and version; nothing
+else is changed). Google then returns `review_count`, the week's `open_hours` (as JSON like
+`{"Monday": ["7 AM–9 PM"], ...}`) and `reviews_link`, with or without Docker and with the downloaded
+headless shell too. `--min-reviews` filters on the counts. Google can still leave a field out; if
+every count is missing, the script warns and skips that filter rather than dropping every row.
 
-To fill them, run Chrome as a normal window. Add this line to `.env` (or set it in the environment),
-then restart the engine with `python3 scripts/engine.py restart`:
+Review texts come through the raw API: set `"reviews_max"` (0 to 5) in the job body. The engine opens
+each place's panel, one page load per place. It fills `user_reviews` (a JSON list of
+`{"Rating", "When", "Description"}`; reviewer names and photos are left out) and
+`reviews_per_rating` (`{"1": n, ... "5": n}`). `scripts/scrape.py` has no flag for reviews.
 
-```bash
-SCRAPER_HEADLESS=0
-```
-
-Chrome then opens as a window placed off-screen. Google gives a normal window its full view, so
-`review_count`, `open_hours` (the week, as JSON like `{"Monday": ["7 AM–9 PM"], ...}`) and
-`reviews_link` are filled, and `--min-reviews` works. No user agent is changed. The costs:
-
-- It needs a desktop with a display. Docker's image stays headless, and a server without a display
-  cannot run it.
-- It needs an installed Chrome, Chromium, Edge or Brave. The downloaded headless shell has no window.
-- On macOS a second Chrome icon shows in the Dock, and the window may take focus when a job starts.
-
-Review texts come only through the raw API and in window mode: set `"reviews_max"` (0 to 5) in the
-job body, and the engine opens each place's panel, one page load per place (about a second each).
-It fills `user_reviews` (a JSON list of `{"Rating", "When", "Description"}`; reviewer names and
-photos are left out on purpose) and `reviews_per_rating` (`{"1": n, ... "5": n}`). A headless Chrome
-gets no reviews, and the job's `Error` says so. `scripts/scrape.py` has no flag for reviews.
+Rather not change the user agent? Set `SCRAPER_HEADLESS=0` in `.env` and restart with
+`python3 scripts/engine.py restart`: Chrome then runs as a normal window placed off-screen, with its
+user agent unchanged, and gets the same data. A window needs a display (not Docker, not a server
+without one) and an installed Chrome, Chromium, Edge or Brave (the downloaded headless shell cannot
+open one). On macOS a second Chrome icon shows in the Dock and the window may take focus when a job
+starts.
 
 ---
 
@@ -241,8 +235,8 @@ Claude Code also offers these commands. Type `/` to see them:
 | `/scrape-setup` | Start the scraper + health check |
 | `/scrape-jobs [list \| delete <id>]` | List or delete jobs |
 
-Plain requests work too: *"scrape gyms in Miami with phone numbers."* The kit's local commands and
-`localhost` calls are pre-approved in `.claude/settings.json`, so Claude Code does not prompt for
+Plain requests work too: *"scrape gyms in Miami with phone numbers."* The kit's own scripts and the
+engine's health check are pre-approved in `.claude/settings.json`, so Claude Code does not prompt for
 each one.
 
 ---
@@ -279,7 +273,7 @@ curl -X DELETE http://localhost:8080/api/v1/jobs/<job-id>
 | `Cannot connect to the Docker daemon` / `docker: command not found` | Docker Desktop is not running (or not installed). Open Docker Desktop, wait until its whale icon stops animating, then run `docker compose up -d` again. Or use the engine without Docker (§2 A). |
 | `Empty reply from server` or `Connection reset` right after `docker compose up -d` | The engine is still starting, a few seconds. The scripts wait for it; in the browser, reload the page. |
 | `Permission denied` running `./scripts/scrape.sh` | The file lost its execute bit (a ZIP download does that). Run `bash scripts/scrape.sh …` instead. |
-| `port is already allocated` / something else already uses 8080 | Just updated from kit 1.x? Its `ui` container still holds the port: run `docker compose up -d --remove-orphans`. Otherwise set `SCRAPER_PORT=8081` in `.env`, then start the engine again (`python3 scripts/engine.py restart` or `docker compose up -d`). The engine, Compose and both scripts read the same file, so nothing else needs editing. With Docker the port inside the container stays 8080 (do not change the right-hand side of the mapping). If your `.env` still has a `SCRAPER_BASE_URL` line, delete it or update its port: it overrides `SCRAPER_PORT`. The slash commands and the skill show `localhost:8080` in their examples, so tell Claude the port you picked; its pre-approved `curl` rules are pinned to 8080 too, so add `Bash(curl http://localhost:8081/:*)` to `.claude/settings.json` if you want it to stop asking. **A second copy of the kit on the same machine** (a fork next to the original, a test clone): change `SCRAPER_PORT` in its `.env`. Without Docker that is all, because each copy keeps its own `.engine/` folder. With Docker, also set `COMPOSE_PROJECT_NAME` to a name nobody else uses (`docker compose ls` lists them), as `.env.example` shows; with the default name, `docker compose up -d` takes over the other copy's container. |
+| `port is already allocated` / something else already uses 8080 | Just updated from kit 1.x and an old container still holds it? Run `docker compose down --remove-orphans`, then `docker compose up -d`, in the kit folder. Otherwise set `SCRAPER_PORT=8081` in `.env`, then start the engine again (`python3 scripts/engine.py restart` or `docker compose up -d`). The engine, Compose and both scripts read the same file, so nothing else needs editing. With Docker the port inside the container stays 8080 (do not change the right-hand side of the mapping). If your `.env` still has a `SCRAPER_BASE_URL` line, delete it or update its port: it overrides `SCRAPER_PORT`. The slash commands and the skill show `localhost:8080` in their examples, so tell Claude the port you picked; its one pre-approved `curl` command, the health check, is pinned to 8080 too, so add `Bash(curl -s http://localhost:8081/api/v1/jobs)` to `.claude/settings.json` if you want it to stop asking. **A second copy of the kit on the same machine** (a fork next to the original, a test clone): change `SCRAPER_PORT` in its `.env`. Without Docker that is all, because each copy keeps its own `.engine/` folder. With Docker, also set `COMPOSE_PROJECT_NAME` to a name nobody else uses (`docker compose ls` lists them), as `.env.example` shows; with the default name, `docker compose up -d` takes over the other copy's container. |
 | `422 missing max time` | Job body needs `max_time` (in **seconds**, e.g. `300`). |
 | `422 missing geo coordinates` | Job body needs `lat` and `lon` as **strings**, e.g. `"30.2672"`. |
 | `422 missing name` / `422 missing lang` | Job body needs `name` (any label) and `lang` (`"en"`). All six required fields: `name`, `keywords`, `lang`, `lat`, `lon`, `max_time`. |
@@ -287,22 +281,32 @@ curl -X DELETE http://localhost:8080/api/v1/jobs/<job-id>
 | A job `failed` | Its `Error` says why: the web UI shows it under the job name, and `curl http://localhost:8080/api/v1/jobs/<id>` returns it. `scripts/scrape.py` prints it, and retries once after 60 s unless a retry cannot help. `Chrome cannot start … error while loading shared libraries`: run the `apt-get install` line in the message. `No Chrome, Chromium, Edge or Brave found`: run `python3 scripts/engine.py start`, which downloads one. `unusual-traffic page`: Google is rate-limiting your IP. The engine already waited and retried the keyword (`Waited and retried N time(s)`) and kept the rows found before that; wait, or add proxies. An error with `ERR_PROXY`, `ERR_SOCKS` or `ERR_TUNNEL`: the proxy is wrong or down. `proxy login refused: the proxy answered 407 to its username and password`: the proxy's username or password is wrong; `scripts/scrape.py` does not retry it. `the engine stopped while this job ran`: the engine crashed or was killed during this job more than 3 times; the rows it found are kept. |
 | `The engine says: stopped at max_time` | The job ran out of time and kept the rows it had. Raise `--max-time` (seconds, default 600) or lower `--depth`. |
 | `website(s) not checked: ran out of time` or `reviews read for N of M places: ran out of time` | A raw-API job's website or reviews pass stopped at the job's time limit; the rows are complete, those columns are not. Raise `max_time`. |
-| `--min-reviews ignored` | Expected by default: `review_count` is empty while Chrome runs headless. Use `--min-rating`, or window mode (§3) to fill `review_count`. |
+| `--min-reviews ignored` | Google returned no review counts for this run. The filter is skipped to avoid dropping every row; inspect the engine log and use `--min-rating` if needed. |
 | Scrapes feel slow | Google Maps itself is quick: a depth 2 search takes about 5 seconds. Most of a run is the email crawl, which checks every business website, 16 at a time. `--no-email` skips it. The web UI's email option reads homepages only. |
 | Empty CSV | Keyword too narrow or wrong coordinates. Check `lat`/`lon` (latitude first) and try a broader keyword. |
 | Docker build is slow | Normal on the first run: it downloads Python and Chromium once, then caches them. |
 | `docker: 'compose' is not a docker command` / `unknown shorthand flag: 'd'` | The Compose plugin is missing. It ships with Docker Desktop — uninstalling Desktop leaves a **dangling symlink** in `~/.docker/cli-plugins/` that looks installed but isn't (`ls -l ~/.docker/cli-plugins/docker-compose`). Install it (`brew install docker-compose`), or skip Docker and use §2 A. |
 | `no space left on device` while building | The **VM's** disk is full, not your Mac's — Colima/Lima/Docker Desktop each run a fixed-size virtual disk. Check with `docker system df`, reclaim with `docker image prune -a`, or grow the disk (Colima: `colima stop && colima start --disk 60`). The image bundles Chromium, so budget a few GB. |
 
-### Upgrading from kit 1.x (the gosom engine)
+### Upgrading from kit 1.x
 
-The new engine cannot read 1.x jobs, so first download the CSVs you still need from the old web UI
-at http://localhost:8080. Then `bash scripts/update.sh` pulls the new kit and, if the old Docker
-engine is running, rebuilds and restarts it with `docker compose up -d --build --remove-orphans`. By
-hand, run that same command in the kit folder. `--remove-orphans` removes 1.x's `ui` container, which
-would otherwise keep port 8080. The old jobs stay in the old `gmaps_data` volume, which
-`docker volume ls` lists with your project's name in front; remove it with `docker volume rm` when
-you no longer need it.
+`bash scripts/update.sh` takes a 1.x copy to the own engine. It pulls the new kit and, when the old
+Docker engine is running, runs `docker compose up -d`: Compose removes 1.x's two containers (the
+engine and its `ui` web front), builds the new image (a few minutes the first time) and starts it on
+the same port. By hand: `git pull`, then `docker compose up -d --build` in the kit folder.
+
+Nothing is lost:
+
+- The CSVs you downloaded are your own files; the update does not touch them.
+- The jobs in 1.x's web UI come along. On its first start the new engine reads 1.x's job volume
+  (read-only) and lists those jobs with their CSVs; a job 1.x had not finished shows as `failed`,
+  with its rows. This happens once, so a job you delete afterwards stays deleted.
+- The old volume itself is kept as it was. Once you no longer need it, free its disk space:
+  `docker compose down`, then `docker volume rm` with the name `docker volume ls` shows ending in
+  `_gmaps_data`, then `docker compose up -d` (Compose creates an empty one in its place).
+
+Moving to the engine without Docker (§2 A) as well? Download the old jobs' CSVs from the web UI
+first: that engine keeps its own jobs in `.engine/` and never sees Docker's volumes.
 
 ---
 

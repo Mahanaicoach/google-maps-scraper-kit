@@ -15,7 +15,7 @@ Google Maps, for email or socials jobs to the businesses' own websites, and for 
 to Google's public DNS (dns.google), nothing else.
 Standard library only.
 """
-import argparse, csv, hmac, html, io, json, os, re, secrets, signal, socket, socketserver, sys, threading
+import argparse, csv, hmac, html, io, json, os, re, secrets, signal, socket, socketserver, sqlite3, sys, threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -28,7 +28,7 @@ for _stream in (sys.stdout, sys.stderr):  # ✓ and accented names on a Windows 
     except (AttributeError, ValueError):
         pass
 
-VERSION = "2.0.0-dev"
+VERSION = "2.0.0"
 MARK = f"gmskit-engine/{VERSION}"  # X-Engine header: tells scripts/engine.py this engine from others
 REPO = "https://github.com/Mahanaicoach/google-maps-scraper-kit"
 # The web UI's sponsor box: the browser reads this static file from GitHub (cached a day, no
@@ -87,8 +87,7 @@ JOB_PROPS = {
                                                        "drop domains that do not exist, add email_host"},
     "socials": {"type": "boolean", "description": "visit each website's homepage for Instagram, Facebook, LinkedIn, "
                                                  "TikTok, YouTube and X links"},
-    "reviews_max": {"type": "integer", "description": "0-5 reviews per place from its panel, one page load per place "
-                                                     "(Google shows reviews only to a Chrome window: SCRAPER_HEADLESS=0)"},
+    "reviews_max": {"type": "integer", "description": "0-5 reviews per place from its panel, one page load per place (headless supported)"},
     "proxies": {"type": "array", "items": {"type": "string"},
                 "description": "http(s)://[user:pass@]host:port or socks5://host:port; one per keyword in turn, "
                                "and the next one when Google refuses a keyword"},
@@ -531,6 +530,13 @@ def main():
             "finished keyword")
     if failed:
         log(f"{failed} job(s) stopped mid-run {jobs.MAX_RESUMES + 1} times: marked failed, rows kept")
+    try:
+        imported = store.import_kit1(os.path.join(browser.HOME, "kit1"))
+    except (OSError, sqlite3.Error, ValueError) as e:
+        imported = 0
+        log(f"kit 1.x jobs not imported, tried again on the next start: {type(e).__name__}: {e}")
+    if imported:
+        log(f"{imported} job(s) from kit 1.x imported with their results")
     worker.start()
     chrome = browser.find_chrome()
     where = f"http://localhost:{port}" if a.host == "127.0.0.1" else \

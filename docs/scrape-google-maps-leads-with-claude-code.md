@@ -43,10 +43,10 @@ Or use a slash command in Claude Code:
 3. Builds the job with the required `max_time`, `lat` and `lon`, with emails on by default.
 4. Polls the job in the background until it finishes.
 5. Downloads the CSV.
-6. Keeps the 8 lead fields: name, phone, email, website, category, address, rating and review count (empty by default).
+6. Keeps the 8 lead fields: name, phone, email, website, category, address, rating and review count.
 7. Saves the file, then presents a short table and the CSV path instead of dumping every row into chat.
 
-The kit's local commands and `localhost` calls are pre-approved in `.claude/settings.json`, so Claude Code does not prompt for each one.
+The kit's own scripts and the engine's health check are pre-approved in `.claude/settings.json`, so Claude Code does not prompt for each one.
 
 ## Example output
 

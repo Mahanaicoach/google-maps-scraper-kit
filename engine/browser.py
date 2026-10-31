@@ -251,7 +251,7 @@ class ProxyAuth:
 
 class Browser:
     """A Chrome whose DevTools socket is on 127.0.0.1; `cdp` is the browser-level CDP. Headless by
-    default; headless=False runs it as a normal window off-screen (Google's full view: see details.py)."""
+    default; headless=False runs it as a normal window off-screen."""
 
     def __init__(self, path=None, headless=True, profile=None, lang="en-US", timeout=30):
         self.path = path or find_chrome()
@@ -287,6 +287,14 @@ class Browser:
                     raise
                 port, path = self._launch(args + ["--no-sandbox"], timeout)
             self.cdp = CDP(f"ws://127.0.0.1:{port}{path}", timeout=timeout)
+            # Google gives a browser whose user agent says HeadlessChrome its "limited view": no review
+            # counts, today's hours only, no reviews. So a headless Chrome sends its own user agent with
+            # HeadlessChrome/ replaced by Chrome/ (same OS, same version, nothing else changed), which
+            # gets the full view. Page sets it in every tab before the first request. A window's
+            # agent has no HeadlessChrome and is left alone.
+            native_agent = self.cdp.send("Browser.getVersion")["userAgent"]
+            if "HeadlessChrome/" in native_agent:
+                self.cdp.user_agent = native_agent.replace("HeadlessChrome/", "Chrome/")
         except BrowserError:
             self.close()
             raise

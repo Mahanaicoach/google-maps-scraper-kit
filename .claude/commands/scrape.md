@@ -20,7 +20,7 @@ Use the `google-maps-scraper` skill and follow these steps:
 
 **Emails:** on by default. The script crawls each business website after the Maps job, 16 at a time. Some businesses publish no email, so coverage is partial. For a deliberately fast run without emails, pass `--no-email`.
 
-**Filters:** when the user wants only businesses without a website, a minimum rating or review count, or only rows with a phone or email, add `--no-website`, `--min-rating X`, `--min-reviews N` (ignored with a warning while `review_count` is empty), `--has-phone`, `--has-email`. `--exclude <earlier.csv>` drops places from a previous run; `--limit N` caps the rows. Several cities: repeat `--city`.
+**Filters:** when the user wants only businesses without a website, a minimum rating or review count, or only rows with a phone or email, add `--no-website`, `--min-rating X`, `--min-reviews N` (ignored with a warning when Google sent no review counts), `--has-phone`, `--has-email`. `--exclude <earlier.csv>` drops places from a previous run; `--limit N` caps the rows. Several cities: repeat `--city`.
 
 **Socials:** when the user says yes, `scripts/scrape.py … --socials` adds Instagram, Facebook and LinkedIn. Extraction costs **0 LLM tokens** because it runs in code. It adds ~40–50 tokens per business only if you load the rows into chat. **Never** WebFetch each website yourself to find socials; that costs thousands of tokens.
 

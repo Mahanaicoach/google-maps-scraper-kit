@@ -61,7 +61,7 @@ Illustrative rows only:
 - `emails`: filled when the roofer publishes one. The email crawl reads the homepage, then contact and about pages.
 - `website`: an empty cell here also means no email or socials could be found.
 - `category`: shows how each business describes itself.
-- `review_rating`: a quick read on reputation. `review_count` stays empty by default: Google shows the engine's headless browser no review counts. [Window mode](../../SETUP.md#review-counts-hours-and-reviews-window-mode) fills it.
+- `review_rating`: a quick read on reputation. `review_count` works [headless](../../SETUP.md#review-counts-hours-and-reviews) and supports `--min-reviews` filtering.
 
 ## What to expect
 

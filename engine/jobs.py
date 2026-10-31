@@ -12,14 +12,14 @@ stops with a clear Error. A watchdog stops Chrome when a job overruns its max_ti
 stick on "working". Standard library only.
 """
 import concurrent.futures, csv, html, http.client, io, ipaddress, json, math, os, re, socket
-import sqlite3, threading, time, urllib.parse, urllib.request, uuid
+import shutil, sqlite3, tempfile, threading, time, urllib.parse, urllib.request, uuid
 from datetime import datetime, timezone
 
 import browser, details, maps
 from cdp import CDPError, Page
 
-# gosom/google-maps-scraper's CSV header, in its order, so files and scripts that read the old
-# engine's output keep working. Our own columns follow.
+# Kit 1.x's CSV header, in its order, so files and scripts that read the old engine's output keep
+# working. Our own columns follow.
 COLUMNS = ["input_id", "link", "title", "category", "address", "open_hours", "popular_times", "website",
            "phone", "plus_code", "review_count", "review_rating", "reviews_per_rating", "latitude",
            "longitude", "cid", "status", "descriptions", "reviews_link", "thumbnail", "timezone",
@@ -283,6 +283,60 @@ class Store:
                     pass
         return bool(gone)
 
+    def import_kit1(self, folder):
+        """Kit 1.x's jobs and their CSVs, from the old engine's data folder (docker-compose.yml mounts
+        its volume read-only on .engine/kit1), so an update from 1.x keeps them in the job list. Once
+        only: a marker file stops it next time, so a job deleted here stays deleted. Jobs imported;
+        an unreadable old database raises sqlite3.Error and is tried again on the next start."""
+        marker = os.path.join(self.folder, "kit1-imported")
+        if os.path.exists(marker) or not os.path.isfile(os.path.join(folder, "jobs.db")):
+            return 0
+        # The old database is in WAL mode on a read-only volume: read a copy, its WAL included.
+        tmp = tempfile.mkdtemp(dir=self.folder)
+        try:
+            for f in ("jobs.db", "jobs.db-wal"):
+                if os.path.isfile(os.path.join(folder, f)):
+                    shutil.copyfile(os.path.join(folder, f), os.path.join(tmp, f))
+            old = sqlite3.connect(os.path.join(tmp, "jobs.db"))
+            try:
+                rows = old.execute("SELECT id, name, status, data, created_at FROM jobs ORDER BY created_at").fetchall()
+            finally:
+                old.close()
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        n = 0
+        for jid, name, status, data, created in rows:
+            try:
+                plain = str(uuid.UUID(str(jid))) == jid  # a job id, never a path, goes into a file name
+            except ValueError:
+                plain = False
+            src = os.path.join(folder, f"{jid}.csv")
+            if not plain or not os.path.isfile(src) or self.get(jid):
+                continue
+            try:
+                d = json.loads(data or "{}")
+            except ValueError:
+                d = {}
+            if not isinstance(d, dict):
+                d = {}
+            if isinstance(d.get("max_time"), int):
+                d["max_time"] //= 10 ** 9  # nanoseconds in 1.x, seconds here
+            with open(src, newline="", encoding="utf-8", errors="replace") as f:
+                places = max(sum(1 for _ in csv.reader(f)) - 1, 0)
+            ok = status == "ok"
+            with self.lock, self.db:
+                shutil.copyfile(src, self.csv_path(jid))
+                self.db.execute("INSERT INTO jobs (id, name, date, status, data, error, progress) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                (jid, str(name), datetime.fromtimestamp(int(created), timezone.utc).isoformat(timespec="seconds"),
+                                 "ok" if ok else "failed", json.dumps(d),
+                                 "" if ok else f"kit 1.x job that was {status} there; its rows are kept",
+                                 json.dumps({"done": len(d.get("keywords") or []) if ok else 0, "places": places,
+                                             "stage": "done" if ok else ""})))
+            n += 1
+        with open(marker, "w"):
+            pass
+        return n
+
     def csv_path(self, jid):
         return os.path.join(self.folder, f"{jid}.csv")
 
@@ -367,8 +421,8 @@ def public(job):
 # ── Worker ──
 class Worker(threading.Thread):
     """Runs pending jobs one at a time, oldest first: never two scrapes against Google at once.
-    headless=False runs Chrome as an off-screen window, which Google gives its full view (review
-    counts, the week's hours, reviews); see details.py."""
+    headless=False runs Chrome as an off-screen window. Both get Google's full view (review counts,
+    the week's hours, reviews): see browser.py."""
 
     def __init__(self, store, log=print, headless=True):
         super().__init__(daemon=True, name="jobs")
@@ -570,12 +624,7 @@ class Worker(threading.Thread):
                 stage = "reviews" if reviews else "websites"
                 save(stage=stage, bytes=self.store.append(jid, [], cols), blocked=blocked, retried=retries,
                      failed=len(errors), last_error=errors[-1] if errors else "", timed_out=timed_out["yes"])
-            windowed = not (self.headless or browser.always_headless(
-                self._browser.path if self._browser else browser.find_chrome()))
-            if stage == "reviews" and rows and not windowed:  # the limited view has no reviews: do not try
-                notes.append("no reviews: Google's limited view, which a headless Chrome gets, shows none; "
-                             "set SCRAPER_HEADLESS=0, with an installed Chrome, to run it as a window")
-            elif stage == "reviews" and rows and self._browser and not (stop.is_set() or blocked):
+            if stage == "reviews" and rows and self._browser and not (stop.is_set() or blocked):
                 n = self.add_reviews(rows, d, deadline, stop, [x for x in proxies if x not in bad] or proxies,
                                      save, notes)
                 self.store.rewrite(jid, rows, cols)  # keep the reviews if the engine stops during the next pass

@@ -8,7 +8,7 @@ No network, no Chrome, no Docker.
 """
 import csv, hashlib, http.client, importlib.util, io, json, os, queue, re, shutil, socket, sqlite3, subprocess, sys
 import tempfile
-import threading, time, unittest, unittest.mock, zipfile
+import threading, time, unittest, unittest.mock, uuid, zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -213,6 +213,39 @@ class Store(Fakes):
         self.assertFalse(self.store.delete(b))
         self.assertEqual(set(self.store.get(a)), {"ID", "Name", "Date", "Status", "Data", "Error", "Progress"})
         self.assertRegex(self.store.get(a)["Date"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+00:00$")
+
+    def test_import_kit1(self):
+        # Kit 1.x's data folder as its engine leaves it: jobs.db in WAL mode, rows still in the WAL
+        # (the writer is open), <id>.csv beside it.
+        old = os.path.join(self.dir, "kit1")
+        os.makedirs(old)
+        w = sqlite3.connect(os.path.join(old, "jobs.db"))
+        w.execute("PRAGMA journal_mode=WAL")
+        w.execute("CREATE TABLE jobs (id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL, "
+                  "data TEXT NOT NULL, created_at INT NOT NULL, updated_at INT NOT NULL)")
+        done, stuck, nocsv = (str(uuid.uuid4()) for _ in range(3))
+        body = json.dumps({"keywords": ["cafe", "bar"], "lang": "en", "max_time": 180 * 10 ** 9})
+        with w:
+            for jid, status in ((done, "ok"), (stuck, "working"), (nocsv, "ok"), ("../evil", "ok")):
+                w.execute("INSERT INTO jobs VALUES (?, ?, ?, ?, 1793466309, 1793466322)", (jid, "old " + status, status, body))
+        for jid in (done, stuck, "../evil"):
+            with open(os.path.join(old, f"{jid}.csv"), "w", newline="") as f:
+                f.write("input_id,title\n1,\"A\nB\"\n2,C\n")
+        try:
+            self.assertEqual(self.store.import_kit1(old), 2)
+        finally:
+            w.close()
+        a, b = self.store.get(done), self.store.get(stuck)
+        self.assertEqual((a["Status"], a["Name"], a["Date"], a["Data"]["max_time"]), ("ok", "old ok", "2026-10-31T17:05:09+00:00", 180))
+        self.assertEqual(jobs.public(a)["Progress"], {"keywords_done": 2, "keywords_total": 2, "places": 2, "percent": 100, "stage": "done"})
+        self.assertEqual((b["Status"], b["Error"]), ("failed", "kit 1.x job that was working there; its rows are kept"))
+        self.assertEqual(self.store.read_csv(done), b"input_id,title\n1,\"A\nB\"\n2,C\n")
+        self.assertIsNone(self.store.get(nocsv))
+        self.assertIsNone(self.store.get("../evil"))  # not a job id: skipped
+        self.store.delete(done)
+        self.assertEqual(self.store.import_kit1(old), 0)  # once only: a deleted job stays deleted
+        self.assertIsNone(self.store.get(done))
+        self.assertEqual(self.store.import_kit1(os.path.join(self.dir, "none")), 0)
 
 
 class Worker(Fakes):
@@ -624,6 +657,18 @@ class LaunchChrome(unittest.TestCase):
     def launches(self):
         with open(os.environ["FAKE_LOG"]) as f:
             return f.read().splitlines()
+
+    def test_user_agent_keeps_running_version_and_platform(self):
+        for native in ("Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/157.0.1.2 Safari/537.36",
+                       "Mozilla/5.0 (Macintosh) Chrome/156.0.1.2 Safari/537.36"):
+            with unittest.mock.patch.object(browser.Browser, "_launch", return_value=(1, "/test")), \
+                 unittest.mock.patch.object(browser, "CDP") as connection:
+                connection.return_value.user_agent = None
+                connection.return_value.send.return_value = {"userAgent": native}
+                with browser.Browser(path=self.exe) as b:
+                    expected = native.replace("HeadlessChrome/", "Chrome/") if "HeadlessChrome/" in native else None
+                    self.assertEqual(b.cdp.user_agent, expected)
+                    b.cdp.send.assert_called_once_with("Browser.getVersion")
 
     def test_dead_devtools_port_leaves_nothing(self):
         profile = os.path.join(self.dir, "profile")
@@ -1206,12 +1251,14 @@ class LoopTwo(Fakes):
         _, job = self.run_one(keywords=["a", "b", "c", "d"], proxies=["http://dead:1", "http://ok:2"])
         self.assertEqual((job["Status"], calls), ("ok", ["http://dead:1"] + ["http://ok:2"] * 4))
 
-    def test_headless_skips_the_reviews_pass(self):
+    def test_headless_runs_the_reviews_pass(self):
         RESULTS["cafes in Austin"] = ([place(1)], "end-of-list")
-        self.worker.add_reviews = lambda *a, **k: self.fail("no reviews pass in Google's limited view")
+        calls = []
+        self.worker.add_reviews = lambda *a, **k: calls.append(a[1]["reviews_max"]) or 0
         _, job = self.run_one(reviews_max=2)
         self.assertEqual(job["Status"], "ok")
-        self.assertIn("no reviews: Google's limited view", job["Error"])
+        self.assertEqual(calls, [2])
+        self.assertNotIn("limited view", job["Error"])
 
     def test_errors_survive_a_restart_mid_search(self):
         name, data = jobs.validate(dict(GOOD, keywords=["a", "b", "c"]))

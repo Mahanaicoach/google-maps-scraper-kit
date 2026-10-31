@@ -12,6 +12,7 @@ services:
     restart: unless-stopped
     init: true  # reaps Chromium's helper processes, which the engine would leave as zombies as PID 1
     stop_grace_period: 20s  # time for the engine to pause its job, so it resumes on the next start
+    depends_on: [ui]  # kit 1.x's web front goes first, so the port is free (see ui below)
     environment:
       # Blank by default. When set in .env, the engine wants it as an X-API-Key header.
       SCRAPER_API_KEY: ${SCRAPER_API_KEY:-}
@@ -20,6 +21,18 @@ services:
       - "127.0.0.1:${SCRAPER_PORT:-8080}:8080"   # localhost only, see the warning above
     volumes:
       - engine_data:/kit/.engine/data  # jobs and results, kept across restarts and rebuilds
+      # Kit 1.x's jobs and results, read-only: the engine imports them once, on its first start
+      # (engine/jobs.py import_kit1). On a new install this volume is empty.
+      - gmaps_data:/kit/.engine/kit1:ro
+
+  # Kit 1.x ran a web front (nginx) under this name, which holds the port. Zero copies here makes
+  # `docker compose up -d` remove it on the update from 1.x; nothing is downloaded or started.
+  ui:
+    image: nginx:1.27-alpine
+    pull_policy: never
+    deploy:
+      replicas: 0
 
 volumes:
   engine_data:
+  gmaps_data:
