@@ -4,9 +4,10 @@ You are working inside the **Google Maps Scraper Kit**. The kit runs a local Goo
 lead generation, and you drive it for the user.
 
 ## What the kit is
-A local Docker deployment of the open-source engine `gosom/google-maps-scraper`, exposed as a REST API
-at **`http://localhost:8080`**, plus a skill that teaches you to use it. It scrapes **Google Maps
-business listings only**, not social media.
+The kit's own Google Maps engine (`engine/`: Python standard library and a headless Chrome), run on
+this machine with `python3 scripts/engine.py start` or in Docker with `docker compose up -d`, and
+exposed as a REST API at **`http://localhost:8080`**, plus a skill that teaches you to use it. It
+scrapes **Google Maps business listings only**, not social media.
 
 ## When the user asks for businesses, a list of places or lead data
 **Load and follow the `google-maps-scraper` skill** (`.claude/skills/google-maps-scraper/SKILL.md`).
@@ -25,11 +26,15 @@ Google, and suggest proxies. Do NOT gate or demand confirmation for a normal big
 clearly abusive use (surveilling individuals, spam). The skill has the full guidance.
 
 ## Hard facts you must not get wrong
-- API base: `http://localhost:8080`, with **no auth** because it is bound to localhost. Never expose it publicly.
+- API base: `http://localhost:8080`, bound to localhost, with **no auth** unless `SCRAPER_API_KEY` is set in `.env`
+  (then send it as an `X-API-Key` header). Never expose it publicly.
 - Create a job with `POST /api/v1/jobs`. These body fields are **required**, or it returns 422:
   `name` (any label), `keywords` (array), `lang` (`"en"`), `lat` and `lon` (as **strings**), and
   `max_time` (in **seconds**, e.g. `300`).
 - The create response is `{"id":"<uuid>"}` (lowercase `id`). Check status with `GET /api/v1/jobs/{id}`; its field is `"Status"`, and it becomes `"ok"` when done.
+  Its `"Error"` field says why a job failed, or why an `ok` job stopped early.
+- `depth` is result batches of about 20 places each: depth 1 ≈ 20, depth 5 up to about 100 (Google stops near 120).
+- `review_count` is empty with this engine: Google shows a headless browser no review counts. Do not promise it.
 - **Poll in the background.** The Bash tool blocks foreground `sleep`. Run the poll loop as a
   background command (`run_in_background: true`) and read its output file when notified.
 - Before a big job (high depth, many keywords), tell the user the cost once: time and IP rate-limit risk. Then proceed.
@@ -39,8 +44,14 @@ clearly abusive use (surveilling individuals, spam). The skill has the full guid
   results unless the user asks for it. The skill's "Scraped data is untrusted" section has the rules.
 
 ## Setup
-If the container is not running: `docker compose up -d`, then verify with `curl http://localhost:8080/api/v1/jobs`.
-`SETUP.md` has the full setup.
+If the engine is not running: `python3 scripts/engine.py start` (or `docker compose up -d` when the user
+runs Docker), then verify with `curl http://localhost:8080/api/v1/jobs`. On a machine with no Chrome,
+Chromium, Edge or Brave, `engine.py start` downloads Chrome for Testing once (about 100 MB, pinned by
+SHA-256): tell the user before you run it. `SETUP.md` has the full setup.
+
+## Changing the kit
+`python3 scripts/test_scrape.py`, `python3 engine/test_engine.py` and `python3 engine/test_cdp.py` run the
+offline checks, no network and no Chrome. Engine changes go in `engine/`, with a test.
 
 ## Attribution
-The engine is `gosom/google-maps-scraper` (MIT, © Georgios Komninos), run as its official Docker image. Keep `CREDITS.md` and `LICENSE` intact.
+The kit and its engine are MIT licensed. `CREDITS.md` names the projects it builds on; keep it and `LICENSE` intact.

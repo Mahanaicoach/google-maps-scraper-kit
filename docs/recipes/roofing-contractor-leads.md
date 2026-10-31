@@ -1,16 +1,18 @@
 # Scrape roofing contractors from Google Maps: a lead list recipe
 
 This recipe shows how to scrape roofing contractors from Google Maps for one city with the Google Maps Scraper Kit, using one batch job for several search terms.
-You get a CSV of roofers with phone, email, website, address, rating and review count, free and local, with no API key.
+You get a CSV of roofers with phone, email, website, address and rating, free and local, with no API key.
 
 ## Step 1: Run one search
 
 Start the engine, then test with one search at the default depth:
 
 ```bash
-docker compose up -d
+python3 scripts/engine.py start
 python3 scripts/scrape.py "roofing contractors in Phoenix AZ" --city "Phoenix, AZ" --depth 5
 ```
+
+With Docker, `docker compose up -d` starts the same engine instead of the first line.
 
 Check the preview and the email found-rate line before you scale up.
 
@@ -47,11 +49,11 @@ Add `--socials` to any of these commands for Instagram, Facebook and LinkedIn li
 
 Illustrative rows only:
 
-| title | phone | emails | website | category | review_count |
+| title | phone | emails | website | category | review_rating |
 |---|---|---|---|---|---|
-| Example Roofing Co | +1 602-555-0101 | estimates@example.com | example.com | Roofing contractor | 245 |
-| Sample Roof Repair | +1 602-555-0102 | info@example.org | example.org | Roofing contractor | 58 |
-| Demo Roofers | +1 602-555-0103 |  | example.net | Roofer | 19 |
+| Example Roofing Co | +1 602-555-0101 | estimates@example.com | example.com | Roofing contractor | 4.9 |
+| Sample Roof Repair | +1 602-555-0102 | info@example.org | example.org | Roofing contractor | 4.5 |
+| Demo Roofers | +1 602-555-0103 |  | example.net | Roofer | 4.3 |
 
 ## Columns that matter for roofing outreach
 
@@ -59,7 +61,7 @@ Illustrative rows only:
 - `emails`: filled when the roofer publishes one. The email crawl reads the homepage, then contact and about pages.
 - `website`: an empty cell here also means no email or socials could be found.
 - `category`: shows how each business describes itself.
-- `review_rating` and `review_count`: a quick read on size and reputation.
+- `review_rating`: a quick read on reputation. `review_count` stays empty for now: Google shows the engine's headless browser no review counts.
 
 ## What to expect
 

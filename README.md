@@ -13,16 +13,16 @@
   <img alt="No API keys" src="https://img.shields.io/badge/API%20keys-none-334155?style=flat-square">
 </p>
 
-<p align="center"><sub>Last verified working: 2026-10-30 with engine v1.18.1 on macOS Apple Silicon.</sub></p>
+<p align="center"><sub>Last verified working: 2026-10-31 with the kit's own engine on macOS, Linux (amd64 and arm64), Windows and Docker.</sub></p>
 
 **A free, open-source Google Maps scraper for lead generation that runs on your own machine.**
 Name a business type and a city. Get back an outreach-ready CSV with name, phone, email, website,
 category, address, rating and review count. Add `--socials` for Instagram, Facebook, LinkedIn, TikTok,
 YouTube and X, or `--no-website` for the businesses that still need a site.
 
-No Google Maps API key, no SaaS credits, no data leaving your computer. One Docker command starts the
-engine. Then run it from the terminal, or let Claude Code, Codex or Cursor drive it for you in plain
-English.
+No Google Maps API key, no SaaS credits, no data leaving your computer. One command starts the
+engine, with or without Docker. Then run it from the terminal, or let Claude Code, Codex or Cursor
+drive it for you in plain English.
 
 | Goal | Start here |
 |---|---|
@@ -61,23 +61,30 @@ Maps API, delivered as clean, structured JSON and Markdown.
 
 ## Quick start
 
-Requires [Docker Desktop](https://www.docker.com/products/docker-desktop) (installed **and open**) and
-Python 3. The scripts use the standard library only, so there is nothing to `pip install`.
+Requires Python 3.9 or newer and Google Chrome (or Chromium, Edge or Brave). The engine and the
+scripts use the Python standard library only, so there is nothing to `pip install`. No browser
+installed? The first start downloads Chrome for Testing once, about 100 MB, checked against a pinned
+SHA-256.
 
-Open a terminal (macOS: Terminal; Windows: PowerShell) and run these four lines. The first
-`docker compose up -d` downloads the engine once, about 600 MB, and the script waits for it to start:
+Open a terminal (macOS: Terminal; Windows: PowerShell) and run these four lines:
 
 ```bash
 git clone https://github.com/Mahanaicoach/google-maps-scraper-kit.git
 cd google-maps-scraper-kit
-docker compose up -d
-bash scripts/scrape.sh "coffee shops in Austin TX" 30.2672 -97.7431 5
+python3 scripts/engine.py start
+python3 scripts/scrape.py "coffee shops in Austin TX" 30.2672 -97.7431 --depth 2
 ```
 
-On Windows, skip the `bash` line and use the Python CLI below with `py` in place of `python3`.
-Prefer clicking? http://localhost:8080 has a form; it returns the engine's raw 36-column CSV.
-Already running another copy of the kit on this machine? Set the port and names in `.env` first
-(SETUP §6, "second copy"), or `docker compose up -d` takes over the other copy's containers.
+On Windows, type `py` in place of `python3`. Stop the engine with `python3 scripts/engine.py stop`.
+
+**Prefer Docker?** Replace the third line with `docker compose up -d`, with
+[Docker Desktop](https://www.docker.com/products/docker-desktop) installed and open. The first run
+builds the engine image, about a minute. It is the same engine on the same port, so every other
+command stays the same.
+
+Prefer clicking? http://localhost:8080 has a form; it returns the engine's raw CSV.
+Already running another copy of the kit on this machine? Set `SCRAPER_PORT` in `.env` first
+(SETUP §6, "second copy").
 
 No coordinates handy? Let the Python CLI geocode the city:
 
@@ -85,8 +92,8 @@ No coordinates handy? Let the Python CLI geocode the city:
 python3 scripts/scrape.py "dentists in Denver CO" --city "Denver, CO" --depth 5 --socials
 ```
 
-A search at `--depth 5` usually returns 20 to 40 places. A higher `--depth` scrolls further, up to
-Google's cap of about 120 per search. Need the whole city? Add `--grid 3`:
+Each `--depth` step loads one more batch of about 20 places: `--depth 2` returns about 40, `--depth 5`
+up to about 100, near Google's cap of about 120 per search. Need the whole city? Add `--grid 3`:
 
 ```bash
 python3 scripts/scrape.py "dentists in Denver CO" --city "Denver, CO" --grid 3
@@ -94,19 +101,21 @@ python3 scripts/scrape.py "dentists in Denver CO" --city "Denver, CO" --grid 3
 
 ### Example output
 
-`results-coffee_shops_in_Austin_TX.csv` from the first command above (`scrape.py` names its file
-`results-<short job id>.csv` unless you pass `--out`). Illustrative rows:
+`results-<short job id>.csv` from the first command above (pass `--out` to name it yourself).
+Illustrative rows:
 
 | title | phone | emails | website | category | address | review_rating | review_count |
 |---|---|---|---|---|---|---|---|
-| Example Roasters | +1 512-555-0101 | hello@example.com | example.com | Coffee shop | 100 Congress Ave, Austin, TX | 4.7 | 812 |
-| Sample Espresso Bar | +1 512-555-0102 | info@example.org | example.org | Cafe | 200 S Lamar Blvd, Austin, TX | 4.5 | 356 |
+| Example Roasters | +1 512-555-0101 | hello@example.com | example.com | Coffee shop | 100 Congress Ave, Austin, TX | 4.7 | |
+| Sample Espresso Bar | +1 512-555-0102 | info@example.org | example.org | Cafe | 200 S Lamar Blvd, Austin, TX | 4.5 | |
+
+`review_count` stays empty for now: see [Honest limits](#honest-limits).
 
 `--socials` adds `instagram`, `facebook`, `linkedin`, `tiktok`, `youtube` and `x` columns. `--tech` adds
 `fb_pixel`, `google_ads_tag`, `analytics`, `bing_ads`, `linkedin_insight`, `tiktok_pixel`, `cms`,
 `mobile_friendly` and `intent_score`, and sorts the hottest leads first. `--verify-emails` adds
-`email_host`. `--full` keeps all 36 raw fields, including opening hours, coordinates, price range and
-reviews.
+`email_host`. `--full` keeps every raw column, including coordinates, place IDs, all categories, price
+range and whether the place is open now.
 
 Full walkthrough, platform notes and troubleshooting: [SETUP.md](SETUP.md).
 
@@ -131,9 +140,10 @@ claude
 npx skills add mahanaicoach/google-maps-scraper-kit
 ```
 
-This installs the skill file only. The agent starts the engine with one `docker run` and calls its
-API directly. The scripts' extras (`--socials`, `--tech`, `--grid`, geocoding, the email crawl and the
-8-column cleanup) and the slash commands come with Option A.
+This installs the skill file only. The engine ships with the kit, so the agent first asks you to
+install it (the [Quick start](#quick-start)) and then calls its API directly. The scripts' extras
+(`--socials`, `--tech`, `--grid`, geocoding, the email crawl and the 8-column cleanup) and the slash
+commands come with Option A.
 
 Then ask in plain language:
 
@@ -158,7 +168,7 @@ scrapes Google Maps business listings only. It does not scrape social platforms 
 
 | | |
 |---|---|
-| **8 lead fields by default** | name, phone, email, website, category, address, rating, review count. The engine captures 36 raw fields; `--full` keeps them all. |
+| **8 lead fields by default** | name, phone, email, website, category, address, rating, review count (empty for now). The engine writes 37 raw columns; `--full` keeps them all. |
 | **Email extraction, on by default** | After the Maps job, the script crawls every business website, 16 at a time: the homepage, then its contact and about pages if the homepage shows no email. It prints your found rate. |
 | **Beyond the 120 cap** | `--grid 3` splits the city into 3 x 3 map tiles, runs them one at a time and dedupes on `place_id`. |
 | **Social enrichment** | `--socials` finds Instagram, Facebook, LinkedIn, TikTok, YouTube and X profiles in code (HTTP + regex). Zero AI tokens. |
@@ -167,9 +177,9 @@ scrapes Google Maps business listings only. It does not scrape social platforms 
 | **Email checks** | `--verify-emails` looks up each domain's MX record over DNS (no key), drops dead domains and labels the mail host (`google_workspace`, `microsoft_365`, `other`, `none`; blank when the row has no email). |
 | **Auto-geocoding** | Type a city name. Coordinates are resolved for you via OpenStreetMap. Repeat `--city` to run several cities into one file. |
 | **Batch jobs** | Many keywords, one job, one CSV. The engine lists a place found by several keywords once. |
-| **Proxy rotation** | Built into the engine for large or repeated runs: `--proxy URL` (repeatable). `socks5`, `socks5h`, `http`, `https`. |
+| **Proxies** | For large or repeated runs: `--proxy URL` with `http`, `https`, `socks5` or `socks5h`. The engine uses the first one; usernames and passwords are not supported yet. |
 | **Agent-native** | A skill plus four slash commands. The agent handles create, poll, download, clean and present. |
-| **Safe defaults** | API bound to `127.0.0.1`, and the proxy refuses requests from other websites in your browser (DNS rebinding, cross-site posts). Results git-ignored; website fetches skip private addresses; rate-limit and data-law guardrails built into the skill. |
+| **Safe defaults** | API bound to `127.0.0.1`, and the engine refuses requests from other websites in your browser (DNS rebinding, cross-site posts); an optional API key. No telemetry. Results git-ignored; website fetches skip private addresses; rate-limit and data-law guardrails built into the skill. |
 
 ### Batch jobs and the Python CLI
 
@@ -189,22 +199,24 @@ One keyword per line. One job. One CSV.
 - **About 120 listings per search.** Google Maps stops scrolling at roughly 120 results per search.
   That is Google's cap, not the kit's. `--grid` is the fix: it splits the city into N x N map tiles,
   runs one search per tile in a single batch, and dedupes the results on `place_id`. Tiles run one at a
-  time, so a grid is slower and more likely to trip rate limits than a single search. A first search
-  at depth 5 usually returns 20 to 40.
+  time, so a grid is slower and more likely to trip rate limits than a single search. Each depth step
+  adds a batch of about 20 places.
+- **No review counts, hours or reviews for now.** Signed out, Google shows a headless browser
+  ratings but no review counts, and the kit does not disguise its browser to get them. So
+  `review_count` stays empty and `--min-reviews` is ignored with a warning; `--min-rating` works.
+  Opening hours, review text and photos are empty too until a later release reads them.
 - **Emails only when a business publishes one.** The script reads the business homepage, then its
   contact and about pages. Listings with no site, or a site with no visible
   email, return an empty `emails` cell. Instagram bios are not read. Expect emails on a fraction of
   rows, not all of them.
 - **Rate limits are real.** Heavy use without proxies can get your IP temporarily rate-limited by
   Google for minutes to hours. Your Google account is not affected. See [Responsible use](#responsible-use).
-- **The web UI is the engine's own page.** It downloads the raw 36-column CSV and uses the engine's
-  slower email option, whose `emails` column can keep junk such as `sentry.wixpress.com` and image
-  names. For a clean outreach list, use the scripts. The page also loads its scripts,
-  fonts and map tiles from public CDNs and OpenStreetMap, and its sponsor box from this repo on
-  GitHub (`assets/sponsors/sponsors.json`, a static file, no tracking), so it needs internet.
-  Scraped data stays on your machine.
-- **Apple Silicon runs natively from v1.18.0 on.** The image publishes arm64 builds, so M-series
-  Macs need no emulation. Older tags are amd64 only and run under emulation.
+- **The web UI is a simple form.** It downloads the raw CSV, and its email option reads homepages
+  only, so the scripts find more emails and return the clean 8 lead fields. Its one request outside
+  your machine is the sponsor box, which reads `assets/sponsors/sponsors.json` from this repo on
+  GitHub (a static file, cached for a day, no tracking). Scraped data stays on your machine.
+- **Proxies without passwords, one at a time.** The engine takes an `http://`, `https://`, `socks5://`
+  or `socks5h://` proxy that allows your IP address, and uses the first one you list.
 
 ---
 
@@ -241,18 +253,20 @@ One page per job, with the exact commands. Index: [docs/README.md](docs/README.m
 ## FAQ
 
 **Is this Google Maps scraper free?**
-Yes. The kit is MIT licensed and the engine it runs is open source. There are no credits, subscriptions
-or API keys. You only need Docker on your own machine.
+Yes. The kit and its engine are MIT licensed. There are no credits, subscriptions or API keys. You
+need Python and Chrome on your own machine, or Docker.
 
 **Do I need a Google Maps API key or the Google Places API?**
 No. The kit drives a headless browser against Google Maps directly, so there is no API quota or billing.
 
 **How is this different from gosom/google-maps-scraper?**
-[gosom/google-maps-scraper](https://github.com/gosom/google-maps-scraper) is the scraping engine, and
-this kit runs its official Docker image. The kit adds the lead-focused layer on top: a one-command
-local setup, a dependency-free Python CLI with geocoding and batching, email and social enrichment to a
-clean 8-column CSV, and a Claude Code skill with slash commands and safety guardrails. See
-[CREDITS.md](CREDITS.md).
+Kit 1.x ran [gosom/google-maps-scraper](https://github.com/gosom/google-maps-scraper) in Docker. Kit
+2.0 has its own engine, written from scratch in standard-library Python around a headless Chrome. It
+runs without Docker, works on Windows and on arm64 Linux, needs no workarounds for jobs that never
+finish, and sends no telemetry. It keeps the same job API and column names, so scripts and files made
+for 1.x still work. On top sits the lead-focused layer: a dependency-free Python CLI with geocoding
+and batching, email and social enrichment to a clean 8-column CSV, and a Claude Code skill with slash
+commands and safety guardrails. See [CREDITS.md](CREDITS.md).
 
 **Do I need Claude Code to use it?**
 No. Claude Code makes it hands-free through a skill and slash commands, but `scripts/scrape.py` and
@@ -271,8 +285,8 @@ as untrusted, and a re-audit is requested in
 [vercel-labs/skills#2624](https://github.com/vercel-labs/skills/issues/2624).
 
 **What data do I get for each business?**
-Name, phone, email, website, category, address, rating and review count by default. Add `--socials`
-for Instagram, Facebook, LinkedIn, TikTok, YouTube and X, or `--full` for all 36 raw fields.
+Name, phone, email, website, category, address, rating and review count (empty for now) by default. Add `--socials`
+for Instagram, Facebook, LinkedIn, TikTok, YouTube and X, or `--full` for every raw column.
 
 **How many leads can I scrape?**
 Up to about 120 per search. Add `--grid 3` to split the city into 9 map tiles and get past that cap,
@@ -280,8 +294,9 @@ with duplicates removed. Batch as many keywords as you like in one job. For larg
 add proxies (see [Responsible use](#responsible-use)).
 
 **Does it work on Windows, Linux and Apple Silicon Macs?**
-Yes. Anywhere Docker runs. On Windows, use `scripts/scrape.py`, or run `scrape.sh` under WSL2 or Git
-Bash. [SETUP.md](SETUP.md) covers the Apple Silicon note.
+Yes, natively on all three with Python and Chrome, Apple Silicon and Linux arm64 included, or anywhere
+Docker runs. On Windows, use `py scripts/scrape.py`, or run `scrape.sh` under WSL2 or Git Bash.
+[SETUP.md](SETUP.md) has the platform notes.
 
 **Is scraping Google Maps legal?**
 It is against Google's Terms of Service, and phones and emails are personal data. Read
@@ -297,12 +312,12 @@ your IP **temporarily rate-limited** (minutes to hours). Your Google account is 
 
 - Run one job at a time. Start at `depth 5` and raise only when needed.
 - Watch for block signals: `failed` jobs, empty results, or far fewer rows than an identical earlier run.
-- Add proxies for large or repeated runs: `--proxy socks5://user:pass@host:port` on the script
-  (repeatable), or the `"proxies"` array on the raw API. The engine rotates them automatically and
-  needs `user:pass` for socks5 (an `http://` proxy works without). Sponsor
+- Add proxies for large or repeated runs: `--proxy http://host:port` on the script, or the
+  `"proxies"` array on the raw API. The engine uses the first proxy in the list, and it needs one that
+  allows your IP address: usernames and passwords are not supported yet. Sponsor
   [Swiftproxy](https://www.swiftproxy.net/?ref=googlemapsscraperkit) takes 10% off with code `PROXY90`:
   ```json
-  "proxies": ["socks5://user:pass@host:port", "http://host2:port2"]
+  "proxies": ["socks5://host:port"]
   ```
 - Treat output as leads to verify, not a dataset to resell. Phones and emails are personal data:
   follow GDPR, CCPA, CAN-SPAM and, in Brazil, LGPD — including the lawful basis, the purpose and an
@@ -330,10 +345,14 @@ If this kit saved you an afternoon of copy-pasting, a star helps the next person
 
 ```
 google-maps-scraper-kit/
-├── docker-compose.yml      local engine on 127.0.0.1:8080
-├── ui-branding.conf        nginx proxy: web UI links to this kit and its sponsors
+├── engine/                 the kit's own engine: Google Maps over Chrome DevTools, HTTP API, web UI
+│   ├── serve.py            the engine server on 127.0.0.1:8080
+│   └── test_engine.py      offline tests, no network, no Chrome
+├── Dockerfile              the engine image: Python + Debian's Chromium, non-root
+├── docker-compose.yml      runs that image on 127.0.0.1:8080
 ├── .env.example            config template
 ├── scripts/
+│   ├── engine.py           start, stop, status or restart the engine without Docker
 │   ├── scrape.py           Python CLI: single, batch, geocoding, socials, CSV
 │   ├── scrape.sh           bash CLI: single query
 │   ├── update.sh           one-command update of a clone or fork
@@ -345,7 +364,7 @@ google-maps-scraper-kit/
 │   ├── commands/           /scrape, /scrape-batch, /scrape-setup, /scrape-jobs
 │   └── skills/google-maps-scraper/SKILL.md
 ├── CLAUDE.md               project instructions for Claude Code
-├── CREDITS.md              scraping engine attribution and license
+├── CREDITS.md              attribution and licenses
 └── SETUP.md                full setup guide
 ```
 
@@ -360,16 +379,18 @@ keeps your own commits:
 bash scripts/update.sh
 ```
 
-If the engine is running, the script restarts it so a new engine version takes effect.
-Forked it on GitHub? Run `git push` afterwards, or click **Sync fork** on your fork's
+If the engine runs in Docker, the script rebuilds and restarts it so the new version takes effect.
+Without Docker, restart it yourself: `python3 scripts/engine.py restart`. Forked it on GitHub? Run `git push` afterwards, or click **Sync fork** on your fork's
 page.
 
 On Windows without Git Bash, run the same update by hand:
 
 ```bash
 git pull https://github.com/Mahanaicoach/google-maps-scraper-kit.git master
-docker compose up -d
+py scripts/engine.py restart
 ```
+
+With Docker, run `docker compose up -d --build --remove-orphans` in place of the second line.
 
 ## Support
 

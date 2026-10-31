@@ -393,6 +393,8 @@ class Api(Server):
         self.assertIn(f'<script nonce="{nonce}">', body.decode())
         self.assertIn("github.com/Mahanaicoach/google-maps-scraper-kit", body.decode())
         self.assertIn("frame-ancestors 'none'", csp)
+        self.assertIn("connect-src 'self' https://raw.githubusercontent.com;", csp)  # sponsors.json, nothing else
+        self.assertIn("assets/sponsors/sponsors.json", body.decode())
         self.assertNotRegex(body.decode(), r"\{[a-z_]+\}")  # every placeholder filled
         code, body, _ = self.call("GET", "/api/docs")
         self.assertEqual(json.loads(body)["paths"]["/api/v1/jobs"]["post"]["requestBody"]["content"]["application/json"]

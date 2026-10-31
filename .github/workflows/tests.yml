@@ -46,8 +46,10 @@ jobs:
           test "$(docker compose port google-maps-scraper 8080)" = 127.0.0.1:8080
           test "$(docker compose exec -T google-maps-scraper id -u)" != 0
           test "$(docker compose exec -T google-maps-scraper ls -A /kit | tr '\n' ' ')" = ".engine engine "
-      - name: web UI links the kit
-        run: curl -s http://localhost:8080/ | grep -q 'github.com/Mahanaicoach/google-maps-scraper-kit'
+      - name: web UI links the kit and its sponsors
+        run: |
+          curl -s http://localhost:8080/ | grep -q 'github.com/Mahanaicoach/google-maps-scraper-kit'
+          curl -s http://localhost:8080/ | grep -q 'assets/sponsors/sponsors.json'
       - name: engine refuses other hosts and other sites
         run: |
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.com' http://localhost:8080/api/v1/jobs)" = 421

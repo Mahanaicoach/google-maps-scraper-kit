@@ -1,5 +1,5 @@
 {
-  "_comment": "Premium sponsors. The web UI's sponsor box shows the ones with \"ui\": true, in this order, four at most; set \"ui\": false to keep a sponsor in the README only. Edit this file and push: every installed copy's web UI reads it from GitHub in the browser (a static file, cached for a day, no tracking). Fields: name (the link text), url (https only), tagline (one short line), ui (true or false).",
+  "_comment": "Premium sponsors. The web UI's sponsor box shows the ones with \"ui\": true, in this order, four at most; set \"ui\": false to keep a sponsor in the README only. Edit this file and push: every installed copy's web UI (engine/serve.py) reads it from GitHub in the browser (a static file, cached for a day, no tracking). Fields: name (the link text), url (https only), tagline (one short line), ui (true or false).",
   "sponsors": [
     {
       "name": "Swiftproxy",

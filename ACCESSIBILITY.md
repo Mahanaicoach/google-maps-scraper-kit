@@ -15,14 +15,15 @@ or high-contrast and magnified displays.
 
 ## Supported environments
 
-- **Operating systems:** macOS, Linux, and Windows (`scrape.py` directly, or `scrape.sh` under WSL2 or Git Bash), anywhere Docker runs.
+- **Operating systems:** macOS, Linux, and Windows (`scrape.py` directly, or `scrape.sh` under WSL2 or Git Bash), with Python and Chrome, or anywhere Docker runs.
 - **Terminals:** any terminal, including those used with VoiceOver, NVDA, JAWS, and Orca.
 - **Results:** any app that opens CSV, such as Excel, Numbers, LibreOffice Calc, or Google Sheets.
 
 ## Known limitations
 
 - Docker Desktop's own interface is outside this project's control and may have accessibility gaps.
-  Every Docker step in [SETUP.md](SETUP.md) can be done from the command line instead.
+  Docker is optional (`python3 scripts/engine.py start` runs the engine without it), and every Docker
+  step in [SETUP.md](SETUP.md) can be done from the command line instead.
 - Scraped data comes from Google Maps as listed. The kit does not fix missing or unclear fields in
   the source listings.
 - The README banner and badges are decorative. Their content is repeated in the text below them.

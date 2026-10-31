@@ -28,6 +28,9 @@ for _stream in (sys.stdout, sys.stderr):  # ✓ and accented names on a Windows 
 VERSION = "2.0.0-dev"
 MARK = f"gmskit-engine/{VERSION}"  # X-Engine header: tells scripts/engine.py this engine from others
 REPO = "https://github.com/Mahanaicoach/google-maps-scraper-kit"
+# The web UI's sponsor box: the browser reads this static file from GitHub (cached a day, no
+# tracking), so the sponsors it lists change without anyone updating their copy of the kit.
+SPONSORS = "https://raw.githubusercontent.com/Mahanaicoach/google-maps-scraper-kit/master/assets/sponsors/sponsors.json"
 ENV_KEYS = ("SCRAPER_PORT", "SCRAPER_API_KEY")
 MAX_BODY = 1 << 20
 LOCAL = r"(localhost|127\.0\.0\.1|\[::1\])"
@@ -112,6 +115,7 @@ td.err {{ color: var(--muted); font-size: .85em; }} .row {{ display: flex; gap: 
 <h1>Google Maps Scraper Kit</h1>
 <p class="muted">Local engine {version}. <a href="{repo}" rel="noopener">GitHub</a> ·
 <a href="/api/docs">API</a> · Business listings only. Results stay on this machine.</p>
+<p class="muted" id="sponsors"><a href="https://github.com/sponsors/Mahanaicoach" rel="noopener">Become a sponsor</a></p>
 <form id="f">
   <label class="wide">Keywords, one per line<textarea id="keywords" rows="3" required
     placeholder="coffee shops in Austin TX"></textarea></label>
@@ -182,6 +186,31 @@ $('f').addEventListener('submit', async ev => {{
   }} catch (e) {{ say(e.message); }}
 }});
 load(); setInterval(load, 3000);
+(function () {{  // sponsor box: the "ui": true entries of sponsors.json, as text, https links only
+  const box = $('sponsors'), key = 'gmskit-sponsors', day = 86400000;
+  function render(list) {{
+    const shown = Array.isArray(list) ? list.filter(s => s && s.ui === true && typeof s.name === 'string'
+      && typeof s.url === 'string' && s.url.startsWith('https://')).slice(0, 4) : [];
+    if (!shown.length) return;
+    box.replaceChildren('Sponsored by ');
+    shown.forEach((s, i) => {{
+      if (i) box.append(' | ');
+      const a = document.createElement('a');
+      a.href = s.url; a.target = '_blank'; a.rel = 'noopener noreferrer sponsored'; a.textContent = s.name.slice(0, 40);
+      box.append(a);
+      if (typeof s.tagline === 'string' && s.tagline) box.append(': ' + s.tagline.slice(0, 120));
+    }});
+  }}
+  try {{
+    const c = JSON.parse(localStorage.getItem(key) || 'null');
+    if (c && Date.now() - c.t < day) return render(c.list);
+  }} catch (e) {{}}
+  fetch('{sponsors}', {{cache: 'no-store', credentials: 'omit'}}).then(r => r.ok ? r.json() : null).then(d => {{
+    if (!d || !Array.isArray(d.sponsors)) return;
+    render(d.sponsors);
+    try {{ localStorage.setItem(key, JSON.stringify({{t: Date.now(), list: d.sponsors}})); }} catch (e) {{}}
+  }}).catch(() => {{}});
+}})();
 </script></body></html>"""
 
 
@@ -279,9 +308,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/":
             nonce = secrets.token_urlsafe(16)
             csp = (f"default-src 'none'; script-src 'nonce-{nonce}'; style-src 'nonce-{nonce}'; "
-                   "connect-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; "
+                   "connect-src 'self' https://raw.githubusercontent.com; img-src 'self' data:; "
+                   "form-action 'self'; base-uri 'none'; "
                    "frame-ancestors 'none'")
-            page = PAGE.format(nonce=nonce, version=VERSION, repo=REPO).encode()
+            page = PAGE.format(nonce=nonce, version=VERSION, repo=REPO, sponsors=SPONSORS).encode()
             return self.reply(200, page, "text/html; charset=utf-8", [("Content-Security-Policy", csp)])
         if path == "/api/docs":
             return self.reply(200, OPENAPI)

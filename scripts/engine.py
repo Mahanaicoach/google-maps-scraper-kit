@@ -280,6 +280,8 @@ def main():
             "restart": lambda: (stop(quiet=True), start(download=False))}
     if len(sys.argv) != 2 or sys.argv[1] not in cmds:
         sys.exit(f"usage: {PY} scripts/engine.py start|stop|status|restart")
+    if sys.version_info < (3, 9):
+        sys.exit(f"✗ The engine needs Python 3.9 or newer; this is {sys.version.split()[0]}.")
     cmds[sys.argv[1]]()
 
 
