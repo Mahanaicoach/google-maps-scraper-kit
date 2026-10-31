@@ -14,7 +14,9 @@ cd "$KIT_DIR"
 
 # A ZIP download has no git history. Check the top level too, so a copy inside
 # another repo (for example a git-tracked ~/.claude) is never merged into it.
-if [ "$(git rev-parse --show-toplevel 2>/dev/null)" != "$KIT_DIR" ]; then
+TOP="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+# Compared through pwd -P on both sides: Git Bash prints C:/... from git and /c/... from pwd.
+if [ -z "$TOP" ] || [ "$(cd "$TOP" && pwd -P)" != "$KIT_DIR" ]; then
   echo "This folder is not a git clone of the kit, so it can't update itself."
   echo "Clone it again: git clone $UPSTREAM"
   exit 1

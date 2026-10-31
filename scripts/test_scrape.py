@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Offline tests for scripts/scrape.py (standard library only, no network).
 Run: python3 scripts/test_scrape.py"""
-import csv, importlib.util, io, json, os, pathlib, sys, tempfile, threading, unittest
+import csv, importlib.util, io, json, os, pathlib, socket, sys, tempfile, threading, time, unittest
 from contextlib import redirect_stdout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
@@ -934,6 +934,74 @@ class EngineProgress(unittest.TestCase):
              redirect_stdout(io.StringIO()):
             scrape.main()
         self.assertEqual(bodies[0]["country"], "de")
+
+class AuditGuards(unittest.TestCase):
+    """The P5 audit's guards in the client: one check each."""
+
+    def test_public_ip_unwraps_embedded_ipv4_forms(self):
+        for ip in ("::ffff:10.0.0.1", "64:ff9b::7f00:1", "::127.0.0.1", "224.0.0.1", "fec0::1", "2002:7f00:1::"):
+            self.assertFalse(scrape._is_public_ip(ip), ip)
+        for ip in ("8.8.8.8", "::ffff:8.8.8.8", "64:ff9b::808:808"):
+            self.assertTrue(scrape._is_public_ip(ip), ip)
+
+    def test_redirect_to_ftp_refused(self):
+        self.assertIsNone(scrape._PublicRedirectsOnly().redirect_request(None, None, 302, "", {}, "ftp://93.184.216.34/x"))
+
+    def test_non_ascii_path_is_percent_encoded(self):
+        self.assertEqual(scrape._ascii_url("http://h/\u043a?q=\u00e4"), "http://h/%D0%BA?q=%C3%A4")
+
+    def test_hostile_pages_do_not_stall_the_regexes(self):
+        t = time.monotonic()
+        scrape.HREF_RE.findall("<a " * 100_000)
+        scrape.VIEWPORT_RE.search("<meta " * 100_000)
+        scrape.TECH_RE["fb_pixel"].search("connect.facebook.net/" * 20_000)
+        self.assertLess(time.monotonic() - t, 8)  # the unbounded forms took 12 s and 5 s on the first two
+
+    def test_read_capped_stops_at_the_deadline(self):
+        class Drip:
+            def read(self, n):
+                time.sleep(0.05)
+                return b"x"
+        t = time.monotonic()
+        self.assertTrue(scrape._read_capped(Drip(), 400_000, 0.3))
+        self.assertLess(time.monotonic() - t, 2)
+
+    def test_engine_calls_skip_an_environment_proxy(self):
+        self.assertFalse(any(isinstance(h, scrape.urllib.request.ProxyHandler) and h.proxies
+                             for h in scrape._API.handlers))
+
+    def test_reviews_pass_note_is_a_warning_not_partial(self):
+        self.assertFalse(scrape.WARN_NOTE.sub("", "reviews read for 3 of 20 places: ran out of time").strip(" ;,."))
+        self.assertFalse(scrape.WARN_NOTE.sub("", "2 website(s) not checked: ran out of time").strip(" ;,."))
+        self.assertTrue(scrape.WARN_NOTE.sub("", "stopped at max_time (600 s) during keyword 2").strip(" ;,."))
+
+    def test_dripping_website_is_cut_off_by_the_hard_stop(self):
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+
+        def serve():
+            c, _ = srv.accept()
+            try:
+                c.recv(4096)
+                c.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 400000\r\n\r\n")
+                while True:
+                    c.sendall(b"x")
+                    time.sleep(0.3)
+            except OSError:
+                pass
+        threading.Thread(target=serve, daemon=True).start()
+        with mock.patch.object(scrape, "SITE_HARD", 1), mock.patch.object(scrape, "_is_public_host", lambda h: True), \
+                mock.patch.object(scrape, "_is_public_ip", lambda ip: True):
+            t = time.monotonic()
+            out = scrape._fetch_html(f"http://127.0.0.1:{srv.getsockname()[1]}/", timeout=2)
+        self.assertLess(time.monotonic() - t, 4)
+        self.assertTrue(0 < len(out) < 20)
+
+    def test_env_quoted_value_keeps_a_hash(self):
+        self.assertEqual(scrape._env_value('"ab #c"'), "ab #c")
+        self.assertEqual(scrape._env_value("plain # note"), "plain")
+        self.assertEqual(scrape._env_value("'q'"), "q")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

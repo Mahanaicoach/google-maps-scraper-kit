@@ -65,6 +65,15 @@ def log(msg):
         print(f"{jobs.utc_now()} {msg}", file=sys.stderr, flush=True)
 
 
+def env_value(v):
+    """A .env value: quotes stripped, a trailing " # comment" dropped unless it sits inside the quotes
+    (then docker compose keeps it too). Same rule as scripts/scrape.py."""
+    v = v.strip()
+    if v[:1] in ("\"", "'") and v[0] in v[1:]:
+        return v[1:v.index(v[0], 1)]
+    return v.split(" #", 1)[0].strip()
+
+
 def read_env():
     """SCRAPER_PORT, SCRAPER_API_KEY and SCRAPER_HEADLESS: the environment wins, then the kit's .env (last line wins,
     as in docker compose and scripts/scrape.py)."""
@@ -74,7 +83,7 @@ def read_env():
             for line in f:
                 k, sep, v = line.strip().removeprefix("export ").partition("=")
                 if sep and k.strip() in ENV_KEYS:
-                    found[k.strip()] = v.split(" #", 1)[0].strip().strip("\"'")
+                    found[k.strip()] = env_value(v)
     except OSError:
         pass
     return {k: os.environ.get(k, found.get(k, "")) for k in ENV_KEYS}
@@ -393,7 +402,7 @@ $('f').addEventListener('submit', async ev => {{
   if (at && !m) {{ $('coords').closest('details').open = true; $('coords').focus();
     return say('Map centre: paste two numbers such as 30.2672, -97.7431, or leave it empty.', 'bad'); }}
   const proxies = $('proxies').value.split('\\n').map(s => s.trim()).filter(Boolean);
-  const body = {{name: keywords[0] || 'job', keywords, lang: $('lang').value.trim().toLowerCase(),
+  const body = {{name: (keywords[0] || 'job').slice(0, 200), keywords, lang: $('lang').value.trim().toLowerCase(),
     country: $('country').value.trim().toLowerCase(), lat: m ? m[1] : '', lon: m ? m[2] : '',
     zoom: +$('zoom').value || 15, depth: +$('depth').value, max_time: +$('max_time').value,
     email: $('email').checked, socials: $('socials').checked, verify_emails: $('verify').checked,
@@ -492,6 +501,7 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "gmskit-engine"
     sys_version = ""
+    timeout = 30  # a client that stalls mid-body or idles on keep-alive would otherwise pin a thread for good
 
     def log_message(self, fmt, *args):  # errors are logged by reply(); polls would flood the log
         pass
@@ -513,7 +523,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
         if code >= 400:
-            log(f"{self.command} {self.path.split('?')[0]} -> {code}")
+            log(f"{self.command} {self.path.split('?')[0]!r} -> {code}")  # repr: no control characters in the log
 
     def fail(self, code, message):
         if self.command != "GET":  # a refused POST or DELETE may leave its body unread on the socket
@@ -533,7 +543,7 @@ class Handler(BaseHTTPRequestHandler):
             return False
         key, path = self.server.api_key, self.path.split("?")[0]
         if key and path not in ("/", "/api/docs", "/api/openapi.json") and not hmac.compare_digest(
-                self.headers.get("X-API-Key", "").encode(), key.encode()):
+                self.headers.get("X-API-Key", "").encode("latin-1", "replace"), key.encode()):  # headers arrive as latin-1
             self.fail(401, "missing or wrong X-API-Key")
             return False
         return True
@@ -608,7 +618,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self.guard():
             return
-        if self.path != "/api/v1/jobs":
+        if self.path.split("?")[0] != "/api/v1/jobs":
             return self.fail(404, "not found")
         body = self.body()
         if body is _REPLIED:
@@ -617,7 +627,10 @@ class Handler(BaseHTTPRequestHandler):
             name, data = jobs.validate(body)
         except ValueError as e:
             return self.fail(422, str(e))
-        jid = self.server.store.create(name, data)
+        try:
+            jid = self.server.store.create(name, data)
+        except (UnicodeEncodeError, ValueError) as e:  # validate() keeps these out; a belt for the braces
+            return self.fail(422, f"invalid body: {e}")
         self.server.worker.wake.set()
         log(f"job {jid} created: {len(data['keywords'])} keyword(s)")
         self.reply(201, {"id": jid})
@@ -625,12 +638,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         if not self.guard():
             return
-        m = JOB_PATH.match(self.path)
+        m = JOB_PATH.match(self.path.split("?")[0])
         if not m or m.group(2):
             return self.fail(404, "not found")
-        self.server.worker.cancel(m.group(1))
-        if not self.server.store.delete(m.group(1)):
+        if not self.server.store.delete(m.group(1)):  # delete first: a job claimed after the cancel sees it is gone
             return self.fail(404, "job not found")
+        self.server.worker.cancel(m.group(1))
         log(f"job {m.group(1)} deleted")
         self.reply(200, {"message": "deleted"})
 

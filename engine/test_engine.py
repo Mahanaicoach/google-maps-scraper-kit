@@ -718,6 +718,7 @@ class LaunchChrome(unittest.TestCase):
             tempfile.tempdir = saved
         self.assertEqual(os.listdir(tmp), [])
 
+    @unittest.skipIf(getattr(os, "geteuid", lambda: 1)() == 0, "root always runs without the sandbox")
     def test_no_usable_sandbox_relaunches_once_without_it(self):
         os.environ["FAKE_SANDBOX"] = "1"
         with self.assertRaisesRegex(browser.BrowserError, "DevTools"):  # second launch got past the sandbox
@@ -1516,6 +1517,85 @@ class LoopThree(Fakes):
         RESULTS["cafes in Austin"] = ([place(1)], "timeout+dom-fallback")
         _, job = self.run_one()
         self.assertIn("stopped at max_time", job["Error"])
+
+class AuditGuards(unittest.TestCase):
+    """The P5 audit's guards: one check each (see the commit that added them)."""
+    OK = {"name": "x", "keywords": ["a"], "lang": "en", "max_time": 5}
+
+    def test_text_fields_reject_surrogates_control_characters_and_string_booleans(self):
+        def err(**kw):
+            with self.assertRaises(ValueError) as c:
+                jobs.validate(dict(self.OK, **kw))
+            return str(c.exception)
+        self.assertIn("invalid name", err(name="\ud800"))  # sqlite and quote() refuse a lone surrogate
+        self.assertIn("invalid keywords", err(keywords=["a\x00b"]))  # csv on 3.9 refuses NUL
+        self.assertEqual(err(email="false"), "invalid email: true or false")
+        self.assertFalse(jobs.validate(dict(self.OK, email=None, socials=False))[1]["email"])
+        self.assertTrue(jobs.validate(dict(self.OK, keywords=["caf\u00e9 in Z\u00fcrich"]))[1]["keywords"])
+
+    def test_public_ip_unwraps_embedded_ipv4_forms(self):
+        for ip in ("::ffff:10.0.0.1", "64:ff9b::7f00:1", "::127.0.0.1", "224.0.0.1", "ff02::1", "fec0::1",
+                   "2002:7f00:1::", "169.254.169.254"):
+            self.assertFalse(jobs._public_ip(ip), ip)
+        for ip in ("8.8.8.8", "::ffff:8.8.8.8", "64:ff9b::808:808", "2606:4700::1111"):
+            self.assertTrue(jobs._public_ip(ip), ip)
+
+    def test_redirect_to_ftp_refused(self):
+        h = jobs._Redirects()
+        self.assertIsNone(h.redirect_request(None, None, 302, "", {}, "ftp://93.184.216.34/x"))
+
+    def test_unquoted_email_must_still_be_an_address(self):
+        self.assertEqual(jobs.find_emails("a%0Ab@x.com q%2Cw@y.org fine@z.io"), ["fine@z.io"])
+
+    def test_ascii_url_encodes_non_ascii_path(self):
+        self.assertEqual(jobs.ascii_url("http://h/\u043a?q=\u00e4"), "http://h/%D0%BA?q=%C3%A4")
+        self.assertEqual(jobs.ascii_url("http://h/plain?x=1"), "http://h/plain?x=1")
+
+    def test_read_capped_stops_at_the_deadline(self):
+        class Drip:
+            def read(self, n):
+                time.sleep(0.05)
+                return b"x"
+        t = time.monotonic()
+        out = jobs._read_capped(Drip(), 400_000, 0.3)
+        self.assertLess(time.monotonic() - t, 2)
+        self.assertTrue(0 < len(out) < 100)
+
+    def test_dripping_website_is_cut_off_by_the_hard_stop(self):
+        """A site that sends a byte every 0.3 s never trips the per-read timeout: SITE_HARD ends it."""
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+
+        def serve():
+            c, _ = srv.accept()
+            try:
+                c.recv(4096)
+                c.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 400000\r\n\r\n")
+                while True:
+                    c.sendall(b"x")
+                    time.sleep(0.3)
+            except OSError:
+                pass
+        threading.Thread(target=serve, daemon=True).start()
+        with unittest.mock.patch.object(jobs, "SITE_HARD", 1), unittest.mock.patch.object(jobs, "_public_host", lambda h: True), \
+                unittest.mock.patch.object(jobs, "_public_ip", lambda ip: True):
+            t = time.monotonic()
+            out = jobs.fetch(f"http://127.0.0.1:{srv.getsockname()[1]}/", timeout=2)
+        self.assertLess(time.monotonic() - t, 4)
+        self.assertTrue(0 < len(out) < 20)
+        self.assertIsNone(jobs._FETCH.timer)
+
+    def test_env_value_keeps_a_hash_inside_quotes(self):
+        self.assertEqual(serve.env_value('"ab #c"'), "ab #c")
+        self.assertEqual(serve.env_value("plain # note"), "plain")
+        self.assertEqual(serve.env_value("'q'"), "q")
+
+    def test_odd_entity_values_do_not_raise(self):
+        entity = [None] * 100
+        entity[11], entity[10] = "Good place", 5  # data_id as a number raised TypeError and failed the whole batch
+        self.assertEqual(details.parse_entity(entity).get("title"), "Good place")
+        self.assertEqual(jobs.to_row({"title": 7, "place_id": "p", "data_id": "a\x00b"}, "kw")["data_id"], "ab")
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)

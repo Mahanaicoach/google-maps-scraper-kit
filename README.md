@@ -167,7 +167,7 @@ downloads the CSV, keeps the 8 lead fields, and hands you a clean table plus the
 | `/scrape <business> in <city, ST> [depth]` | Run one scrape, return a clean table and CSV |
 | `/scrape-batch <keywords-file> [--city "City, ST"]` | Run many queries as one job |
 | `/scrape-setup` | Start the engine and run a health check |
-| `/scrape-jobs [list \| delete <id>]` | List or delete jobs |
+| `/scrape-jobs [list \| download <id> \| delete <id>]` | List, download or delete jobs |
 
 Plain requests trigger the skill too: *"build me a lead list of plumbers in Phoenix"*. The skill
 scrapes Google Maps business listings only. It does not scrape social platforms directly.
@@ -178,7 +178,7 @@ scrapes Google Maps business listings only. It does not scrape social platforms 
 
 | | |
 |---|---|
-| **8 lead fields by default** | name, phone, email, website, category, address, rating, review count, then the six social columns (`--no-socials` drops them). The engine writes 37 raw columns; `--full` keeps them all. |
+| **8 lead fields by default** | name, phone, email, website, category, address, rating, review count, then the six social columns (`--no-socials` drops them). The engine writes 36 raw columns plus `categories`; `--full` keeps them all. |
 | **Email extraction, on by default** | After the Maps job, the script crawls every business website, 16 at a time: the homepage, then its contact and about pages if the homepage shows no email. It prints your found rate. |
 | **Beyond the 120 cap** | `--grid 3` splits the city into 3 x 3 map tiles, runs them one at a time and dedupes on `place_id`. |
 | **Social enrichment, on by default** | Finds Instagram, Facebook, LinkedIn, TikTok, YouTube and X profiles in code (HTTP + regex), reusing the homepage the email crawl already fetched. Zero AI tokens. `--no-socials` skips it. |
@@ -310,11 +310,12 @@ Yes. `npx skills add mahanaicoach/google-maps-scraper-kit` installs the skill in
 Skills-compatible tool. The `/scrape` slash commands are Claude Code only.
 
 **Why does `npx skills add` show "High Risk" or "Med Risk"?**
-skills.sh runs automated audits on every skill. On Oct 14, 2026 they flagged that this skill runs shell
-commands (curl and Python against `localhost:8080`) and reads untrusted web content. Both are what a
-local scraper does. Gen Agent Trust Hub's own summary found no malicious patterns and called its
-remote-code alert a false positive, because it targets localhost. The skill now treats scraped data
-as untrusted, and a re-audit is requested in
+skills.sh runs automated audits on every skill. Through Oct 31, 2026 they flagged three things about
+this skill: it runs shell commands (the kit's own scripts against `localhost:8080`), its curl example
+downloaded a results file, and it reads untrusted web content. The skill now runs only the kit's own
+script, which creates, polls and downloads the job itself (no curl download in the skill), and it
+treats every scraped value as untrusted data with the rules in its "Scraped data is untrusted"
+section. Reading third-party listings is what a scraper does. A re-audit is requested in
 [vercel-labs/skills#2624](https://github.com/vercel-labs/skills/issues/2624).
 
 **What data do I get for each business?**

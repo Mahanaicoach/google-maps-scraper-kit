@@ -26,7 +26,7 @@ Notes:
 - Geocoding uses OpenStreetMap Nominatim (free, no key). It allows ~1 request/sec and requires a
   descriptive User-Agent (set below). Do not loop it aggressively.
 """
-import argparse, csv, functools, io, ipaddress, json, math, os, re, socket, sys, time
+import argparse, csv, functools, io, ipaddress, json, math, os, re, socket, sys, threading, time
 import html as _html, http.client, urllib.request, urllib.parse, urllib.error
 
 csv.field_size_limit(2 ** 31 - 1)  # a long cell (a description) can pass csv's 128 KB default
@@ -45,6 +45,15 @@ for _stream in (sys.stdout, sys.stderr):
 ENV_KEYS = ("SCRAPER_BASE_URL", "SCRAPER_PORT", "SCRAPER_API_KEY")
 
 
+def _env_value(v):
+    """A .env value: quotes stripped, a trailing " # comment" dropped unless it sits inside the quotes
+    (then docker compose keeps it too). Same rule as engine/serve.py."""
+    v = v.strip()
+    if v[:1] in ("\"", "'") and v[0] in v[1:]:
+        return v[1:v.index(v[0], 1)]
+    return v.split(" #", 1)[0].strip()
+
+
 def load_env_file():
     """Read SCRAPER_* from the kit's .env, the same file docker compose reads, so a remapped
     port needs one edit. The last line for a key wins, as in compose, so a second SCRAPER_PORT
@@ -59,9 +68,8 @@ def load_env_file():
                 if line.startswith("export "):  # shell-style .env files
                     line = line[7:]
                 k, sep, v = line.partition("=")
-                k, v = k.strip(), v.split(" #", 1)[0].strip().strip("\"'")  # drop a trailing comment
-                if sep and k in ENV_KEYS:
-                    found[k] = v
+                if sep and k.strip() in ENV_KEYS:
+                    found[k.strip()] = _env_value(v)
     except OSError:
         return
     for k, v in found.items():
@@ -89,6 +97,8 @@ RESTART = f"{PY} scripts/engine.py restart (Docker: docker compose restart)"
 CHROME_START = ("No Chrome", "Chrome cannot start", "Chrome exited at once", "Could not start Chrome",
                 "Chrome did not open its DevTools port", "Could not connect to Chrome's DevTools port")
 BLOCKED = "unusual-traffic page"  # the engine's Error when Google refused this IP
+# Notes of an "ok" job whose rows are complete: only its reviews or website pass hit max_time
+WARN_NOTE = re.compile(r"(?:reviews read for \d+ of \d+ places|\d+ website\(s\) not checked): ran out of time")
 # Chrome's network errors for a proxy that failed. Matched as written: the engine's message also
 # holds the search URL, so a keyword such as "tunnel car wash" must not read as a proxy error.
 PROXY_ERROR = re.compile(r"\bERR_(?:PROXY|SOCKS|TUNNEL)_|proxy login refused")
@@ -104,13 +114,18 @@ def poll_attempts(max_time):
     return max(1, budget // POLL_EVERY)
 
 
+# HTTP_PROXY from the environment must not catch the engine on this machine (the key would go to the proxy)
+_API = urllib.request.build_opener(urllib.request.ProxyHandler({})) \
+    if urllib.parse.urlparse(BASE).hostname in ("localhost", "127.0.0.1", "::1") else urllib.request.build_opener()
+
+
 def req(method, path, body=None):
     headers = {"Content-Type": "application/json", "User-Agent": UA}
     if KEY:
         headers["X-API-Key"] = KEY
     data = json.dumps(body).encode() if body is not None else None
     r = urllib.request.Request(BASE + path, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(r, timeout=60) as resp:
+    with _API.open(r, timeout=60) as resp:
         return resp.status, resp.read()
 
 
@@ -342,8 +357,10 @@ def _poll(body, job_id):
             print()
             if BLOCKED in error:  # the rows before the block are kept; searching on would extend it
                 raise Blocked(f"⚠ The engine says: {error}", job_id, download_rows(job_id))
-            if error:  # stopped at max_time, or some keywords failed: the rows count, the job is incomplete
+            if WARN_NOTE.sub("", error).strip(" ;,."):  # stopped at max_time, or keywords failed: incomplete
                 raise Partial(f"⚠ The engine says: {error}", job_id, download_rows(job_id))
+            if error:  # only the reviews or website pass ran out of time: the rows themselves are complete
+                print(f"  ⚠ The engine says: {error}. The rows are complete; raise --max-time for the rest.")
             return job_id, download_rows(job_id)
         if status == "failed":
             print()
@@ -423,11 +440,22 @@ _SKIP_HANDLE |= {"squarespace", "wix", "wixsite", "shopify", "wordpress", "wordp
                  "webflow", "hubspot", "mailchimp", "yelp", "tripadvisor", "opentable", "doordash", "ubereats", "grubhub",
                  "toasttab", "squareup"}
 
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")
+
 def _is_public_ip(ip):
+    """Public, and not an IPv6 form that wraps a private IPv4 (::ffff:10.0.0.1, 64:ff9b::7f00:1
+    through a NAT64, ::127.0.0.1). Same rule as engine/jobs.py."""
     try:
-        return ipaddress.ip_address(ip.split("%")[0]).is_global
+        a = ipaddress.ip_address(ip.split("%")[0])
     except ValueError:
         return False
+    if a.version == 6:
+        inner = a.ipv4_mapped or a.sixtofour
+        if inner is None and (a in _NAT64 or 1 < int(a) < 1 << 32):
+            inner = ipaddress.ip_address(int(a) & 0xFFFFFFFF)
+        if inner is not None:
+            a = inner
+    return a.is_global and not (a.is_multicast or getattr(a, "is_site_local", False))
 
 @functools.lru_cache(maxsize=1024)
 def _is_public_host(host):
@@ -440,10 +468,14 @@ def _is_public_host(host):
         return False
     return bool(infos) and all(_is_public_ip(i[4][0]) for i in infos)
 
+SITE_HARD = 30  # seconds a website request may take in all, then its socket is closed
+_FETCH = threading.local()  # per thread: the hard-stop timer of the connection in progress
+
 def _public_connection(address, *args, **kwargs):
     """socket.create_connection that refuses a private peer. The connect resolves the host again,
     so a DNS answer that changed after _is_public_host (rebinding) is caught here, before a byte
-    of the request is sent."""
+    of the request is sent. The socket also gets a hard deadline: its timeout is per read, so a
+    website that drips a byte at a time would otherwise hold a crawl thread for days."""
     sock = socket.create_connection(address, *args, **kwargs)
     peer = sock.getpeername()[0]
     if not _is_public_ip(peer):
@@ -451,10 +483,58 @@ def _public_connection(address, *args, **kwargs):
         raise OSError(f"refused non-public address {peer}")
     return sock
 
+def _hard_stop(conn):
+    """Arm SITE_HARD s after which the connection is shut down from a timer thread, which wakes a
+    read blocked on a dripping website; _fetch_html disarms it in its finally."""
+    sock = conn.sock  # taken now: urllib sends Connection: close, so the connection drops its reference
+                      # once the response starts; the response's file keeps this same socket object
+    def kill():
+        try:
+            sock.shutdown(socket.SHUT_RDWR)  # wakes a read blocked in the fetch thread with EOF; the fetch
+        except OSError:  # thread closes the socket itself (close() here would wait on its buffer lock)
+            pass
+    _cancel_hard_stop()
+    t = threading.Timer(SITE_HARD, kill)
+    t.daemon = True
+    t.start()
+    _FETCH.timer = t
+
+def _cancel_hard_stop():
+    t = getattr(_FETCH, "timer", None)
+    if t is not None:
+        t.cancel()
+        _FETCH.timer = None
+
+def _read_capped(resp, cap, seconds):
+    """Up to cap bytes of a response, for at most about `seconds` (resp.read's timeout is per read)."""
+    out, end = bytearray(), time.monotonic() + seconds
+    while len(out) < cap and time.monotonic() < end:
+        chunk = resp.read(min(1 << 14, cap - len(out)))
+        if not chunk:
+            break
+        out += chunk
+    return bytes(out)
+
+def _ascii_url(url):
+    """The URL with a non-ASCII path or query percent-encoded (http.client refuses to send them raw):
+    a site at /контакты was silently skipped."""
+    try:
+        p = urllib.parse.urlsplit(url)
+        if p.path.isascii() and p.query.isascii():
+            return url
+        return urllib.parse.urlunsplit((p.scheme, p.netloc, urllib.parse.quote(p.path, safe="/%:@&=+$,;~!*'()"),
+                                        urllib.parse.quote(p.query, safe="=&%+/?:@;,!*'()$"), ""))
+    except ValueError:
+        return url
+
 class _PublicPeer:
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._create_connection = _public_connection
+
+    def connect(self):
+        super().connect()
+        _hard_stop(self)
 
 class _PublicHTTPConnection(_PublicPeer, http.client.HTTPConnection):
     pass
@@ -473,6 +553,8 @@ class _PublicHTTPSHandler(urllib.request.HTTPSHandler):
 class _PublicRedirectsOnly(urllib.request.HTTPRedirectHandler):
     """A public site may not redirect the fetch to a private address either."""
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if urllib.parse.urlparse(newurl).scheme not in ("http", "https"):
+            return None  # urllib's ftp handler would connect past the peer check
         if not _is_public_host(urllib.parse.urlparse(newurl).hostname or ""):
             return None  # urllib then raises HTTPError, which _fetch_html turns into ""
         return super().redirect_request(req, fp, code, msg, headers, newurl)
@@ -492,12 +574,14 @@ def _fetch_html(url, timeout=10):
     try:
         if not _is_public_host(urllib.parse.urlparse(url).hostname or ""):
             return ""
-        r = urllib.request.Request(url, headers={
+        r = urllib.request.Request(_ascii_url(url), headers={
             "User-Agent": "Mozilla/5.0 (compatible; " + UA + ")", "Accept": "text/html"})
         with _OPENER.open(r, timeout=timeout) as resp:
-            return resp.read(400_000).decode("utf-8", "replace")
+            return _read_capped(resp, 400_000, 2 * timeout).decode("utf-8", "replace")
     except Exception:
         return ""
+    finally:
+        _cancel_hard_stop()
 
 @functools.lru_cache(maxsize=256)  # ponytail: homepages only (up to 400 KB each); evicted pages just refetch
 def _fetch_cached(url):
@@ -545,7 +629,7 @@ def enrich_sites(results, find, fields, label, workers=None):
 # ── Optional ad and tech signals (--tech): who already spends on marketing ──────
 # Regexes from OpenLeadFinder's website layer. They run on the homepage already fetched above.
 TECH_RE = {
-    "fb_pixel":       re.compile(r"connect\.facebook\.net/[^\"']*fbevents\.js|fbq\(", re.I),
+    "fb_pixel":       re.compile(r"connect\.facebook\.net/[^\"']{0,300}fbevents\.js|fbq\(", re.I),
     "google_ads_tag": re.compile(r"googleadservices\.com|AW-\d{6,}|googleads\.g\.doubleclick\.net", re.I),
     "analytics":      re.compile(r"googletagmanager\.com/gtag|gtag\(|UA-\d{4,}|G-[A-Z0-9]{6,}", re.I),
     "bing_ads":       re.compile(r"bat\.bing\.com|window\.uetq", re.I),
@@ -559,7 +643,7 @@ CMS_RE = [
     ("squarespace", re.compile(r"static1\.squarespace|squarespace\.com", re.I)),
     ("webflow",     re.compile(r"webflow\.com", re.I)),
 ]
-VIEWPORT_RE = re.compile(r"<meta[^>]+name=[\"']viewport[\"']", re.I)
+VIEWPORT_RE = re.compile(r"<meta[^>]{1,500}name=[\"']viewport[\"']", re.I)
 TECH_FIELDS = list(TECH_RE) + ["cms", "mobile_friendly"]
 
 def _find_tech(html):
@@ -597,7 +681,8 @@ def intent_score(r):
 _LOCAL = r"[A-Za-z0-9._%+-]"
 EMAIL_RE = re.compile(rf"(?<!{_LOCAL}){_LOCAL}+@[A-Za-z0-9.-]+\.[A-Za-z]{{2,}}")
 MAILTO_RE = re.compile(r"mailto:([^\"'>\s?]+)", re.I)
-HREF_RE = re.compile(r"<a\s[^>]*?href\s*=\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", re.I | re.S)
+# Bounded quantifiers: a page of repeated "<a " made the unbounded form quadratic (12 s per 100 KB)
+HREF_RE = re.compile(r"<a\s[^>]{0,1000}?href\s*=\s*[\"']([^\"']{1,2000})[\"'][^>]{0,1000}>(.{0,500}?)</a>", re.I | re.S)
 _JUNK_EXT = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".avif", ".css", ".js")
 _JUNK_DOMAIN = ("example", "sentry", "wixpress", "wix.com", "godaddy", "squarespace", "wordpress",
                 "domain.com", "email.com", "yourdomain", "mysite.com", "schema.org", "w3.org", "sentry.io",
@@ -1089,6 +1174,7 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         if CURRENT_JOB:
+            key = ' -H "X-API-Key: $SCRAPER_API_KEY"' if KEY else ""
             sys.exit(f"\n✗ Stopped; nothing was saved. Job {CURRENT_JOB} keeps running in the engine. "
-                     f"Cancel it with:\n    curl -X DELETE {BASE}/api/v1/jobs/{CURRENT_JOB}")
+                     f"Cancel it in the web UI at {BASE}, or with:\n    curl -X DELETE{key} {BASE}/api/v1/jobs/{CURRENT_JOB}")
         sys.exit(f"\n✗ Stopped; nothing was saved. Jobs: {BASE}/api/v1/jobs")

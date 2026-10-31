@@ -7,7 +7,7 @@ An installed Google Chrome, Chromium, Edge or Brave is used first (set CHROME=/p
 pick one). On a machine with none, `python3 scripts/engine.py start` downloads Chrome for Testing's
 headless shell into .engine/, pinned below by version and SHA-256. Standard library only.
 """
-import hashlib, os, platform, queue, shutil, subprocess, tempfile, threading, time, urllib.parse, urllib.request
+import hashlib, http.client, os, platform, queue, shutil, subprocess, tempfile, threading, time, urllib.parse, urllib.request
 import zipfile
 
 from cdp import CDP, CDPError
@@ -150,7 +150,7 @@ def download(log=print, plat=None, opener=urllib.request.urlopen):
             for chunk in iter(lambda: r.read(1 << 20), b""):
                 h.update(chunk)
                 f.write(chunk)
-    except OSError as e:
+    except (OSError, http.client.HTTPException) as e:  # a cut connection raises IncompleteRead, not OSError
         _remove(tmp)
         raise BrowserError(f"Could not download Chrome for Testing from {url}: {e}") from e
     if h.hexdigest() != CFT_SHA256[plat]:

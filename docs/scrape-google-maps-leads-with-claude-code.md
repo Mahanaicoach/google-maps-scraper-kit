@@ -34,7 +34,7 @@ Or use a slash command in Claude Code:
 | `/scrape <business> in <city, ST> [depth]` | Run one scrape, return a clean table and CSV |
 | `/scrape-batch <keywords-file> [--city "City, ST"]` | Run many queries as one job |
 | `/scrape-setup` | Start the engine and run a health check |
-| `/scrape-jobs [list \| delete <id>]` | List or delete jobs |
+| `/scrape-jobs [list \| download <id> \| delete <id>]` | List, download or delete jobs |
 
 ## What the agent does
 
@@ -45,7 +45,7 @@ Or use a slash command in Claude Code:
 5. Keeps the 8 lead fields (name, phone, email, website, category, address, rating and review count), then the six social columns: Instagram, Facebook, LinkedIn, TikTok, YouTube and X.
 6. Saves the file, then presents a short table and the CSV path instead of dumping every row into chat.
 
-The kit's own scripts and the engine's health check are pre-approved in `.claude/settings.json`, so Claude Code does not prompt for each one.
+The kit's own scripts, the exact `docker compose` forms SETUP.md uses and the engine's health check are pre-approved in `.claude/settings.json`; everything else asks as usual.
 
 ## Example output
 

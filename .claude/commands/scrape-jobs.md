@@ -1,6 +1,6 @@
 ---
 description: List, download or delete Google Maps scrape jobs on the local engine.
-argument-hint: "[list | delete <job-id>]"
+argument-hint: "[list | download <job-id> | delete <job-id>]"
 ---
 Manage scrape jobs through the engine's API. Request: **$ARGUMENTS** (default to "list" if empty).
 

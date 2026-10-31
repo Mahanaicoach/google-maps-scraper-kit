@@ -102,7 +102,7 @@ def parse_entity(entity):
              "reservations": link_sources(dig(entity, RESERVATIONS), (0,), (1,)),
              "order_online": link_sources(orders, *ORDER_ITEM), "menu": menu(entity)}
     out.update({k: v for k, v in found.items() if v})
-    if "data_id" in out and ":" in out["data_id"]:
+    if isinstance(out.get("data_id"), str) and ":" in out["data_id"]:
         try:
             out["cid"] = str(int(out["data_id"].split(":")[1], 16))
         except ValueError:
@@ -288,7 +288,10 @@ def parse_batch(body):
     for e in entries:
         entity = dig(e, (1,))
         if isinstance(entity, list):
-            row = parse_entity(entity)
+            try:
+                row = parse_entity(entity)
+            except (TypeError, ValueError, IndexError, AttributeError):  # one odd entity, not the whole batch
+                continue
             if row.get("title"):
                 out.append(row)
     return out

@@ -40,10 +40,14 @@ def public_port():
     scrape.py's own loader so both always agree."""
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import scrape
-    u = urllib.parse.urlparse(scrape.BASE)
+    try:
+        u = urllib.parse.urlparse(scrape.BASE)
+        port = u.port
+    except ValueError:
+        sys.exit(f"✗ SCRAPER_PORT (or SCRAPER_BASE_URL) is not a valid port: {scrape.BASE}. Set a number from 1 to 65535 in .env.")
     if u.hostname not in ("localhost", "127.0.0.1", "::1"):
         sys.exit(f"✗ SCRAPER_BASE_URL points at {scrape.BASE}; engine.py runs the engine on this machine only.")
-    return u.port or 80
+    return port or (443 if u.scheme == "https" else 80)
 
 
 def probe(port, timeout=2):
@@ -190,25 +194,25 @@ def chrome(download):
 
 def start(download=True):
     port = public_port()
-    seen = probe(port)
-    if seen == "ours":
-        print(f"✓ The engine is already running: http://localhost:{port}")
-        return
-    if seen == "other":
-        busy(port)
-    if read_state():
-        stop(quiet=True)  # stale state from a crash or reboot: clean up whatever is still ours
-    if not port_free(port):
-        busy(port)
     browser.make_home()
-    try:  # one start at a time
-        lock = os.open(LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    try:  # one start at a time, from the first look: a second start during the first's 30 s boot
+        lock = os.open(LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)  # would otherwise see its state file and stop it
     except FileExistsError:
         if time.time() - os.path.getmtime(LOCK) < 600:
             sys.exit("✗ Another `engine.py start` is running. Wait for it, or delete .engine/start.lock.")
         os.remove(LOCK)  # left by a start that crashed
         lock = os.open(LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     try:
+        seen = probe(port)
+        if seen == "ours":
+            print(f"✓ The engine is already running: http://localhost:{port}")
+            return
+        if seen == "other":
+            busy(port)
+        if read_state():
+            stop(quiet=True)  # stale state from a crash or reboot: clean up whatever is still ours
+        if not port_free(port):
+            busy(port)
         _start(port, chrome(download))
     finally:
         os.close(lock)

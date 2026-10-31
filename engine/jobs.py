@@ -37,7 +37,8 @@ RENAME = {"open_state": "status", "description": "descriptions"}  # details.FIEL
 # shorter grace could kill a keyword that was about to return its rows.
 WATCHDOG_GRACE = 90
 SITE_WORKERS = 8      # business websites fetched at once by the website pass
-SITE_TIMEOUT = 10     # seconds per website request
+SITE_TIMEOUT = 10     # seconds per website request (each socket read)
+SITE_HARD = 30        # seconds a website request may take in all, then its socket is closed
 EMAIL_MIN_SECONDS = 60  # the website pass gets at least this long, even after a job used its max_time
 BACKOFF = (30, 90)    # seconds to wait before each retry of a keyword Google refused; then the job stops
 ROTATE_WAIT = 3       # seconds before the retry when the next proxy can take it instead
@@ -58,6 +59,28 @@ def utc_now():
 # ── Job body ──
 LANG = re.compile(r"[A-Za-z]{2}")  # fullmatch: "$" would let "en\n" through
 PROXY_SCHEMES = ("http", "https", "socks5", "socks5h")
+CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")  # NUL breaks csv on Python 3.9; the rest never belongs in a search
+
+
+def _text(v):
+    """True for a string the engine can store, search and write: valid UTF-8 (no lone surrogates,
+    which sqlite and urllib.parse.quote refuse) and no control characters."""
+    if not isinstance(v, str) or CONTROL.search(v):
+        return False
+    try:
+        v.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _bool(body, key):
+    v = body.get(key)
+    if v is None:
+        return False
+    if not isinstance(v, bool):  # "false" is not false
+        raise ValueError(f"invalid {key}: true or false")
+    return v
 
 
 def _int(body, key, default, lo, hi, label):
@@ -77,12 +100,12 @@ def validate(body):
     name = body.get("name")
     if not isinstance(name, str) or not name.strip():
         raise ValueError("missing name")
-    if len(name) > 200:
-        raise ValueError("invalid name: 200 characters at most")
+    if len(name) > 200 or not _text(name):
+        raise ValueError("invalid name: 200 characters at most, no control characters")
     kws = body.get("keywords")
     if not isinstance(kws, list) or not kws:
         raise ValueError("missing keywords")
-    if len(kws) > 500 or not all(isinstance(k, str) and k.strip() and len(k) <= 500 for k in kws):
+    if len(kws) > 500 or not all(_text(k) and k.strip() and len(k) <= 500 for k in kws):
         raise ValueError("invalid keywords: 1 to 500 non-empty strings of up to 500 characters")
     lang = body.get("lang")
     if lang in (None, ""):
@@ -109,8 +132,8 @@ def validate(body):
             "radius": _int(body, "radius", 10000, 0, 10**9, "radius"),  # accepted, not used
             "depth": _int(body, "depth", 1, 1, 1000, "depth"),
             "max_time": _int(body, "max_time", 600, 1, 86400, "max time"),
-            "fast_mode": bool(body.get("fast_mode")), "email": bool(body.get("email")),
-            "verify_emails": bool(body.get("verify_emails")), "socials": bool(body.get("socials")),
+            "fast_mode": _bool(body, "fast_mode"), "email": _bool(body, "email"),
+            "verify_emails": _bool(body, "verify_emails"), "socials": _bool(body, "socials"),
             "reviews_max": _int(body, "reviews_max", 0, 0, REVIEWS_MAX, "reviews_max"),
             "proxies": _proxies(body.get("proxies"))}
     return name.strip(), data
@@ -175,13 +198,13 @@ def to_row(place, keyword):
     for k, v in place.items():
         k = RENAME.get(k, k)
         if k in row:
-            row[k] = str(v)
+            row[k] = str(v).replace("\x00", "")
     row["input_id"] = keyword
     if not row["plus_code"]:
         row["plus_code"] = details.plus_code(row["latitude"], row["longitude"])
     if place.get("place_id"):  # Google's documented Maps URL for one place
         row["link"] = ("https://www.google.com/maps/search/?api=1&query="
-                       + urllib.parse.quote(place.get("title", ""), safe="")
+                       + urllib.parse.quote(str(place.get("title", "")), safe="")
                        + "&query_place_id=" + urllib.parse.quote(place["place_id"], safe=""))
     return row
 
@@ -626,8 +649,12 @@ class Worker(threading.Thread):
                         if not stop.is_set() and len(kws) - i > 1:
                             errors[-1] += f"; {len(kws) - i - 1} keyword(s) after it were not searched"
                         break
+                    size = self.store.append(jid, [], cols)
+                    if size is None:
+                        break  # deleted
                     i, retries, again = i + 1, 0, False
-                    save(failed=len(errors), last_error=errors[-1])
+                    save(done=i, bytes=size, percent=int(100 * i / len(kws)), failed=len(errors),
+                         last_error=errors[-1])
                     continue
                 on_batch(places, stats["batches"])  # places no batch carried (one place, the DOM fallback)
                 if stop.is_set():  # deleted, or the engine is exiting: this keyword did not finish
@@ -833,11 +860,23 @@ SKIP_HANDLE |= {"squarespace", "wix", "wixsite", "shopify", "wordpress", "wordpr
 DOH = "https://dns.google/resolve?"  # Google's public DNS over HTTPS: no key, no account
 
 
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")
+
+
 def _public_ip(ip):
+    """True for an address a third-party website may send the fetch to: public, and not an IPv6 form
+    that wraps a private IPv4 (::ffff:10.0.0.1, 64:ff9b::7f00:1 through a NAT64, ::127.0.0.1)."""
     try:
-        return ipaddress.ip_address(ip.split("%")[0]).is_global
+        a = ipaddress.ip_address(ip.split("%")[0])
     except ValueError:
         return False
+    if a.version == 6:
+        inner = a.ipv4_mapped or a.sixtofour
+        if inner is None and (a in _NAT64 or 1 < int(a) < 1 << 32):  # NAT64, or the old ::a.b.c.d form
+            inner = ipaddress.ip_address(int(a) & 0xFFFFFFFF)
+        if inner is not None:
+            a = inner
+    return a.is_global and not (a.is_multicast or getattr(a, "is_site_local", False))
 
 
 def _public_host(host):
@@ -850,8 +889,13 @@ def _public_host(host):
     return bool(infos) and all(_public_ip(i[4][0]) for i in infos)
 
 
+_FETCH = threading.local()  # per thread: the hard-stop timer of the connection in progress
+
+
 def _public_connection(address, *args, **kwargs):
-    """create_connection that refuses a private peer: catches a DNS answer that changed (rebinding)."""
+    """create_connection that refuses a private peer: catches a DNS answer that changed (rebinding).
+    The socket also gets a hard deadline (SITE_HARD s): its timeout is per read, so a website that
+    drips a byte at a time would otherwise hold a crawl thread, and the engine's exit, for days."""
     sock = socket.create_connection(address, *args, **kwargs)
     if not _public_ip(sock.getpeername()[0]):
         sock.close()
@@ -859,16 +903,71 @@ def _public_connection(address, *args, **kwargs):
     return sock
 
 
+def _hard_stop(conn):
+    """Arm SITE_HARD s after which the connection is shut down from a timer thread, which wakes a
+    read blocked on a dripping website; fetch() disarms it in its finally."""
+    sock = conn.sock  # taken now: urllib sends Connection: close, so the connection drops its reference
+                      # once the response starts; the response's file keeps this same socket object
+    def kill():
+        try:
+            sock.shutdown(socket.SHUT_RDWR)  # wakes a read blocked in the fetch thread with EOF; the fetch
+        except OSError:  # thread closes the socket itself (close() here would wait on its buffer lock)
+            pass
+    _cancel_hard_stop()
+    t = threading.Timer(SITE_HARD, kill)
+    t.daemon = True
+    t.start()
+    _FETCH.timer = t
+
+
+def _cancel_hard_stop():
+    t = getattr(_FETCH, "timer", None)
+    if t is not None:
+        t.cancel()
+        _FETCH.timer = None
+
+
+def _read_capped(resp, cap, seconds):
+    """Up to cap bytes of a response, for at most about `seconds`."""
+    out, end = bytearray(), time.monotonic() + seconds
+    while len(out) < cap and time.monotonic() < end:
+        chunk = resp.read(min(1 << 14, cap - len(out)))
+        if not chunk:
+            break
+        out += chunk
+    return bytes(out)
+
+
+def ascii_url(url):
+    """The URL with a non-ASCII path or query percent-encoded: http.client refuses to send them raw."""
+    try:
+        p = urllib.parse.urlsplit(url)
+        if p.path.isascii() and p.query.isascii():
+            return url
+        return urllib.parse.urlunsplit((p.scheme, p.netloc, urllib.parse.quote(p.path, safe="/%:@&=+$,;~!*'()"),
+                                        urllib.parse.quote(p.query, safe="=&%+/?:@;,!*'()$"), ""))
+    except ValueError:
+        return url
+
+
 class _HTTP(http.client.HTTPConnection):
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
         self._create_connection = _public_connection
+
+    def connect(self):
+        super().connect()
+        _hard_stop(self)
 
 
 class _HTTPS(http.client.HTTPSConnection):
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
         self._create_connection = _public_connection
+
+    def connect(self):
+        super().connect()
+        _hard_stop(self)
 
 
 class _HTTPHandler(urllib.request.HTTPHandler):
@@ -883,6 +982,8 @@ class _HTTPSHandler(urllib.request.HTTPSHandler):
 
 class _Redirects(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if urllib.parse.urlsplit(newurl).scheme not in ("http", "https"):
+            return None  # urllib's ftp handler would connect past the peer check
         if not _public_host(urllib.parse.urlsplit(newurl).hostname or ""):
             return None
         return super().redirect_request(req, fp, code, msg, headers, newurl)
@@ -899,11 +1000,13 @@ def fetch(url, timeout=SITE_TIMEOUT):
     try:
         if not _public_host(urllib.parse.urlsplit(url).hostname or ""):
             return ""
-        r = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "text/html"})
+        r = urllib.request.Request(ascii_url(url), headers={"User-Agent": UA, "Accept": "text/html"})
         with _OPENER.open(r, timeout=timeout) as resp:
-            return resp.read(400_000).decode("utf-8", "replace")
+            return _read_capped(resp, 400_000, 2 * timeout).decode("utf-8", "replace")
     except Exception:  # noqa: BLE001 - a broken website is just a website without emails
         return ""
+    finally:
+        _cancel_hard_stop()
 
 
 def site_host(url):
@@ -963,8 +1066,8 @@ def find_emails(text, site=""):
     for e in EMAIL_RE.findall(html.unescape(text or "")):
         e = urllib.parse.unquote(e).lower()
         dom = e.rpartition("@")[2]
-        if e.endswith(JUNK_SUFFIX) or any(j in dom for j in JUNK_DOMAIN) or e in found:
-            continue
+        if not EMAIL_RE.fullmatch(e) or e.endswith(JUNK_SUFFIX) or any(j in dom for j in JUNK_DOMAIN) or e in found:
+            continue  # "a%0Ab@x.com" unquotes to a newline: not an address
         found.append(e)
     own = lambda e: site and (e.endswith("@" + site) or e.endswith("." + site))
     return sorted(found, key=lambda e: not own(e))[:3]
