@@ -106,13 +106,10 @@ Illustrative rows:
 
 | title | phone | emails | website | category | address | review_rating | review_count |
 |---|---|---|---|---|---|---|---|
-| Example Roasters | +1 512-555-0101 | hello@example.com | example.com | Coffee shop | 100 Congress Ave, Austin, TX | 4.7 | |
-| Sample Espresso Bar | +1 512-555-0102 | info@example.org | example.org | Cafe | 200 S Lamar Blvd, Austin, TX | 4.5 | |
+| Example Roasters | +1 512-555-0101 | hello@example.com | example.com | Coffee shop | 100 Congress Ave, Austin, TX | 4.7 | 312 |
+| Sample Espresso Bar | +1 512-555-0102 | info@example.org | example.org | Cafe | 200 S Lamar Blvd, Austin, TX | 4.5 | 128 |
 
 `review_count` works in headless mode; see [Honest limits](#honest-limits).
-
-`--details` reads each place panel for additional business photo URLs and published hourly popular
-times. It implies `--full` and is slower. Missing schedules remain blank; `{}` is not counted as data.
 
 `--socials` adds `instagram`, `facebook`, `linkedin`, `tiktok`, `youtube` and `x` columns. `--tech` adds
 `fb_pixel`, `google_ads_tag`, `analytics`, `bing_ads`, `linkedin_insight`, `tiktok_pixel`, `cms`,
@@ -211,8 +208,7 @@ One keyword per line. One job. One CSV.
   `open_hours` and `reviews_link`. Google can still leave a field out; if every count is missing,
   `--min-reviews` warns and skips that filter. Review texts come through the raw API's
   `reviews_max` (up to 5 per place, one page load each). Business photo URLs come in `images`
-  (`--full`) with no extra page loads; `--details` adds the place panel's photos and published
-  popular times, one page load per place. Rather run a real window, with the agent unchanged? [SETUP §3](SETUP.md#review-counts-hours-and-reviews).
+  (`--full`), with no extra page loads. Rather run a real window, with the agent unchanged? [SETUP §3](SETUP.md#review-counts-hours-and-reviews).
 - **Emails only when a business publishes one.** The script reads the business homepage, then its
   contact and about pages. Listings with no site, or a site with no visible
   email, return an empty `emails` cell. Instagram bios are not read. Expect emails on a fraction of

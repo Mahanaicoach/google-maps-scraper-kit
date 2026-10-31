@@ -263,7 +263,7 @@ def progress_text(job):
     if not isinstance(p, dict) or not p.get("keywords_total"):
         return ""
     total = p["keywords_total"]
-    where = {"reviews": "reading place details", "websites": "checking websites"}.get(
+    where = {"reviews": "reading reviews", "websites": "checking websites"}.get(
         p.get("stage"), f"keyword {min(p.get('keywords_done', 0) + 1, total)}/{total}")
     return f", {where}, {p.get('places', 0)} places, {p.get('percent', 0)}%"
 
@@ -314,14 +314,6 @@ def _poll(body, job_id):
             print()
             if BLOCKED in error:  # the rows before the block are kept; searching on would extend it
                 raise Blocked(f"⚠ The engine says: {error}", job_id, download_rows(job_id))
-            # An unpublished optional schedule is source availability, not an interrupted job.
-            errors = []
-            for part in error.split("; "):
-                if re.fullmatch(r"popular times unavailable for [0-9]+/[0-9]+ places", part):
-                    print(f"⚠ {part}")
-                elif part:
-                    errors.append(part)
-            error = "; ".join(errors)
             if error:  # stopped at max_time, or some keywords failed: the rows count, the job is incomplete
                 raise Partial(f"⚠ The engine says: {error}", job_id, download_rows(job_id))
             return job_id, download_rows(job_id)
@@ -832,9 +824,6 @@ def main():
     ap.add_argument("--out", default=None, help="output file path (default: results-<id>.csv). "
                     "The extension picks the format: .csv (default) or .json")
     ap.add_argument("--json", action="store_true", help="write JSON instead of the default CSV")
-    ap.add_argument("--details", action="store_true",
-                    help="read each place panel for business photos and published popular times; "
-                         "implies --full, adds one page load per place")
     ap.add_argument("--full", action="store_true", help="keep ALL raw columns (default: lean lead fields)")
     ap.add_argument("--fields", help="comma-separated columns to keep (overrides the default lead set)")
     ap.add_argument("--socials", action="store_true",
@@ -935,8 +924,6 @@ def main():
             # The engine's own email pass reads homepages only; the crawl below also reads contact and
             # about pages and decodes obfuscated addresses, so the engine only reads Google Maps.
             "depth": a.depth, "email": False, "max_time": a.max_time}
-    if a.details:
-        body["extra_details"] = True
     if a.proxy:
         body["proxies"] = a.proxy
     if a.country:
@@ -969,7 +956,7 @@ def main():
         print(f"  filters and --exclude kept {len(rows)} of {before} rows")
     if a.limit and not a.has_email:
         rows = rows[:a.limit]
-    if a.full or a.details:
+    if a.full:
         fields = list(rows[0].keys()) if rows else LEAD
     elif a.fields:
         fields = [c.strip() for c in a.fields.split(",") if c.strip()]

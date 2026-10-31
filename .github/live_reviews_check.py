@@ -1,5 +1,5 @@
 """engine-live.yml: one depth-1 job with reviews_max=1 against the engine on localhost (SCRAPER_PORT, default 8080); exits 1
-unless Google's full view came back (review counts and reviews filled). Prints counts only."""
+unless Google's full view came back (review counts, reviews and photo URLs filled). Prints counts only."""
 import json, os, sys, time, urllib.request
 
 BASE = f"http://localhost:{os.environ.get('SCRAPER_PORT', '8080')}/api/v1/jobs"
@@ -21,6 +21,6 @@ for _ in range(200):
         break
     time.sleep(2)
 rows = json.loads(urllib.request.urlopen(f"{BASE}/{jid}/download?format=json").read())
-fill = {k: sum(1 for r in rows if r.get(k)) for k in ("review_count", "open_hours", "user_reviews")}
+fill = {k: sum(1 for r in rows if r.get(k)) for k in ("review_count", "open_hours", "user_reviews", "images")}
 print(f"{sys.argv[1]}: status={job['Status']} places={len(rows)}", fill, job["Progress"])
-sys.exit(0 if rows and fill["review_count"] and fill["user_reviews"] else 1)
+sys.exit(0 if rows and fill["review_count"] and fill["user_reviews"] and fill["images"] else 1)

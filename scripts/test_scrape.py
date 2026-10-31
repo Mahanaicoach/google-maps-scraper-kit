@@ -829,43 +829,6 @@ class EngineProgress(unittest.TestCase):
         self.assertIn("keyword 2/2, 20 places, 50%", out.getvalue())
         self.assertFalse(any(c.endswith("/download") for c in calls[:-1]))  # no download per poll any more
 
-    def test_unpublished_popular_times_warns_without_marking_completed_search_partial(self):
-        for note, partial in (("popular times unavailable for 1/1 places", False),
-                              ("stopped at max_time; popular times unavailable for 1/1 places", True)):
-            def fake_req(method, path, body=None):
-                if method == "POST":
-                    return 201, b'{"id":"j1"}'
-                if path.endswith("/download"):
-                    return 200, b"title\nA\n"
-                return 200, json.dumps({"Status": "ok", "Error": note}).encode()
-            out = io.StringIO()
-            with mock.patch.object(scrape, "req", fake_req), redirect_stdout(out):
-                if partial:
-                    with self.assertRaises(scrape.Partial):
-                        scrape.run_job({"max_time": 60, "keywords": ["a"]})
-                else:
-                    self.assertEqual(scrape.run_job({"max_time": 60, "keywords": ["a"]})[0], "j1")
-            self.assertIn("popular times unavailable", out.getvalue())
-
-    def test_details_requests_enrichment_and_keeps_raw_columns(self):
-        bodies = []
-        def fake_run_job(body):
-            bodies.append(body)
-            return "j1", [{"title": "Example", "images": '[{"image":"https://example.com/photo"}]',
-                           "popular_times": '{"Monday":{"8":20}}'}]
-        with tempfile.TemporaryDirectory() as tmp:
-            out = os.path.join(tmp, "o.csv")
-            argv = ["scrape.py", "x in y", "1", "2", "--details", "--no-email", "--out", out]
-            with mock.patch.object(scrape, "req", return_value=(200, b"null")), \
-                 mock.patch.object(scrape, "run_job", fake_run_job), mock.patch.object(sys, "argv", argv), \
-                 redirect_stdout(io.StringIO()):
-                scrape.main()
-            with open(out) as f:
-                row = next(csv.DictReader(f))
-            self.assertEqual(json.loads(row["popular_times"]), {"Monday": {"8": 20}})
-            self.assertTrue(json.loads(row["images"]))
-        self.assertIs(bodies[0]["extra_details"], True)
-
     def test_country_goes_into_the_job(self):
         bodies = []
         def fake_run_job(body):
