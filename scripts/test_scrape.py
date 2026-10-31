@@ -504,6 +504,8 @@ class MockEngine(BaseHTTPRequestHandler):
             return self._send(200, "[]")
         jid = parts[3]
         if len(parts) == 5:
+            if CELL_ROWS[jid] is None:  # a failed tile wrote no rows
+                return self._send(404, '{"message": "no results for this job (yet)"}')
             buf = io.StringIO()
             w = csv.DictWriter(buf, fieldnames=FIELDS, restval="")
             w.writeheader(); w.writerows(CELL_ROWS[jid])
@@ -785,6 +787,7 @@ class ArgumentBounds(unittest.TestCase):
         self.assertIn("--has-email", self.run_main("--has-email", "--no-email"))
 
     def test_rejects_values_the_engine_would_choke_on(self):
+        self.assertIn("--country", self.run_main("--country", "usa"))
         self.assertIn("--depth", self.run_main("--depth", "0"))
         self.assertIn("--max-time", self.run_main("--max-time", "0"))  # the engine says "missing max time"
         self.assertIn("--limit", self.run_main("--limit", "-1"))
@@ -792,6 +795,52 @@ class ArgumentBounds(unittest.TestCase):
         pathlib.Path(bad_dir).write_text("")  # a file where the folder should be
         self.assertIn("--out", self.run_main("--out", os.path.join(bad_dir, "x", "leads.csv")))
 
+
+
+class EngineProgress(unittest.TestCase):
+    """The poll line shows the engine's Progress, and a poll survives an engine restart (it resumes)."""
+
+    def test_progress_text(self):
+        job = {"Progress": {"keywords_done": 1, "keywords_total": 3, "places": 41, "percent": 50, "stage": "search"}}
+        self.assertEqual(scrape.progress_text(job), ", keyword 2/3, 41 places, 50%")
+        job["Progress"].update(keywords_done=3, stage="websites", percent=100)
+        self.assertEqual(scrape.progress_text(job), ", checking websites, 41 places, 100%")
+        self.assertEqual(scrape.progress_text({}), "")  # an engine without Progress
+
+    def test_poll_waits_out_a_restart_and_prints_progress(self):
+        calls, out = [], io.StringIO()
+        prog = {"keywords_done": 1, "keywords_total": 2, "places": 20, "percent": 50, "stage": "search"}
+        answers = [OSError("refused")] * 5 + [{"Status": "pending", "Progress": prog},
+                                              {"Status": "working", "Progress": prog}, {"Status": "ok"}]
+        def fake_req(method, path, body=None):
+            calls.append(path)
+            if method == "POST":
+                return 201, b'{"id":"j1"}'
+            if path.endswith("/download"):
+                return 200, b"title\nA\n"
+            a = answers.pop(0)
+            if isinstance(a, Exception):
+                raise a
+            return 200, json.dumps(a).encode()
+        with mock.patch.object(scrape, "req", fake_req), mock.patch.object(scrape.time, "sleep"), \
+             redirect_stdout(out):
+            jid, rows = scrape.run_job({"max_time": 60, "keywords": ["a", "b"]})
+        self.assertEqual((jid, len(rows)), ("j1", 1))
+        self.assertIn("keyword 2/2, 20 places, 50%", out.getvalue())
+        self.assertFalse(any(c.endswith("/download") for c in calls[:-1]))  # no download per poll any more
+
+    def test_country_goes_into_the_job(self):
+        bodies = []
+        def fake_run_job(body):
+            bodies.append(body)
+            return "j1", []
+        argv = ["scrape.py", "x in y", "1", "2", "--country", "DE", "--no-email",
+                "--out", os.path.join(tempfile.mkdtemp(), "o.csv")]
+        with mock.patch.object(scrape, "req", return_value=(200, b"null")), \
+             mock.patch.object(scrape, "run_job", fake_run_job), mock.patch.object(sys, "argv", argv), \
+             redirect_stdout(io.StringIO()):
+            scrape.main()
+        self.assertEqual(bodies[0]["country"], "de")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

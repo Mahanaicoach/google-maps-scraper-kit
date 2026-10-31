@@ -6,12 +6,13 @@ No network, no Chrome, no Docker.
 
     python3 engine/test_engine.py
 """
-import csv, hashlib, http.client, importlib.util, io, json, os, re, shutil, socket, subprocess, sys, tempfile
+import csv, hashlib, http.client, importlib.util, io, json, os, queue, re, shutil, socket, sqlite3, subprocess, sys
+import tempfile
 import threading, time, unittest, unittest.mock, zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import browser, jobs, maps, serve  # noqa: E402
+import browser, details, jobs, maps, serve  # noqa: E402
 from cdp import CDPError  # noqa: E402
 
 GOOD = {"name": "t", "keywords": ["cafes in Austin"], "lang": "en", "lat": "30.2", "lon": "-97.7", "max_time": 60}
@@ -32,8 +33,15 @@ class FakeBrowser:
     made = []
 
     def __init__(self, **kw):
-        self.kw, self.cdp, self.killed = kw, FakeCDP(), threading.Event()
+        self.kw, self.cdp, self.killed, self.contexts = kw, FakeCDP(), threading.Event(), []
         FakeBrowser.made.append(self)
+
+    def context(self, proxy=None):
+        self.contexts.append(proxy)
+        return f"ctx{len(self.contexts)}"
+
+    def dispose(self, ctx):
+        pass
 
     def kill(self):
         self.cdp.closed = OSError("killed")
@@ -44,24 +52,42 @@ class FakeBrowser:
 
 
 class FakePage:
-    def __init__(self, cdp):
+    def __init__(self, cdp, context=None):
         pass
 
     def close(self):
         pass
 
 
-RESULTS = {}  # keyword -> (places, reason) for the fake collect
+class FakeAuth:
+    """Stands in for browser.ProxyAuth: records which tabs got credentials."""
+    logins = []
+    refused = False
+
+    def __init__(self, page, user, password):
+        FakeAuth.logins.append((user, password))
+
+    def close(self):
+        pass
 
 
-def fake_collect(page, url, depth=1, max_seconds=0, log=None, stop=lambda: False):
+RESULTS = {}  # keyword -> (places, reason) for the fake collect; a list of reasons answers one per search
+SEARCHED = []  # the keywords the fake collect was asked for, in order
+
+
+def fake_collect(page, url, depth=1, max_seconds=0, log=None, stop=lambda: False, on_batch=None):
     for kw, (places, reason) in RESULTS.items():
         if maps.search_url(kw).split("/@")[0].split("?")[0] in url:
+            SEARCHED.append(kw)
+            if isinstance(reason, list):
+                reason = reason.pop(0) if len(reason) > 1 else reason[0]
             if reason == "hang":  # Chrome stops answering until the watchdog kills it
                 b = FakeBrowser.made[-1]
                 b.killed.wait(10)
                 raise CDPError("connection lost: killed")
-            if reason == "slow":
+            if reason == "slow":  # its places stream in, then it scrolls until stopped
+                if on_batch and places:
+                    on_batch(places, 1)
                 end = time.time() + 5
                 while not stop() and time.time() < end:
                     time.sleep(0.02)
@@ -73,16 +99,18 @@ def fake_collect(page, url, depth=1, max_seconds=0, log=None, stop=lambda: False
 class Fakes(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()
-        self.saved = (browser.Browser, jobs.Page, maps.collect)
-        browser.Browser, jobs.Page, maps.collect = FakeBrowser, FakePage, fake_collect
+        self.saved = (browser.Browser, jobs.Page, maps.collect, browser.ProxyAuth)
+        browser.Browser, jobs.Page, maps.collect, browser.ProxyAuth = FakeBrowser, FakePage, fake_collect, FakeAuth
         FakeBrowser.made.clear()
+        FakeAuth.logins.clear()
         RESULTS.clear()
+        SEARCHED.clear()
         self.store = jobs.Store(os.path.join(self.dir, "data"))
         self.lines = []
         self.worker = jobs.Worker(self.store, self.lines.append)
 
     def tearDown(self):
-        browser.Browser, jobs.Page, maps.collect = self.saved
+        browser.Browser, jobs.Page, maps.collect, browser.ProxyAuth = self.saved
         self.worker.shutdown()
         if self.worker.is_alive():
             self.worker.join(5)
@@ -123,7 +151,9 @@ class Validate(unittest.TestCase):
         self.assertIn("invalid depth", self.err(**dict(GOOD, depth="5")))
         self.assertIn("invalid max time", self.err(**dict(GOOD, max_time=-1)))
         self.assertIn("invalid keywords", self.err(**dict(GOOD, keywords=["ok", ""])))
-        self.assertIn("usernames and passwords", self.err(**dict(GOOD, proxies=["http://u:p@h:1"])))
+        self.assertIn("SOCKS5", self.err(**dict(GOOD, proxies=["socks5://u:p@h:1"])))
+        self.assertIn("invalid country", self.err(**dict(GOOD, country="usa")))
+        self.assertIn("invalid reviews_max", self.err(**dict(GOOD, reviews_max=6)))
         self.assertIn("invalid proxy", self.err(**dict(GOOD, proxies=["ftp://h:1"])))
         self.assertIn("invalid proxy", self.err(**dict(GOOD, proxies=["http://h:99999"])))
         with self.assertRaisesRegex(ValueError, "JSON object"):
@@ -133,6 +163,11 @@ class Validate(unittest.TestCase):
         name, d = jobs.validate(dict(GOOD, lat=30.5, lon=-97, proxies=["socks5://127.0.0.1:1080"]))
         self.assertEqual((name, d["lat"], d["lon"], d["depth"], d["zoom"], d["email"]), ("t", "30.5", "-97", 1, 15, False))
         self.assertEqual(d["proxies"], ["socks5://127.0.0.1:1080"])
+        self.assertEqual((d["country"], d["reviews_max"], d["socials"], d["verify_emails"]), ("", 0, False, False))
+        d = jobs.validate(dict(GOOD, country="DE", proxies=["http://u%40x:p%3A@h:1"]))[1]
+        self.assertEqual((d["country"], jobs.locale(d), d["proxies"]), ("de", "en-DE", ["http://u%40x:p%3A@h:1"]))
+        self.assertEqual(jobs.mask("http://u%40x:p%3A@h:1"), "http://u%40x:***@h:1")
+        self.assertEqual(jobs.mask("socks5://h:1"), "socks5://h:1")
         self.assertEqual(jobs.validate(dict(GOOD, radius=5_000_000))[1]["radius"], 5_000_000)
 
 
@@ -162,15 +197,16 @@ class Store(Fakes):
         self.assertEqual([j["ID"] for j in self.store.all()], [b, a])  # newest first
         self.assertEqual(self.store.claim()["ID"], a)  # oldest pending first
         self.assertEqual(self.store.get(a)["Status"], "working")
-        self.assertEqual(self.store.recover(), 1)
-        self.assertEqual(self.store.get(a)["Status"], "failed")
-        self.assertTrue(self.store.write_csv(b, []))
+        self.assertEqual(self.store.recover(), (1, 0))  # resumed on the next start
+        self.assertEqual((self.store.get(a)["Status"], self.store.get(a)["Progress"]["resumes"]), ("pending", 1))
+        self.assertEqual(self.store.append(b, [], jobs.fields({})), len(",".join(jobs.COLUMNS + jobs.EXTRA)) + 2)
         self.assertTrue(self.store.read_csv(b).startswith(b"input_id,link,title"))
         self.assertTrue(self.store.delete(b))
         self.assertIsNone(self.store.read_csv(b))
-        self.assertFalse(self.store.write_csv(b, []))  # a deleted job gets no file back
+        self.assertIsNone(self.store.append(b, [], jobs.fields({})))  # a deleted job gets no file back
+        self.assertFalse(self.store.finish(b, [], jobs.fields({}), "ok", "", {}))
         self.assertFalse(self.store.delete(b))
-        self.assertEqual(set(self.store.get(a)), {"ID", "Name", "Date", "Status", "Data", "Error"})
+        self.assertEqual(set(self.store.get(a)), {"ID", "Name", "Date", "Status", "Data", "Error", "Progress"})
         self.assertRegex(self.store.get(a)["Date"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+00:00$")
 
 
@@ -183,7 +219,8 @@ class Worker(Fakes):
         rows = self.rows(jid)
         self.assertEqual([r["title"] for r in rows], ["Biz 1", "Biz 2", "Biz 3"])
         self.assertEqual([r["input_id"] for r in rows], ["cafes", "cafes", "bakeries"])
-        self.assertEqual(FakeBrowser.made[0].kw, {"lang": "de", "proxy": "http://10.0.0.1:3128"})
+        self.assertEqual(FakeBrowser.made[0].kw, {"lang": "de", "headless": True})
+        self.assertEqual(FakeBrowser.made[0].contexts, ["http://10.0.0.1:3128"] * 2)
         self.assertFalse(any(re.search(r"Biz \d", l) for l in self.lines))  # counts only in the log
 
     def test_no_results_is_ok_with_header(self):
@@ -241,7 +278,7 @@ class Worker(Fakes):
     def test_email_pass_stops_when_asked(self):
         rows = [{"website": f"https://s{i}.com", "emails": ""} for i in range(3)]
         t = time.monotonic()
-        jobs.add_emails(rows, 30, get=lambda url: time.sleep(5) or "", stop=lambda: time.monotonic() - t > 0.3)
+        jobs.add_site_data(rows, 30, get=lambda url: time.sleep(5) or "", stop=lambda: time.monotonic() - t > 0.3)
         self.assertLess(time.monotonic() - t, 3)
 
     def test_watchdog_kills_a_hung_chrome(self):
@@ -282,6 +319,7 @@ class Worker(Fakes):
             jobs.fetch = saved
         self.assertEqual(job["Status"], "ok")
         self.assertEqual([r["emails"] for r in self.rows(jid)], ["hello@biz1.com, sales@biz1.com", "", ""])
+        self.assertNotIn("instagram", self.rows(jid)[0])  # columns only for the passes a job asked for
 
 
 class Emails(unittest.TestCase):
@@ -354,7 +392,7 @@ class Api(Server):
         job = json.loads(self.call("GET", f"/api/v1/jobs/{jid}")[1])
         self.assertEqual((job["ID"], job["Name"], job["Status"], job["Data"]["keywords"]), (jid, "t", "pending", ["cafes in Austin"]))
         self.assertEqual(self.call("GET", f"/api/v1/jobs/{jid}/download")[0], 404)
-        self.store.write_csv(jid, [jobs.to_row(place(1), "k")])
+        self.store.append(jid, [jobs.to_row(place(1), "k")], jobs.fields({}))
         code, body, r = self.call("GET", f"/api/v1/jobs/{jid}/download")
         self.assertEqual((code, r.getheader("Content-Type")), (200, "text/csv; charset=utf-8"))
         self.assertEqual(self.call("GET", f"/download?id={jid}")[1], body)
@@ -396,7 +434,7 @@ class Api(Server):
         self.assertIn("connect-src 'self' https://raw.githubusercontent.com;", csp)  # sponsors.json, nothing else
         self.assertIn("assets/sponsors/sponsors.json", body.decode())
         self.assertNotRegex(body.decode(), r"\{[a-z_]+\}")  # every placeholder filled
-        code, body, _ = self.call("GET", "/api/docs")
+        code, body, _ = self.call("GET", "/api/openapi.json")
         self.assertEqual(json.loads(body)["paths"]["/api/v1/jobs"]["post"]["requestBody"]["content"]["application/json"]
                          ["schema"]["required"], ["name", "keywords", "lang", "lat", "lon", "max_time"])
 
@@ -587,9 +625,10 @@ class LaunchChrome(unittest.TestCase):
         os.mkdir(profile)
         b = None
         with self.assertRaisesRegex(browser.BrowserError, "DevTools"):
-            b = browser.Browser(path=self.exe, profile=profile, proxy="socks5h://10.0.0.1:1080", timeout=5)
+            b = browser.Browser(path=self.exe, profile=profile, headless=False, timeout=5)
         self.assertIsNone(b)
-        self.assertIn("--proxy-server=socks5://10.0.0.1:1080", self.launches()[0])
+        self.assertIn("--window-position=-3000,-3000", self.launches()[0])  # a window, out of sight
+        self.assertNotIn("--headless", self.launches()[0])
         out = subprocess.run(["ps", "-axo", "command"], capture_output=True, text=True).stdout
         self.assertNotIn(self.exe, out)  # the fake Chrome was stopped
 
@@ -654,6 +693,346 @@ class EngineCli(unittest.TestCase):
         finally:
             p.kill()
             p.wait()
+
+
+def wait_until(cond, seconds=5):
+    end = time.time() + seconds
+    while not cond() and time.time() < end:
+        time.sleep(0.02)
+    return cond()
+
+
+class Resume(Fakes):
+    """P3: rows stream into the CSV, Progress says how far a job is, and a job the engine was stopped
+    in the middle of carries on from its last finished keyword."""
+
+    def start(self, **body):
+        name, data = jobs.validate(dict(GOOD, **body))
+        jid = self.store.create(name, data)
+        t = threading.Thread(target=self.worker.run_job, args=(self.store.claim(),))
+        t.start()
+        return jid, t
+
+    def test_rows_stream_in_and_a_stopped_engine_resumes(self):
+        RESULTS["cafes"] = ([place(1)], "end-of-list")
+        RESULTS["bakeries"] = ([place(2), place(3)], "slow")
+        RESULTS["florists"] = ([place(4)], "end-of-list")
+        jid, t = self.start(keywords=["cafes", "bakeries", "florists"])
+        self.assertTrue(wait_until(lambda: self.store.get(jid)["Progress"].get("places") == 3))
+        self.assertEqual(len(self.rows(jid)), 3)  # bakeries' places are in before the keyword ends
+        prog = jobs.public(self.store.get(jid))["Progress"]
+        self.assertEqual((prog["keywords_done"], prog["keywords_total"], prog["places"], prog["stage"]), (1, 3, 3, "search"))
+        self.assertTrue(33 < prog["percent"] <= 66)
+        self.worker.shutdown(wait=5)  # the engine stops mid-keyword
+        t.join(5)
+        self.assertEqual(self.store.get(jid)["Status"], "pending")
+        RESULTS["bakeries"] = ([place(2), place(3)], "end-of-list")
+        SEARCHED.clear()
+        jobs.Worker(self.store, self.lines.append).run_job(self.store.claim())  # the next start
+        job = self.store.get(jid)
+        self.assertEqual((job["Status"], job["Error"]), ("ok", ""))
+        self.assertEqual(SEARCHED, ["bakeries", "florists"])  # cafes was finished, bakeries was not
+        self.assertEqual([r["title"] for r in self.rows(jid)], ["Biz 1", "Biz 2", "Biz 3", "Biz 4"])
+        self.assertEqual(jobs.public(job)["Progress"], {"keywords_done": 3, "keywords_total": 3, "places": 4,
+                                                        "percent": 100, "stage": "done"})
+
+    def crashed(self, keywords, **progress):
+        """A job an engine crashed in: one keyword finished, part of the next one appended, a torn line."""
+        name, data = jobs.validate(dict(GOOD, keywords=keywords))
+        jid = self.store.create(name, data)
+        size = self.store.append(jid, [jobs.to_row(place(1), keywords[0])], jobs.fields(data))
+        self.store.append(jid, [jobs.to_row(place(2), keywords[1])], jobs.fields(data))
+        with open(self.store.csv_path(jid), "ab") as f:
+            f.write(b'"cafes,Biz 9,"half a ro')
+        self.store.claim()
+        self.store.set_progress(jid, dict({"done": 1, "total": len(keywords), "bytes": size, "stage": "search"}, **progress))
+        return jid, size
+
+    def test_crash_cuts_the_unfinished_keyword_and_resumes(self):
+        jid, size = self.crashed(["cafes", "bakeries"], elapsed=20)
+        self.assertEqual(self.store.recover(), (1, 0))
+        self.assertEqual(os.path.getsize(self.store.csv_path(jid)), size)  # torn line and bakeries' row gone
+        RESULTS["bakeries"] = ([place(2), place(3)], "end-of-list")
+        self.worker.run_job(self.store.claim())
+        self.assertEqual(SEARCHED, ["bakeries"])
+        self.assertEqual([r["title"] for r in self.rows(jid)], ["Biz 1", "Biz 2", "Biz 3"])
+        self.assertTrue(any("resumed at keyword 2/2 with 1 places, 40 s left" in l for l in self.lines))
+
+    def test_too_many_restarts_fail_as_before(self):
+        jid, size = self.crashed(["cafes", "bakeries"], resumes=jobs.MAX_RESUMES)
+        self.assertEqual(self.store.recover(), (0, 1))
+        job = self.store.get(jid)
+        self.assertEqual(job["Status"], "failed")
+        self.assertIn("the engine stopped while this job ran (4 times); its rows so far are kept", job["Error"])
+        self.assertEqual(os.path.getsize(self.store.csv_path(jid)), size)
+
+    def test_no_time_left_ends_without_searching(self):
+        jid, _ = self.crashed(["cafes", "bakeries"], elapsed=60)
+        self.store.recover()
+        self.worker.run_job(self.store.claim())
+        job = self.store.get(jid)
+        self.assertEqual((job["Status"], SEARCHED, FakeBrowser.made), ("ok", [], []))
+        self.assertIn("stopped at max_time", job["Error"])
+        self.assertEqual([r["title"] for r in self.rows(jid)], ["Biz 1"])
+
+    def test_old_store_gets_the_progress_column(self):
+        folder = os.path.join(self.dir, "old")
+        os.makedirs(folder)
+        db = sqlite3.connect(os.path.join(folder, "jobs.db"))
+        db.execute("CREATE TABLE jobs (id TEXT PRIMARY KEY, name TEXT NOT NULL, date TEXT NOT NULL, "
+                   "status TEXT NOT NULL, data TEXT NOT NULL, error TEXT NOT NULL DEFAULT '')")
+        db.execute("INSERT INTO jobs VALUES ('x', 'n', 'd', 'ok', '{}', '')")
+        db.commit()
+        db.close()
+        old = jobs.Store(folder)
+        self.assertEqual(old.get("x")["Progress"], {})
+        old.db.close()
+
+
+class Backoff(Fakes):
+    def setUp(self):
+        super().setUp()
+        self.saved_waits = (jobs.BACKOFF, jobs.ROTATE_WAIT)
+        jobs.BACKOFF, jobs.ROTATE_WAIT = (0.05, 0.05), 0.01
+
+    def tearDown(self):
+        jobs.BACKOFF, jobs.ROTATE_WAIT = self.saved_waits
+        super().tearDown()
+
+    def test_retry_through_the_next_proxy(self):
+        RESULTS["cafes in Austin"] = ([place(1)], ["blocked", "end-of-list"])
+        jid, job = self.run_one(proxies=["http://a:1", "http://b:2"])
+        self.assertEqual((job["Status"], job["Error"]), ("ok", ""))
+        self.assertEqual(FakeBrowser.made[0].contexts, ["http://a:1", "http://b:2"])
+        self.assertTrue(any("retry 1/2 in 0.01 s through the next proxy" in l for l in self.lines))
+
+    def test_gives_up_after_bounded_retries(self):
+        RESULTS["cafes in Austin"] = ([], ["blocked"])
+        _, job = self.run_one()
+        self.assertEqual(job["Status"], "failed")
+        self.assertIn("unusual-traffic page", job["Error"])  # what scripts/scrape.py looks for
+        self.assertIn("Waited and retried 2 time(s)", job["Error"])
+        self.assertEqual(SEARCHED, ["cafes in Austin"] * 3)
+
+    def test_a_failed_proxy_hands_the_keyword_to_the_next(self):
+        calls = []
+        def collect(page, url, **kw):
+            calls.append(FakeBrowser.made[-1].contexts[-1])
+            if len(calls) == 1:
+                raise CDPError("navigate https://x: net::ERR_PROXY_CONNECTION_FAILED")
+            return [place(1)], "end-of-list", {"batches": 1, "dom_links": 0}
+        maps.collect = collect
+        jid, job = self.run_one(proxies=["http://dead:1", "http://ok:2"])
+        self.assertEqual((job["Status"], job["Error"], calls), ("ok", "", ["http://dead:1", "http://ok:2"]))
+        self.assertEqual(len(self.rows(jid)), 1)
+
+    def test_proxies_take_turns(self):
+        for k in ("a", "b", "c"):
+            RESULTS[k] = ([], "end-of-list")
+        self.run_one(keywords=["a", "b", "c"], proxies=["http://u:pw-s3cret@p1:1", "http://p2:2"])
+        self.assertEqual(FakeBrowser.made[0].contexts, ["http://u:pw-s3cret@p1:1", "http://p2:2", "http://u:pw-s3cret@p1:1"])
+        self.assertFalse(any("s3cret" in l for l in self.lines))
+        self.assertEqual(FakeAuth.logins, [("u", "pw-s3cret")] * 2)  # only the tabs on the proxy with a login
+
+
+class ProxyLogin(unittest.TestCase):
+    """browser.ProxyAuth against a fake DevTools connection: continue every paused request, answer
+    the proxy's 407 once with the job's credentials, then give up (wrong credentials)."""
+
+    def test_answers(self):
+        class C:
+            closed = None
+            def __init__(self):
+                self.sent = []
+            def subscribe(self, method, sid=None, q=None):
+                self.q = q or queue.Queue()
+                return self.q
+            def unsubscribe(self, *a):
+                pass
+        class P:
+            sid = "s"
+            def __init__(self):
+                self.cdp = C()
+            def send(self, method, params=None, timeout=None):
+                self.cdp.sent.append((method, params))
+                return {}
+        page = P()
+        auth = browser.ProxyAuth(page, "user", "pw")
+        q = page.cdp.q
+        q.put({"requestId": "1", "request": {"url": "https://www.google.com/"}})
+        q.put({"requestId": "2", "authChallenge": {"source": "Proxy"}})
+        q.put({"requestId": "2", "authChallenge": {"source": "Proxy"}})
+        q.put({"requestId": "3", "authChallenge": {"source": "Server"}})
+        self.assertTrue(wait_until(lambda: len(page.cdp.sent) == 5))
+        auth.close()
+        sent = page.cdp.sent
+        self.assertEqual(sent[0], ("Fetch.enable", {"handleAuthRequests": True, "patterns": [{"urlPattern": "*"}]}))
+        self.assertEqual(sent[1], ("Fetch.continueRequest", {"requestId": "1"}))
+        self.assertEqual([m[1]["authChallengeResponse"]["response"] for m in sent[2:]],
+                         ["ProvideCredentials", "CancelAuth", "Default"])
+        self.assertEqual(sent[2][1]["authChallengeResponse"]["username"], "user")
+        self.assertTrue(auth.refused)  # the job then says "proxy login refused", not Chrome's vague error
+        self.assertIn("proxy login refused", jobs.LOGIN_REFUSED)
+        self.assertTrue(jobs.PROXY_FAILED.search(jobs.LOGIN_REFUSED))
+        self.assertFalse(jobs.PROXY_FAILED.search("navigate https://x/maps/search/tunnel%20car%20wash: net::ERR_TIMED_OUT"))
+
+    def test_split(self):
+        self.assertEqual(browser.split_proxy("http://u%40x:p%3A@h:3128"), ("http://h:3128", "u@x", "p:"))
+        self.assertEqual(browser.split_proxy("socks5h://[::1]:1080"), ("socks5://[::1]:1080", "", ""))
+
+
+def entity(days=7, reviews=False):
+    """A place entity shaped like Google's (made-up values) with the full view's fields."""
+    e = [None] * 260
+    e[11], e[10], e[78] = "Biz", "0x1:0x2", "ChIJx"
+    e[4] = [None, None, None, ["https://search.google.com/local/reviews?placeid=ChIJx", "349 reviews"],
+            None, None, None, 4.7, 349]
+    names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    week = [[names[n - 1], n, [2026, 11, n], [["7\u202fAM\u20139\u202fPM", [[7], [21]]]], 0, 1] for n in (6, 7, 1, 2, 3, 4, 5)]
+    e[203] = [week[:days], [week[0], 0, 4, None, ["Open \u00b7 Closes 9\u202fPM"]]]
+    if reviews:
+        def review(stars, text):
+            r = [None] * 4
+            r[0] = "id"
+            r[1] = [None, None, 1, 1, [None, None, ["https://example.com/u"], None, None, ["A Reviewer"]], None, "4 months ago"]
+            r[2] = [[stars]] + [None] * 14 + [[[text]]]
+            return [r]
+        e[175] = [None] * 10
+        e[175][3] = [6, 12, 6, 24, 301]
+        e[175][9] = [[[review(5, "Great\u202fcoffee"), review(2, "Slow"), review(4, "")]]]
+    return e
+
+
+class FullView(unittest.TestCase):
+    """details.py fields that only Google's full view carries (a Chrome window), from made-up data."""
+
+    def test_count_link_and_week(self):
+        out = details.parse_entity(entity())
+        self.assertEqual((out["review_count"], out["review_rating"]), (349, 4.7))
+        self.assertEqual(out["reviews_link"], "https://search.google.com/local/reviews?placeid=ChIJx")
+        week = json.loads(out["open_hours"])
+        self.assertEqual(list(week)[:2], ["Monday", "Tuesday"])
+        self.assertEqual(week["Sunday"], ["7 AM\u20139 PM"])
+        self.assertEqual(out["open_state"], "Open \u00b7 Closes 9 PM" if False else out["open_state"])
+
+    def test_limited_view_gives_no_week(self):
+        self.assertNotIn("open_hours", details.parse_entity(entity(days=1)))  # today only is not a week
+
+    def test_place_panel_reviews_without_names(self):
+        body = ")]}'\n" + json.dumps([None] * 6 + [entity(reviews=True)])
+        out = details.parse_place(body, limit=2)
+        self.assertEqual(json.loads(out["reviews_per_rating"]), {"1": 6, "2": 12, "3": 6, "4": 24, "5": 301})
+        self.assertEqual(json.loads(out["user_reviews"]), [{"Rating": 5, "When": "4 months ago", "Description": "Great coffee"},
+                                                           {"Rating": 2, "When": "4 months ago", "Description": "Slow"}])
+        self.assertNotIn("Reviewer", json.dumps(out))
+        self.assertEqual(details.parse_place("not json"), {})
+
+
+class Locale(unittest.TestCase):
+    def test_search_url_and_end_of_list(self):
+        self.assertEqual(maps.search_url("a b", 1, 2, 15, "de", "at"), "https://www.google.com/maps/search/a%20b/@1,2,15z?hl=de&gl=at")
+        self.assertTrue(maps.search_url("x").endswith("?hl=en"))
+        self.assertTrue(maps.ended({"cls": True, "text": ""}))
+        self.assertTrue(maps.ended({"cls": False, "text": "… Vous êtes arrivé à la fin de la liste."}))
+        self.assertFalse(maps.ended({"cls": False, "text": "Biz 1"}))
+        self.assertFalse(maps.ended(None))
+        self.assertIn('input[name="set_eom"][value="true"]', maps.JS_CONSENT)  # the reject form, any language
+        self.assertIn("tout refuser", maps.JS_CONSENT)
+
+    def test_429_marks_the_batches_limited(self):
+        q = queue.Queue()
+        class C:
+            closed = None
+            def subscribe(self, *a):
+                return q
+        class P:
+            sid, cdp = "s", C()
+        b = maps.Batches(P())
+        q.put({"requestId": "1", "response": {"url": "https://www.google.com/search?tbm=map&pb=x", "status": 429,
+                                              "mimeType": "text/html"}})
+        self.assertEqual((b.drain(), b.limited, b.pending), ([], 1, {}))
+
+
+class Websites(unittest.TestCase):
+    def test_socials_and_mx(self):
+        rows = [{"website": "https://shop.com", "emails": ""}, {"website": "https://gone.com", "emails": ""}]
+        pages = {"https://shop.com": 'info@shop.com <a href="https://www.instagram.com/shopco/">ig</a> '
+                                     '<a href="https://facebook.com/sharer">x</a> <a href="https://facebook.com/shopco">fb</a>',
+                 "https://gone.com": "hi@gone-forever.com"}
+        hosts = {"shop.com": "google_workspace", "gone-forever.com": "nxdomain"}
+        with unittest.mock.patch.object(jobs, "mx_host", side_effect=hosts.get):
+            n = jobs.add_site_data(rows, 10, socials=True, verify=True, get=pages.get)
+        self.assertEqual(n, 1)
+        self.assertEqual((rows[0]["emails"], rows[0]["email_host"]), ("info@shop.com", "google_workspace"))
+        self.assertEqual((rows[0]["instagram"], rows[0]["facebook"]), ("https://www.instagram.com/shopco", "https://facebook.com/shopco"))
+        self.assertEqual(rows[1]["emails"], "")  # its only address is on a domain that does not exist
+
+    def test_mx_answers(self):
+        def doh(answer):
+            r = unittest.mock.MagicMock()
+            r.__enter__.return_value = io.BytesIO(json.dumps(answer).encode())
+            return unittest.mock.patch.object(jobs._OPENER, "open", return_value=r)
+        jobs.mx_host.cache_clear()
+        with doh({"Status": 3}):
+            self.assertEqual(jobs.mx_host("a.test"), "nxdomain")
+        with doh({"Status": 0, "Answer": [{"type": 15, "data": "1 aspmx.l.google.com."}]}):
+            self.assertEqual(jobs.mx_host("b.test"), "google_workspace")
+        with doh({"Status": 0}):
+            self.assertEqual(jobs.mx_host("c.test"), "none")
+        jobs.mx_host.cache_clear()
+
+    def test_same_social_patterns_as_scrape(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts"))
+        import scrape
+        self.assertEqual({k: r.pattern for k, r in jobs.SOCIAL_RE.items()}, {k: r.pattern for k, r in scrape.SOCIAL_RE.items()})
+        self.assertEqual(jobs.SOCIALS, scrape.SOCIAL_FIELDS)
+        self.assertEqual(jobs.SKIP_HANDLE, scrape._SKIP_HANDLE)
+
+
+class ApiP3(Server):
+    def test_progress_json_and_docs(self):
+        code, body, _ = self.call("POST", "/api/v1/jobs", dict(GOOD, proxies=["http://u:pw-s3cret@h:1"]))
+        jid = json.loads(body)["id"]
+        code, body, _ = self.call("GET", f"/api/v1/jobs/{jid}")
+        job = json.loads(body)
+        self.assertEqual(job["Data"]["proxies"], ["http://u:***@h:1"])
+        self.assertNotIn(b"s3cret", body + self.call("GET", "/api/v1/jobs")[1])
+        self.assertEqual(job["Progress"], {"keywords_done": 0, "keywords_total": 1, "places": 0, "percent": 0,
+                                           "stage": "queued"})
+        self.store.append(jid, [jobs.to_row(place(1, title="Café"), "k")], jobs.fields({}))
+        code, body, r = self.call("GET", f"/api/v1/jobs/{jid}/download?format=json")
+        self.assertEqual((code, r.getheader("Content-Type")), (200, "application/json; charset=utf-8"))
+        rows = json.loads(body)
+        self.assertEqual((len(rows), rows[0]["title"], rows[0]["review_count"]), (1, "Café", "11"))
+        self.assertEqual(self.call("GET", f"/api/v1/jobs/{jid}/download?format=xml")[0], 400)
+        self.assertEqual(self.call("GET", f"/download?id={jid}&format=json")[1], body)
+        code, body, r = self.call("GET", "/api/docs")
+        page, csp = body.decode(), r.getheader("Content-Security-Policy")
+        self.assertEqual((code, r.getheader("Content-Type")), (200, "text/html; charset=utf-8"))
+        self.assertNotIn("<script", page)
+        nonce = re.search(r"nonce-([^']+)'", csp).group(1)
+        self.assertIn(f'<style nonce="{nonce}">', page)
+        self.assertNotIn("script-src", csp)
+        self.assertIn("<code>reviews_max</code>", page)
+        spec = json.loads(self.call("GET", "/api/openapi.json")[1])
+        self.assertEqual(spec["paths"]["/api/v1/jobs"]["post"]["requestBody"]["content"]["application/json"]
+                         ["schema"]["required"], ["name", "keywords", "lang", "lat", "lon", "max_time"])
+        ui = self.call("GET", "/")[1].decode()
+        self.assertIn('id="country"', ui)
+        self.assertIn('list="kwlist"', ui)
+        self.assertIn(serve.CATEGORIES, ui)  # loaded by the browser from GitHub, pinned to a commit
+        self.assertRegex(serve.CATEGORIES, r"/[0-9a-f]{40}/")
+        script = re.search(r"<script nonce=[^>]+>(.*)</script>", ui, re.S).group(1)
+        self.assertNotIn("'\n'", script)  # PAGE must say \\n: a bare newline in a JS string breaks the page
+
+
+class ApiKeyDocs(Server):
+    key = "s3cret"
+
+    def test_docs_need_no_key(self):
+        self.assertEqual(self.call("GET", "/api/docs")[0], 200)
+        self.assertEqual(self.call("GET", "/api/openapi.json")[0], 200)
+        self.assertEqual(self.call("GET", "/api/v1/jobs/00000000-0000-0000-0000-000000000000/download")[0], 401)
 
 
 if __name__ == "__main__":

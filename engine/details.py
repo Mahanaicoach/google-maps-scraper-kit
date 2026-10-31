@@ -3,19 +3,20 @@
 While the result list scrolls, the page fetches batches of about 20 places from
 `https://www.google.com/search?tbm=map…` as `)]}'\\n[...]` JSON; each batch carries the full place
 entity (name, address, phone, website, rating, coordinates, ids…). The engine captures those
-responses in the browser (cdp Network events) and parses them here, so no place page is ever
-opened: the spike showed the place page itself, fetched by curl or by Chrome, holds no entity data
-any more. Standard library only.
+responses in the browser (cdp Network events) and parses them here, so no place page is opened for
+them: the spike showed the place page document itself holds no entity data any more. Review texts
+are the one thing the batches lack: they come from the `/maps/preview/place` response a place's
+panel downloads (parse_place), only for jobs that ask for them. Standard library only.
 """
 import json
 
 # Index path of each field inside a place entity. Checked on live batches in the spike
 # (2026-10-31): title, category, address, rating, lat/lon, place_id, data_id, timezone, thumbnail
 # filled on 60/60 entities, website 55/60, phone 46/60 (listings without one).
-# review_count is not here: signed out, Google leaves (4, 8) empty, and (37, 1) is a different
-# number (60 and 82 where the page showed 61 and 134 reviews, 2026-10-31). Headless Chrome gets
-# Google's limited view, whose result cards show "4.8 stars" without the count, so the CSV's
-# review_count column stays empty.
+# review_count, reviews_link and the week of opening hours come only with Google's full view: a
+# headless Chrome (the default) gets its "limited view", which leaves (4, 8) and (4, 3) empty and
+# lists today's hours only. A Chrome window (SCRAPER_HEADLESS=0) gets the full view: count at (4, 8)
+# on 20/20 entities, 7 days of hours on 19/20 (2026-10-31). (37, 1) is the photo count, not reviews.
 FIELDS = {
     "title": (11,),
     "category": (13, 0),
@@ -23,6 +24,8 @@ FIELDS = {
     "website": (7, 0),
     "phone": (178, 0, 0),
     "review_rating": (4, 7),
+    "review_count": (4, 8),
+    "reviews_link": (4, 3, 0),
     "latitude": (9, 2),
     "longitude": (9, 3),
     "plus_code": (183, 2, 2, 0),
@@ -34,6 +37,9 @@ FIELDS = {
     "price_range": (4, 2),
     "description": (32, 1, 1),
 }
+HOURS = (203, 0)  # [[day name, 1-7 (Monday-Sunday), date, [[text, ...], ...], ...], ...], from today on
+HISTOGRAM = (175, 3)  # place panel: [one-star count, ..., five-star count]
+REVIEWS = (175, 9, 0, 0)  # place panel: the reviews it shows first (about 5)
 LISTS = {"categories": (13,), "address_lines": (2,)}
 ENTRIES = 64  # position of the result list inside a batch
 
@@ -59,11 +65,61 @@ def parse_entity(entity):
             items = [x for x in v if isinstance(x, str) and x]
             if items:
                 out[name] = " | ".join(items)
+    hours = open_hours(dig(entity, HOURS))
+    if hours:
+        out["open_hours"] = hours
     if "data_id" in out and ":" in out["data_id"]:
         try:
             out["cid"] = str(int(out["data_id"].split(":")[1], 16))
         except ValueError:
             pass
+    return out
+
+
+def _text(v):
+    return v.replace("\u202f", " ").strip() if isinstance(v, str) else ""
+
+
+def open_hours(days):
+    """The week's hours as old-engine JSON ({"Monday": ["7 AM–9 PM"], ...}, Monday first), or "" when
+    Google sent fewer than 7 days (the limited view sends today only, which would read as a week)."""
+    if not isinstance(days, list):
+        return ""
+    week = {}
+    for d in days:
+        if not (isinstance(d, list) and len(d) > 3 and isinstance(d[0], str) and isinstance(d[1], int)):
+            continue
+        spans = [_text(x[0]) for x in d[3] or [] if isinstance(x, list) and x and _text(x[0])]
+        week[d[1]] = (d[0], spans)
+    if len(week) < 7:
+        return ""
+    return json.dumps({name: spans for _, (name, spans) in sorted(week.items())}, ensure_ascii=False)
+
+
+def parse_place(body, limit=5):
+    """review_count, reviews_per_rating and up to `limit` user_reviews from one `/maps/preview/place`
+    response. Reviewer names and photos are left out: the kit collects business data, not people."""
+    if body.startswith(")]}'"):
+        body = body.split("\n", 1)[-1]
+    try:
+        entity = dig(json.loads(body), (6,))
+    except ValueError:
+        return {}
+    if not isinstance(entity, list):
+        return {}
+    out = {k: v for k, v in parse_entity(entity).items() if k in ("review_count", "reviews_link", "open_hours")}
+    hist = dig(entity, HISTOGRAM)
+    if isinstance(hist, list) and len(hist) == 5 and all(isinstance(n, int) for n in hist):
+        out["reviews_per_rating"] = json.dumps({str(i): n for i, n in enumerate(hist, 1)})
+    reviews = []
+    for r in dig(entity, REVIEWS) or []:
+        rating, text = dig(r, (0, 2, 0, 0)), _text(dig(r, (0, 2, 15, 0, 0)))
+        if isinstance(rating, int) and not isinstance(rating, bool):
+            reviews.append({"Rating": rating, "When": _text(dig(r, (0, 1, 6))), "Description": text})
+        if len(reviews) >= limit:
+            break
+    if reviews:
+        out["user_reviews"] = json.dumps(reviews, ensure_ascii=False)
     return out
 
 

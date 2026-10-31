@@ -191,9 +191,10 @@ class CDP:
             raise CDPError(f"{method}: {reply['error'].get('message')}")
         return reply.get("result", {})
 
-    def subscribe(self, method, session_id=None):
-        """A queue that receives the params of every `method` event on `session_id` from now on."""
-        q = queue.Queue()
+    def subscribe(self, method, session_id=None, q=None):
+        """A queue that receives the params of every `method` event on `session_id` from now on
+        (pass q to share one queue between events)."""
+        q = q or queue.Queue()
         self._subs.setdefault((session_id, method), []).append(q)
         return q
 
@@ -224,11 +225,15 @@ class CDP:
 
 
 class Page:
-    """One attached tab: navigate, evaluate JavaScript, wait."""
+    """One attached tab: navigate, evaluate JavaScript, wait. `context` is a browser context id
+    (Browser.context) for a tab with its own cookies and proxy."""
 
-    def __init__(self, cdp, url="about:blank"):
+    def __init__(self, cdp, url="about:blank", context=None):
         self.cdp = cdp
-        self.target = cdp.send("Target.createTarget", {"url": url})["targetId"]
+        params = {"url": url}
+        if context:
+            params["browserContextId"] = context
+        self.target = cdp.send("Target.createTarget", params)["targetId"]
         self.sid = cdp.send("Target.attachToTarget", {"targetId": self.target, "flatten": True})["sessionId"]
         for domain in ("Page", "Runtime", "Network"):
             cdp.send(f"{domain}.enable", session_id=self.sid)

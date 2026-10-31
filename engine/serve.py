@@ -6,14 +6,17 @@
 
 Normally started by `python3 scripts/engine.py start`, or by `docker compose up -d` (the Dockerfile). It speaks the API of the engine the kit used
 before (POST/GET/DELETE /api/v1/jobs, /api/v1/jobs/{id}/download, the same job body and "Status"
-values), so scripts/scrape.py, the skill and the slash commands work unchanged. It listens on
+values), so scripts/scrape.py, the skill and the slash commands work unchanged; jobs also carry Error
+and Progress, resume after a restart, and download as CSV or JSON. It listens on
 127.0.0.1 (and ::1) only, or on 0.0.0.0 inside the Docker image, where Docker publishes the port on
 the host's 127.0.0.1 only. Either way it refuses a foreign Host (DNS rebinding, 421) or Origin (cross-site
 posts, 403); with SCRAPER_API_KEY set it also wants that X-API-Key (401). No telemetry: it talks to
-Google Maps, and for email: true jobs to the businesses' own websites, nothing else.
+Google Maps, for email or socials jobs to the businesses' own websites, and for verify_emails jobs
+to Google's public DNS (dns.google), nothing else.
 Standard library only.
 """
-import argparse, hmac, json, os, re, secrets, signal, socket, socketserver, sys, threading, urllib.parse
+import argparse, csv, hmac, html, io, json, os, re, secrets, signal, socket, socketserver, sys, threading
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -31,7 +34,13 @@ REPO = "https://github.com/Mahanaicoach/google-maps-scraper-kit"
 # The web UI's sponsor box: the browser reads this static file from GitHub (cached a day, no
 # tracking), so the sponsors it lists change without anyone updating their copy of the kit.
 SPONSORS = "https://raw.githubusercontent.com/Mahanaicoach/google-maps-scraper-kit/master/assets/sponsors/sponsors.json"
-ENV_KEYS = ("SCRAPER_PORT", "SCRAPER_API_KEY")
+# Keyword ideas for the web UI: Google Business Profile category names (4,053, US English) from
+# lobstrio/google-business-categories, pinned to one commit. The browser loads it from GitHub, like
+# the sponsor box; the kit ships no copy, because that repository has no licence file.
+CATEGORIES = ("https://raw.githubusercontent.com/lobstrio/google-business-categories/"
+              "4ee1c4788d07c812a32986177c2a51c28957062f/data/google-business-categories.txt")
+CATEGORIES_REPO = "https://github.com/lobstrio/google-business-categories"
+ENV_KEYS = ("SCRAPER_PORT", "SCRAPER_API_KEY", "SCRAPER_HEADLESS")
 MAX_BODY = 1 << 20
 LOCAL = r"(localhost|127\.0\.0\.1|\[::1\])"
 HOST_OK = re.compile(rf"^{LOCAL}(:\d{{1,5}})?$", re.I)
@@ -49,7 +58,7 @@ def log(msg):
 
 
 def read_env():
-    """SCRAPER_PORT and SCRAPER_API_KEY: the environment wins, then the kit's .env (last line wins,
+    """SCRAPER_PORT, SCRAPER_API_KEY and SCRAPER_HEADLESS: the environment wins, then the kit's .env (last line wins,
     as in docker compose and scripts/scrape.py)."""
     found = {}
     try:
@@ -63,36 +72,80 @@ def read_env():
     return {k: os.environ.get(k, found.get(k, "")) for k in ENV_KEYS}
 
 
+JOB_PROPS = {
+    "name": {"type": "string", "description": "any label"},
+    "keywords": {"type": "array", "items": {"type": "string"}, "description": "searches, run one after another"},
+    "lang": {"type": "string", "description": "2-letter interface language, e.g. en (category names, hours text)"},
+    "country": {"type": "string", "description": "2-letter country Google ranks and formats results for, e.g. us "
+                                                 "(default: the country of this machine's IP)"},
+    "lat": {"type": "string"}, "lon": {"type": "string"},
+    "max_time": {"type": "integer", "description": "seconds"},
+    "depth": {"type": "integer", "description": "result batches per keyword, about 20 places each (default 1)"},
+    "zoom": {"type": "integer", "description": "map zoom 1-21 (default 15)"},
+    "email": {"type": "boolean", "description": "visit each website's homepage for emails"},
+    "verify_emails": {"type": "boolean", "description": "with email: check each address's domain over DNS (dns.google), "
+                                                       "drop domains that do not exist, add email_host"},
+    "socials": {"type": "boolean", "description": "visit each website's homepage for Instagram, Facebook, LinkedIn, "
+                                                 "TikTok, YouTube and X links"},
+    "reviews_max": {"type": "integer", "description": "0-5 reviews per place from its panel, one page load per place "
+                                                     "(Google shows reviews only to a Chrome window: SCRAPER_HEADLESS=0)"},
+    "proxies": {"type": "array", "items": {"type": "string"},
+                "description": "http(s)://[user:pass@]host:port or socks5://host:port; one per keyword in turn, "
+                               "and the next one when Google refuses a keyword"},
+    "radius": {"type": "integer", "description": "accepted, not used"},
+    "fast_mode": {"type": "boolean", "description": "accepted, not used"},
+}
 OPENAPI = {
     "openapi": "3.0.3",
     "info": {"title": "Google Maps Scraper Kit engine", "version": VERSION,
-             "description": "Local only. Create a job, poll its Status until ok or failed, download the CSV. "
-                            f"Source and docs: {REPO}"},
+             "description": "Local only. Create a job, poll its Status until ok or failed (Progress says how far "
+                            "it is), download the CSV or JSON. A job the engine was stopped in the middle of "
+                            f"resumes from its last finished keyword on the next start. Source and docs: {REPO}"},
     "paths": {
         "/api/v1/jobs": {
             "get": {"summary": "List jobs, newest first (null when there are none)"},
             "post": {"summary": "Create a job; returns 201 {\"id\": \"<uuid>\"}, or 422 {\"code\", \"message\"}",
                      "requestBody": {"content": {"application/json": {"schema": {
                          "type": "object", "required": ["name", "keywords", "lang", "lat", "lon", "max_time"],
-                         "properties": {
-                             "name": {"type": "string", "description": "any label"},
-                             "keywords": {"type": "array", "items": {"type": "string"}},
-                             "lang": {"type": "string", "description": "2-letter interface language, e.g. en"},
-                             "lat": {"type": "string"}, "lon": {"type": "string"},
-                             "max_time": {"type": "integer", "description": "seconds"},
-                             "depth": {"type": "integer", "description": "result batches per keyword, about 20 places each (default 1)"},
-                             "zoom": {"type": "integer", "description": "map zoom 1-21 (default 15)"},
-                             "email": {"type": "boolean", "description": "visit each website for emails"},
-                             "proxies": {"type": "array", "items": {"type": "string"},
-                                         "description": "http(s):// or socks5://host:port; the first is used"},
-                             "radius": {"type": "integer", "description": "accepted, not used"},
-                             "fast_mode": {"type": "boolean", "description": "accepted, not used"}}}}}}}},
+                         "properties": JOB_PROPS}}}}}},
         "/api/v1/jobs/{id}": {
-            "get": {"summary": "One job: ID, Name, Date, Status (pending, working, ok, failed), Data, Error"},
+            "get": {"summary": "One job: ID, Name, Date, Status (pending, working, ok, failed), Data (proxy "
+                               "passwords masked), Error, Progress (keywords_done, keywords_total, places, percent, "
+                               "stage: queued, search, reviews, websites or done)"},
             "delete": {"summary": "Delete a job and its results (stops it if it is running)"}},
-        "/api/v1/jobs/{id}/download": {"get": {"summary": "The job's CSV (the rows so far while it works)"}},
+        "/api/v1/jobs/{id}/download": {"get": {"summary": "The job's CSV, the rows so far while it works; "
+                                                          "?format=json for a JSON array of the same rows"}},
+        "/api/openapi.json": {"get": {"summary": "This description as OpenAPI JSON (the page at /api/docs shows it)"}},
     },
 }
+
+
+def docs_page(nonce):
+    """/api/docs: OPENAPI as a plain HTML page (no scripts, nothing loaded from elsewhere)."""
+    e = html.escape
+    out = [f"<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+           "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Engine API</title>"
+           f"<style nonce=\"{nonce}\">:root {{ color-scheme: light dark; }} body {{ margin: 0 auto; max-width: 960px; "
+           "padding: 16px; font: 15px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; }} code {{ font-size: .95em; }} "
+           "table {{ width: 100%; border-collapse: collapse; }} th, td {{ text-align: left; vertical-align: top; "
+           "padding: 4px 6px; border-bottom: 1px solid #8884; }} .m {{ font-weight: 600; }}</style></head><body>",
+           f"<h1>{e(OPENAPI['info']['title'])} {e(VERSION)}</h1><p>{e(OPENAPI['info']['description'])}</p>",
+           "<p><a href=\"/\">Web UI</a> · <a href=\"/api/openapi.json\">OpenAPI JSON</a> · "
+           "With SCRAPER_API_KEY set, send it as an <code>X-API-Key</code> header.</p>"]
+    for path, ops in OPENAPI["paths"].items():
+        for method, op in ops.items():
+            out.append(f"<h2><span class=\"m\">{e(method.upper())}</span> <code>{e(path)}</code></h2><p>{e(op['summary'])}</p>")
+            schema = op.get("requestBody", {}).get("content", {}).get("application/json", {}).get("schema")
+            if schema:
+                out.append("<table><tr><th>Field</th><th>Type</th><th>Required</th><th>Meaning</th></tr>")
+                for name, prop in schema["properties"].items():
+                    out.append(f"<tr><td><code>{e(name)}</code></td><td>{e(prop['type'])}</td>"
+                               f"<td>{'yes' if name in schema['required'] else ''}</td>"
+                               f"<td>{e(prop.get('description', ''))}</td></tr>")
+                out.append("</table>")
+    out.append("</body></html>")
+    return "".join(out)
+
 
 PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -114,15 +167,21 @@ td.err {{ color: var(--muted); font-size: .85em; }} .row {{ display: flex; gap: 
 </style></head><body>
 <h1>Google Maps Scraper Kit</h1>
 <p class="muted">Local engine {version}. <a href="{repo}" rel="noopener">GitHub</a> ·
-<a href="/api/docs">API</a> · Business listings only. Results stay on this machine.</p>
+<a href="/api/docs">API</a> · Business listings only. Results stay on this machine.
+A job the engine was stopped in the middle of carries on when it starts again.</p>
 <p class="muted" id="sponsors"><a href="https://github.com/sponsors/Mahanaicoach" rel="noopener">Become a sponsor</a></p>
 <form id="f">
   <label class="wide">Keywords, one per line<textarea id="keywords" rows="3" required
     placeholder="coffee shops in Austin TX"></textarea></label>
+  <label class="wide">Add a business type<input id="kwpick" list="kwlist" autocomplete="off"
+    placeholder="start typing: dentist, roofing contractor…"><datalist id="kwlist"></datalist>
+    <span class="muted">Google's business categories, list by <a href="{categories_repo}" rel="noopener">lobstr.io</a>.
+    Pick one to add it as a keyword line.</span></label>
   <label>Latitude<input id="lat" required placeholder="30.2672" inputmode="decimal"></label>
   <label>Longitude<input id="lon" required placeholder="-97.7431" inputmode="decimal"></label>
   <label>Depth (about 20 places each)<input id="depth" type="number" min="1" max="1000" value="5"></label>
   <label>Language<input id="lang" value="en" maxlength="2" pattern="[A-Za-z]{{2}}"></label>
+  <label>Country (optional)<input id="country" maxlength="2" pattern="[A-Za-z]{{2}}" placeholder="us"></label>
   <label>Time limit (seconds)<input id="max_time" type="number" min="1" max="86400" value="600"></label>
   <label><span>Emails</span><span><input type="checkbox" id="email" checked> visit each website</span></label>
   <div class="wide row"><button class="primary">Start scraping</button>
@@ -147,11 +206,19 @@ function api(method, path, body) {{
 function say(t) {{ $('msg').textContent = t; }}
 function cell(tr, text, cls) {{ const td = document.createElement('td'); td.textContent = text; if (cls) td.className = cls; tr.appendChild(td); return td; }}
 function button(td, label, fn) {{ const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.addEventListener('click', fn); td.appendChild(b); }}
-async function download(j) {{
-  const r = await api('GET', '/api/v1/jobs/' + j.ID + '/download');
+async function download(j, fmt) {{
+  const r = await api('GET', '/api/v1/jobs/' + j.ID + '/download' + (fmt === 'json' ? '?format=json' : ''));
   if (!r.ok) return say('No results yet for this job.');
   const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob());
-  a.download = 'results-' + j.ID.slice(0, 8) + '.csv'; document.body.appendChild(a); a.click(); a.remove();
+  a.download = 'results-' + j.ID.slice(0, 8) + '.' + fmt; document.body.appendChild(a); a.click(); a.remove();
+}}
+function progress(j) {{
+  const p = j.Progress || {{}};
+  if (j.Status === 'pending') return p.keywords_done ? 'pending (resumes at keyword ' + (p.keywords_done + 1) + ')' : 'pending';
+  if (j.Status !== 'working') return j.Status + (p.places ? ' · ' + p.places + ' places' : '');
+  const stage = {{search: 'keyword ' + Math.min(p.keywords_done + 1, p.keywords_total) + '/' + p.keywords_total,
+    reviews: 'reading reviews', websites: 'checking websites'}}[p.stage] || p.stage || '';
+  return 'working · ' + stage + ' · ' + (p.places || 0) + ' places · ' + (p.percent || 0) + '%';
 }}
 async function remove(j) {{
   if (!confirm('Delete this job and its results?')) return;
@@ -164,9 +231,9 @@ async function load() {{
     for (const j of list) {{
       const tr = document.createElement('tr');
       const name = cell(tr, j.Name); if (j.Error) {{ const s = document.createElement('div'); s.className = 'muted'; s.textContent = j.Error; name.appendChild(s); }}
-      cell(tr, j.Date.replace('T', ' ').replace('+00:00', '')); cell(tr, j.Status);
+      cell(tr, j.Date.replace('T', ' ').replace('+00:00', '')); cell(tr, progress(j));
       const act = cell(tr, ''); act.className = 'row';
-      if (j.Status !== 'pending') button(act, 'Download', () => download(j));
+      if (j.Status !== 'pending' || (j.Progress || {{}}).places) {{ button(act, 'CSV', () => download(j, 'csv')); button(act, 'JSON', () => download(j, 'json')); }}
       button(act, 'Delete', () => remove(j));
       tb.appendChild(tr);
     }}
@@ -177,6 +244,7 @@ $('f').addEventListener('submit', async ev => {{
   ev.preventDefault();
   const keywords = $('keywords').value.split('\\n').map(s => s.trim()).filter(Boolean);
   const body = {{name: keywords[0] || 'job', keywords, lang: $('lang').value.trim().toLowerCase(),
+    country: $('country').value.trim().toLowerCase(),
     lat: $('lat').value.trim(), lon: $('lon').value.trim(), depth: +$('depth').value,
     max_time: +$('max_time').value, email: $('email').checked, zoom: 15}};
   try {{
@@ -186,6 +254,29 @@ $('f').addEventListener('submit', async ev => {{
   }} catch (e) {{ say(e.message); }}
 }});
 load(); setInterval(load, 3000);
+$('kwpick').addEventListener('change', () => {{  // a picked business type becomes a keyword line
+  const v = $('kwpick').value.trim(); if (!v) return;
+  const k = $('keywords'); k.value = (k.value.trim() ? k.value.trim() + '\\n' : '') + v; $('kwpick').value = '';
+}});
+(function () {{  // keyword ideas: Google's business category names, cached for 30 days, as text only
+  const key = 'gmskit-categories', month = 30 * 86400000;
+  function fill(names) {{
+    const list = $('kwlist'); list.replaceChildren();
+    for (const n of names) {{ const o = document.createElement('option'); o.value = n; list.appendChild(o); }}
+  }}
+  function clean(text) {{
+    return text.split('\\n').map(s => s.trim()).filter(s => s && s.length <= 80).slice(0, 5000);
+  }}
+  try {{
+    const c = JSON.parse(localStorage.getItem(key) || 'null');
+    if (c && Date.now() - c.t < month && Array.isArray(c.names)) return fill(c.names);
+  }} catch (e) {{}}
+  fetch('{categories}', {{credentials: 'omit'}}).then(r => r.ok ? r.text() : '').then(t => {{
+    const names = clean(t); if (!names.length) return;
+    fill(names);
+    try {{ localStorage.setItem(key, JSON.stringify({{t: Date.now(), names}})); }} catch (e) {{}}
+  }}).catch(() => {{}});
+}})();
 (function () {{  // sponsor box: the "ui": true entries of sponsors.json, as text, https links only
   const box = $('sponsors'), key = 'gmskit-sponsors', day = 86400000;
   function render(list) {{
@@ -258,7 +349,7 @@ class Handler(BaseHTTPRequestHandler):
             self.fail(403, "requests from other websites are refused")
             return False
         key, path = self.server.api_key, self.path.split("?")[0]
-        if key and path not in ("/", "/api/docs") and not hmac.compare_digest(
+        if key and path not in ("/", "/api/docs", "/api/openapi.json") and not hmac.compare_digest(
                 self.headers.get("X-API-Key", "").encode(), key.encode()):
             self.fail(401, "missing or wrong X-API-Key")
             return False
@@ -283,10 +374,17 @@ class Handler(BaseHTTPRequestHandler):
             self.fail(400, "the body is not valid JSON")
             return _REPLIED
 
-    def download(self, jid):
+    def download(self, jid, query=""):
         data = self.server.store.read_csv(jid) if JOB_ID.match(jid or "") else None
         if data is None:
             return self.fail(404, "no results for this job (yet)")
+        fmt = urllib.parse.parse_qs(query).get("format", ["csv"])[0]
+        if fmt == "json":  # the same rows, every value a string, as in the CSV
+            rows = list(csv.DictReader(io.StringIO(data.decode("utf-8", "replace"))))
+            return self.reply(200, json.dumps(rows, ensure_ascii=False).encode(), "application/json; charset=utf-8",
+                              [("Content-Disposition", f'attachment; filename="{jid}.json"')])
+        if fmt != "csv":
+            return self.fail(400, "format must be csv or json")
         self.reply(200, data, "text/csv; charset=utf-8",
                    [("Content-Disposition", f'attachment; filename="{jid}.csv"')])
 
@@ -295,26 +393,32 @@ class Handler(BaseHTTPRequestHandler):
             return
         path, _, query = self.path.partition("?")
         store = self.server.store
-        if path == "/api/v1/jobs":
-            return self.reply(200, store.all() or None)  # null when empty, as before: the docs' health check
+        if path == "/api/v1/jobs":  # null when empty, as before: the docs' health check
+            return self.reply(200, [jobs.public(j) for j in store.all()] or None)
         m = JOB_PATH.match(path)
         if m:
             if m.group(2):
-                return self.download(m.group(1))
+                return self.download(m.group(1), query)
             job = store.get(m.group(1))
-            return self.reply(200, job) if job else self.fail(404, "job not found")
+            return self.reply(200, jobs.public(job)) if job else self.fail(404, "job not found")
         if path == "/download":  # the old web UI's download link
-            return self.download(urllib.parse.parse_qs(query).get("id", [""])[0])
+            return self.download(urllib.parse.parse_qs(query).get("id", [""])[0], query)
+        if path == "/api/docs":
+            nonce = secrets.token_urlsafe(16)
+            csp = f"default-src 'none'; style-src 'nonce-{nonce}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+            return self.reply(200, docs_page(nonce).encode(), "text/html; charset=utf-8",
+                              [("Content-Security-Policy", csp)])
+        if path == "/api/openapi.json":
+            return self.reply(200, OPENAPI)
         if path == "/":
             nonce = secrets.token_urlsafe(16)
             csp = (f"default-src 'none'; script-src 'nonce-{nonce}'; style-src 'nonce-{nonce}'; "
                    "connect-src 'self' https://raw.githubusercontent.com; img-src 'self' data:; "
                    "form-action 'self'; base-uri 'none'; "
                    "frame-ancestors 'none'")
-            page = PAGE.format(nonce=nonce, version=VERSION, repo=REPO, sponsors=SPONSORS).encode()
+            page = PAGE.format(nonce=nonce, version=VERSION, repo=REPO, sponsors=SPONSORS, categories=CATEGORIES,
+                               categories_repo=CATEGORIES_REPO).encode()
             return self.reply(200, page, "text/html; charset=utf-8", [("Content-Security-Policy", csp)])
-        if path == "/api/docs":
-            return self.reply(200, OPENAPI)
         self.fail(404, "not found")
 
     def do_POST(self):
@@ -414,9 +518,14 @@ def main():
     browser.make_home()
     browser.sweep_profiles()
     store = jobs.Store(a.data)
-    if n := store.recover():
-        log(f"{n} job(s) were still working when the engine last stopped: marked failed, rows kept")
-    worker = jobs.Worker(store, log)
+    resumed, failed = store.recover()
+    if resumed:
+        log(f"{resumed} job(s) were still working when the engine last stopped: they resume from their last "
+            "finished keyword")
+    if failed:
+        log(f"{failed} job(s) stopped mid-run {jobs.MAX_RESUMES + 1} times: marked failed, rows kept")
+    headless = env["SCRAPER_HEADLESS"].strip().lower() not in ("0", "false", "no", "off")
+    worker = jobs.Worker(store, log, headless=headless)
     try:
         servers = make_servers(port, store, worker, env["SCRAPER_API_KEY"], a.host)
     except OSError as e:
@@ -425,7 +534,7 @@ def main():
     chrome = browser.find_chrome()
     where = f"http://localhost:{port}" if a.host == "127.0.0.1" else \
         f"{a.host}:{port} in this container, published on the host's 127.0.0.1"
-    log(f"engine {VERSION} on {where} (browser: {chrome or 'none found'}"
+    log(f"engine {VERSION} on {where} (browser: {chrome or 'none found'}{'' if headless else ', as a window'}"
         f"{', API key required' if env['SCRAPER_API_KEY'] else ''})")
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     for s in servers[1:]:
@@ -435,7 +544,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        worker.shutdown()
+        worker.shutdown(wait=8)  # the job in progress saves its place and resumes on the next start
         log("engine stopped")
 
 

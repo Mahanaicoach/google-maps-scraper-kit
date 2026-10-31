@@ -7,9 +7,10 @@ An installed Google Chrome, Chromium, Edge or Brave is used first (set CHROME=/p
 pick one). On a machine with none, `python3 scripts/engine.py start` downloads Chrome for Testing's
 headless shell into .engine/, pinned below by version and SHA-256. Standard library only.
 """
-import hashlib, os, platform, shutil, subprocess, tempfile, time, urllib.request, zipfile
+import hashlib, os, platform, queue, shutil, subprocess, tempfile, threading, time, urllib.parse, urllib.request
+import zipfile
 
-from cdp import CDP
+from cdp import CDP, CDPError
 
 KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HOME = os.path.join(KIT, ".engine")  # everything the engine keeps: jobs, results, logs, its Chrome
@@ -190,10 +191,64 @@ def start_error(path, code, stderr):
     return f"Chrome exited at once (code {code}): {path}" + (f": {last}" if last else "")
 
 
-class Browser:
-    """A headless Chrome whose DevTools socket is on 127.0.0.1; `cdp` is the browser-level CDP."""
+def split_proxy(url):
+    """(the proxy as Chrome takes it, username, password): Chrome takes no user:pass in a proxy URL
+    and knows socks5:// only (it resolves names through a SOCKS5 proxy anyway)."""
+    u = urllib.parse.urlsplit(url)
+    host = f"[{u.hostname}]" if ":" in (u.hostname or "") else u.hostname
+    scheme = "socks5" if u.scheme == "socks5h" else u.scheme
+    return (f"{scheme}://{host}" + (f":{u.port}" if u.port else ""),
+            urllib.parse.unquote(u.username or ""), urllib.parse.unquote(u.password or ""))
 
-    def __init__(self, path=None, headless=True, profile=None, lang="en-US", proxy=None, timeout=30):
+
+class ProxyAuth:
+    """Logs one tab in to its proxy: Chrome asks over CDP (Fetch.authRequired) when the proxy answers
+    407, and gets the username and password here. With Fetch on, every request of the tab waits until
+    it is continued, so a thread continues them. The credentials go to Chrome only, never to a log."""
+
+    def __init__(self, page, user, password):
+        self.page, self.user, self.password = page, user, password
+        self.q = page.cdp.subscribe("Fetch.requestPaused", page.sid)
+        page.cdp.subscribe("Fetch.authRequired", page.sid, q=self.q)
+        self.done, self.asked, self.refused = threading.Event(), set(), False
+        page.send("Fetch.enable", {"handleAuthRequests": True, "patterns": [{"urlPattern": "*"}]})
+        threading.Thread(target=self._run, daemon=True, name="proxy-auth").start()
+
+    def _run(self):
+        while not self.done.is_set():
+            try:
+                ev = self.q.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if not isinstance(ev, dict):  # the connection died
+                return
+            rid = ev.get("requestId")
+            try:
+                if "authChallenge" not in ev:
+                    self.page.send("Fetch.continueRequest", {"requestId": rid})
+                elif ev["authChallenge"].get("source") == "Proxy" and rid not in self.asked:
+                    self.asked.add(rid)  # asked again for the same request: the proxy refused them
+                    self.page.send("Fetch.continueWithAuth", {"requestId": rid, "authChallengeResponse": {
+                        "response": "ProvideCredentials", "username": self.user, "password": self.password}})
+                else:
+                    self.refused = self.refused or rid in self.asked
+                    self.page.send("Fetch.continueWithAuth", {"requestId": rid, "authChallengeResponse": {
+                        "response": "CancelAuth" if rid in self.asked else "Default"}})
+            except CDPError:  # the tab closed or the request finished meanwhile
+                if self.page.cdp.closed:
+                    return
+
+    def close(self):
+        self.done.set()
+        for m in ("Fetch.requestPaused", "Fetch.authRequired"):
+            self.page.cdp.unsubscribe(m, self.q, self.page.sid)
+
+
+class Browser:
+    """A Chrome whose DevTools socket is on 127.0.0.1; `cdp` is the browser-level CDP. Headless by
+    default; headless=False runs it as a normal window off-screen (Google's full view: see details.py)."""
+
+    def __init__(self, path=None, headless=True, profile=None, lang="en-US", timeout=30):
         self.path = path or find_chrome()
         if not self.path:
             raise BrowserError(f"No Chrome, Chromium, Edge or Brave found. Run `{PY} scripts/engine.py start`, "
@@ -209,8 +264,8 @@ class Browser:
                 f"--lang={lang}", "--disable-dev-shm-usage"]
         if headless and "headless-shell" not in os.path.basename(self.path):  # the shell is always headless
             args.append("--headless=new")
-        if proxy:  # Chrome knows socks5:// only; it resolves names through a SOCKS5 proxy anyway
-            args.append("--proxy-server=" + ("socks5://" + proxy[10:] if proxy.startswith("socks5h://") else proxy))
+        elif not headless:
+            args.append("--window-position=-3000,-3000")  # a real window, kept out of sight
         if platform.system() == "Linux" and hasattr(os, "geteuid") and os.geteuid() == 0:
             args.append("--no-sandbox")  # Chrome refuses to run as root with its sandbox (containers)
         self.proc, self.cdp = None, None
@@ -263,6 +318,20 @@ class Browser:
 
     def version(self):
         return self.cdp.send("Browser.getVersion").get("product", "")
+
+    def context(self, proxy=None):
+        """A new browser context (its own cookies, and `proxy` for all its traffic); its id. Each
+        keyword gets one, so proxies rotate without restarting Chrome."""
+        params = {"disposeOnDetach": True}
+        if proxy:
+            params["proxyServer"] = split_proxy(proxy)[0]
+        return self.cdp.send("Target.createBrowserContext", params)["browserContextId"]
+
+    def dispose(self, context):
+        try:
+            self.cdp.send("Target.disposeBrowserContext", {"browserContextId": context})
+        except (CDPError, OSError):
+            pass
 
     def kill(self):
         """Stop Chrome now (the job watchdog): every CDP call still waiting fails at once."""

@@ -86,7 +86,7 @@ CHROME_START = ("No Chrome", "Chrome cannot start", "Chrome exited at once", "Co
 BLOCKED = "unusual-traffic page"  # the engine's Error when Google refused this IP
 # Chrome's network errors for a proxy that failed. Matched as written: the engine's message also
 # holds the search URL, so a keyword such as "tunnel car wash" must not read as a proxy error.
-PROXY_ERROR = re.compile(r"\bERR_(?:PROXY|SOCKS|TUNNEL)_")
+PROXY_ERROR = re.compile(r"\bERR_(?:PROXY|SOCKS|TUNNEL)_|proxy login refused")
 
 
 def poll_attempts(max_time):
@@ -232,8 +232,8 @@ def run_job(body):
                                    f"engine: {RESTART}")
             if PROXY_ERROR.search(reason):
                 raise RuntimeError(f"\n✗ Job failed: the proxy did not work.{said}\n"
-                                   "  Check its host and port; this engine takes no user:pass yet, so the "
-                                   "proxy must allow your IP address.")
+                                   "  Check its host, port, username and password (or that it allows your IP "
+                                   "address).")
             if BLOCKED in reason:
                 raise Blocked(f"\n✗ Job failed.{said}")
             if attempt == 2:
@@ -243,18 +243,32 @@ def run_job(body):
             time.sleep(FAILED_RETRY_WAIT)
 
 
-def _get(path):
-    """GET with three tries: a poll or a download must survive a passing 502 or timeout."""
-    for attempt in range(3):
+def _get(path, tries=3):
+    """GET with retries 3 s apart: a poll or a download must survive a passing 502 or timeout."""
+    for attempt in range(tries):
         try:
             return req("GET", path)
         except urllib.error.HTTPError as e:
-            if e.code < 500 or attempt == 2:
+            if e.code < 500 or attempt == tries - 1:
                 raise
         except OSError:
-            if attempt == 2:
+            if attempt == tries - 1:
                 raise
         time.sleep(3)
+
+
+def progress_text(job):
+    """", keyword 2/3, 41 places, 50%" from the job's Progress (what this engine reports), or ""."""
+    p = job.get("Progress")
+    if not isinstance(p, dict) or not p.get("keywords_total"):
+        return ""
+    total = p["keywords_total"]
+    where = {"reviews": "reading reviews", "websites": "checking websites"}.get(
+        p.get("stage"), f"keyword {min(p.get('keywords_done', 0) + 1, total)}/{total}")
+    return f", {where}, {p.get('places', 0)} places, {p.get('percent', 0)}%"
+
+
+ENGINE_RESTART_TRIES = 20  # ~1 min of polls: a restarted engine resumes the job, so wait for it
 
 
 def _run_job_once(body):
@@ -274,8 +288,8 @@ def _run_job_once(body):
         result = _poll(body, job_id)
     except OSError as e:  # the engine went away (restart, crash) or the job was deleted mid-poll
         CURRENT_JOB = None
-        raise RuntimeError(f"\n✗ Lost the engine while job {job_id} ran ({e}). If the engine comes back, "
-                           f"it keeps the rows found so far: {BASE}/api/v1/jobs/{job_id}/download")
+        raise RuntimeError(f"\n✗ Lost the engine while job {job_id} ran ({e}). When it starts again it resumes "
+                           f"the job from its last finished keyword; its rows: {BASE}/api/v1/jobs/{job_id}/download")
     except Exception:
         CURRENT_JOB = None
         raise
@@ -290,16 +304,11 @@ def _poll(body, job_id):
     print(f"▶ Polling (up to ~{attempts * POLL_EVERY // 60} min)…")
     status = None
     for i in range(attempts):
-        _, raw = _get(f"/api/v1/jobs/{job_id}")
+        _, raw = _get(f"/api/v1/jobs/{job_id}", ENGINE_RESTART_TRIES)
         job = json.loads(raw)
         # Error: why the job failed, or why an "ok" job stopped early (max_time, a Google block).
         status, error = job.get("Status"), str(job.get("Error") or "")
-        progress = ""
-        if status == "working":  # the engine writes rows as it goes, so the download shows progress
-            try:
-                progress = f", {len(download_rows(job_id))} rows so far"
-            except Exception:
-                pass
+        progress = progress_text(job) if status in ("working", "pending") else ""
         print(f"\r  status: {str(status):<10} (attempt {i + 1}{progress})", end="", flush=True)
         if status == "ok":
             print()
@@ -335,7 +344,7 @@ def _poll(body, job_id):
 
 
 def download_rows_or_none(job_id):
-    """The rows so far, or None when the engine has written none (404 until its first keyword)."""
+    """The rows so far, or None when the engine has written none (404 until its first places)."""
     try:
         return download_rows(job_id)
     except urllib.error.HTTPError as e:
@@ -786,8 +795,9 @@ def main():
     ap.add_argument("--city", action="append",
                     help="city/place to auto-geocode for lat/lon; repeatable, one run per city into one file")
     ap.add_argument("--proxy", action="append", metavar="URL",
-                    help="proxy for the engine: http://, https://, socks5:// or socks5h://host:port, "
-                         "without user:pass (not supported yet); repeatable, the engine uses the first")
+                    help="proxy for the engine: http://[user:pass@]host:port, https://, socks5:// or "
+                         "socks5h://host:port (no user:pass on SOCKS5); repeatable: the keywords take turns, "
+                         "and a keyword Google refuses is retried through the next one")
     ap.add_argument("--depth", type=int, default=5)
     # The engine passes this to Google as the interface language, which decides the language of
     # the category names it returns (and nudges which listings come back). It has to match the
@@ -798,6 +808,9 @@ def main():
                          "(default: en; use the local language, e.g. pt, es, de)")
     # Emails are ON by default (they're the most valuable lead field): the script crawls each
     # business website after the Maps job. --no-email skips the crawl.
+    ap.add_argument("--country", metavar="XX",
+                    help="country Google ranks and formats results for, 2 letters (default: the country "
+                         "of your IP address; e.g. us, de, br)")
     ap.add_argument("--no-email", dest="email", action="store_false", default=True,
                     help="skip the website crawl for emails (emails are on by default)")
     ap.add_argument("--no-deep-emails", dest="deep_emails", action="store_false",
@@ -826,8 +839,8 @@ def main():
     f = ap.add_argument_group("filters", "applied before the email crawl, except --has-email")
     f.add_argument("--min-rating", type=float, metavar="X", help="keep rows rated X or higher")
     f.add_argument("--min-reviews", type=int, metavar="N",
-                   help="keep rows with N or more reviews (ignored while review_count is empty, as with "
-                        "this engine)")
+                   help="keep rows with N or more reviews (ignored while review_count is empty: the engine "
+                        "fills it only with SCRAPER_HEADLESS=0)")
     f.add_argument("--no-website", action="store_true", help="keep only businesses without a website")
     f.add_argument("--has-phone", action="store_true", help="keep only rows with a phone number")
     f.add_argument("--has-email", action="store_true", help="keep only rows where an email was found")
@@ -842,6 +855,8 @@ def main():
 
     if len(a.lang) != 2 or not a.lang.isalpha():
         sys.exit(f"✗ --lang must be a 2-letter code (got {a.lang!r}); the engine rejects anything else.")
+    if a.country is not None and (len(a.country) != 2 or not a.country.isalpha()):
+        sys.exit(f"✗ --country must be a 2-letter code (got {a.country!r}), e.g. us or de.")
     if a.depth < 1:
         sys.exit("✗ --depth must be 1 or more.")
     if a.max_time < 1:
@@ -911,6 +926,8 @@ def main():
             "depth": a.depth, "email": False, "max_time": a.max_time}
     if a.proxy:
         body["proxies"] = a.proxy
+    if a.country:
+        body["country"] = a.country.lower()
     job_id, rows, skipped, ncells, failed_places, blocked = None, [], 0, 0, 0, False
     for city in cities:  # one place at a time, like the grid tiles
         try:
@@ -929,10 +946,11 @@ def main():
     for r in rows:
         r["website"] = clean_website(r.get("website", ""))
     if a.min_reviews and rows and not any(r.get("review_count") for r in rows):
-        # The engine leaves review_count empty: Google shows a signed-out headless browser no review
-        # counts. Filtering on it would read every count as 0 and drop every row.
-        print("⚠ --min-reviews ignored: this engine leaves review_count empty (Google shows it no review "
-              "counts), so the filter would drop every row. --min-rating works.")
+        # A headless Chrome gets Google's limited view, which has no review counts. Filtering on it would
+        # read every count as 0 and drop every row.
+        print("⚠ --min-reviews ignored: review_count is empty (Google shows a headless Chrome no review counts; "
+              "SCRAPER_HEADLESS=0 in .env runs it as a window, which gets them), so the filter would drop every "
+              "row. --min-rating works.")
         a.min_reviews = None
     before = len(rows)
     rows = [r for r in dedupe(rows, exclude=excluded) if keep_row(r, a)]
