@@ -56,7 +56,7 @@ Illustrative rows only:
 - `emails`: the published practice inbox. The email crawl reads the homepage, then contact and about pages.
 - `website`: the site you will review before you reach out.
 - `category`: separates general dentists from orthodontists and other specialists.
-- `review_rating`: a quick read on the practice's reputation. `review_count` stays empty for now: Google shows the engine's headless browser no review counts.
+- `review_rating`: a quick read on the practice's reputation. `review_count` stays empty by default: Google shows the engine's headless browser no review counts. [Window mode](../../SETUP.md#review-counts-hours-and-reviews-window-mode) fills it.
 - `instagram`, `facebook`, `linkedin`: added by `--socials` when the site links them.
 
 ## What to expect

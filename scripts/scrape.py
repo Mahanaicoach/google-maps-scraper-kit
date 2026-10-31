@@ -827,7 +827,8 @@ def main():
     ap.add_argument("--full", action="store_true", help="keep ALL raw columns (default: lean lead fields)")
     ap.add_argument("--fields", help="comma-separated columns to keep (overrides the default lead set)")
     ap.add_argument("--socials", action="store_true",
-                    help="also find Instagram/Facebook/LinkedIn from each website (0 LLM tokens; slower)")
+                    help="also find Instagram, Facebook, LinkedIn, TikTok, YouTube and X links on each website "
+                         "(0 LLM tokens; slower)")
     ap.add_argument("--tech", action="store_true",
                     help="also detect Meta Pixel, Google Ads tag, analytics, Bing, LinkedIn and TikTok "
                          "pixels, site platform and mobile support on each website, and sort by an "

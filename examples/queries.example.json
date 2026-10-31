@@ -1,5 +1,5 @@
 {
-  "_comment": "Reference request body for POST /api/v1/jobs. Copy the 'job' object and edit it. Required fields: name, keywords, lang, lat and lon (strings), max_time (seconds). This sample keeps email false, like the kit's scripts, which crawl the websites themselves; set email true only when you call the API directly, and the engine reads each business homepage for emails. Set proxies to an array of proxy URLs without user:pass for large or repeated runs; the engine uses the first.",
+  "_comment": "Reference request body for POST /api/v1/jobs. Copy the 'job' object and edit it. Required fields: name, keywords, lang, lat and lon (strings), max_time (seconds). This sample keeps email false, like the kit's scripts, which crawl the websites themselves; set email true only when you call the API directly, and the engine reads each business homepage for emails. Set proxies to an array of proxy URLs for large or repeated runs (http://user:pass@host:port works; SOCKS5 only without user:pass); the keywords take turns, and a keyword Google refuses is retried through the next one.",
   "job": {
     "name": "my scrape",
     "keywords": ["coffee shops in Austin TX"],

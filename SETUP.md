@@ -76,6 +76,12 @@ python3 scripts/engine.py stop
 
 It does not start again after a reboot by itself: run `start` when you want to scrape.
 
+A job the engine was stopped in the middle of (`stop` or `restart`, `docker compose restart` or
+`stop`, a crash, a reboot) carries on from its last finished keyword when the engine starts again,
+with the rest of its `max_time`. The keyword that was cut short is searched again. If the engine
+crashes or is killed during the same job more than 3 times, the job is marked failed instead, with
+its rows kept. `scripts/scrape.py` keeps polling through a short engine restart (about 1 minute).
+
 **B. With Docker** (Docker Desktop installed and open):
 
 ```bash
@@ -95,11 +101,15 @@ curl http://localhost:8080/api/v1/jobs  # should print null (no jobs yet) or a J
 If `curl` prints `null` or a JSON list, the engine is live. It also serves a web UI and API docs in the
 browser:
 - Web UI: **http://localhost:8080**
-- OpenAPI docs: **http://localhost:8080/api/docs** (JSON)
+- API docs: **http://localhost:8080/api/docs** (a plain page; the OpenAPI JSON is at
+  http://localhost:8080/api/openapi.json). Neither needs the API key.
 
-The page has a form (keywords, latitude, longitude, depth, language, time limit, emails) and a job
-list with Download and Delete buttons. A job's error, if any, shows under its name. It downloads the
-engine's raw CSV. The scripts give you the cleaned 8 lead fields and find more emails.
+The page has a form (keywords, latitude, longitude, depth, language, country, time limit, emails)
+and a job list with each job's progress and CSV, JSON and Delete buttons. A job's error, if any,
+shows under its name. Its "Add a business type" box suggests Google's business category names
+(4,053, US English); pick one and it is added as a keyword line. Your browser loads that list from
+GitHub and keeps it for 30 days. The page downloads the engine's raw rows, the rows so far while a
+job works. The scripts give you the cleaned 8 lead fields and find more emails.
 
 > **Rate limits and the law.** The engine sends real requests to Google Maps. Light use is fine. Big
 > jobs back to back, high `depth`, many keywords or scheduled runs without proxies can get your IP
@@ -125,7 +135,8 @@ bash scripts/scrape.sh "coffee shops in Austin TX" 30.2672 -97.7431 5
 ```
 
 Both scripts create the job, poll until it is done, download the CSV, keep the 8 lead fields and
-print a short preview. The full results go to a file. Each `depth` step loads one more batch of about
+print a short preview. The Python CLI also prints the job's progress while it polls, e.g.
+`keyword 2/3, 41 places, 50%`. The full results go to a file. Each `depth` step loads one more batch of about
 20 places, so depth 5 returns up to about 100, near Google's cap of about 120 per search.
 
 **Skip the coordinates.** Pass `--city` and the Python CLI geocodes the city for you:
@@ -144,9 +155,37 @@ tiles. That is 9 jobs, run one at a time, with duplicates removed:
 python3 scripts/scrape.py "plumbers in Phoenix AZ" --city "Phoenix, AZ" --grid 3
 ```
 
-`review_count` stays empty: signed out, Google shows a headless browser no review counts, and the
-kit does not disguise its browser. `--min-reviews` is therefore ignored with a warning; `--min-rating`
-works.
+**Scraping another country?** `--lang` sets the interface language (category names, hours text),
+and `--country` the 2-letter country Google ranks and formats results for (default: the country of
+your IP address): `--lang de --country de`.
+
+### Review counts, hours and reviews: window mode
+
+By default `review_count`, `open_hours` and `reviews_link` stay empty: signed out, Google shows a
+headless browser its "limited view", with no review counts, and the kit does not disguise its
+browser. `--min-reviews` is then ignored with a warning; `--min-rating` works.
+
+To fill them, run Chrome as a normal window. Add this line to `.env` (or set it in the environment),
+then restart the engine with `python3 scripts/engine.py restart`:
+
+```bash
+SCRAPER_HEADLESS=0
+```
+
+Chrome then opens as a window placed off-screen. Google gives a normal window its full view, so
+`review_count`, `open_hours` (the week, as JSON like `{"Monday": ["7 AM–9 PM"], ...}`) and
+`reviews_link` are filled, and `--min-reviews` works. No user agent is changed. The costs:
+
+- It needs a desktop with a display. Docker's image stays headless, and a server without a display
+  cannot run it.
+- It needs an installed Chrome, Chromium, Edge or Brave. The downloaded headless shell has no window.
+- On macOS a second Chrome icon shows in the Dock, and the window may take focus when a job starts.
+
+Review texts come only through the raw API and in window mode: set `"reviews_max"` (0 to 5) in the
+job body, and the engine opens each place's panel, one page load per place (about a second each).
+It fills `user_reviews` (a JSON list of `{"Rating", "When", "Description"}`; reviewer names and
+photos are left out on purpose) and `reviews_per_rating` (`{"1": n, ... "5": n}`). A headless Chrome
+gets no reviews, and the job's `Error` says so. `scripts/scrape.py` has no flag for reviews.
 
 ---
 
@@ -244,10 +283,10 @@ curl -X DELETE http://localhost:8080/api/v1/jobs/<job-id>
 | `422 missing max time` | Job body needs `max_time` (in **seconds**, e.g. `300`). |
 | `422 missing geo coordinates` | Job body needs `lat` and `lon` as **strings**, e.g. `"30.2672"`. |
 | `422 missing name` / `422 missing lang` | Job body needs `name` (any label) and `lang` (`"en"`). All six required fields: `name`, `keywords`, `lang`, `lat`, `lon`, `max_time`. |
-| `422 proxy usernames and passwords are not supported` | The engine takes no `user:pass@` in a proxy yet. Use a proxy that allows your IP address instead. |
-| A job `failed` | Its `Error` says why: the web UI shows it under the job name, and `curl http://localhost:8080/api/v1/jobs/<id>` returns it. `scripts/scrape.py` prints it, and retries once after 60 s unless a retry cannot help. `Chrome cannot start … error while loading shared libraries`: run the `apt-get install` line in the message. `No Chrome, Chromium, Edge or Brave found`: run `python3 scripts/engine.py start`, which downloads one. `unusual-traffic page`: Google is rate-limiting your IP; wait, or add proxies. An error with `ERR_PROXY`, `ERR_SOCKS` or `ERR_TUNNEL`: the proxy is wrong or down. `the engine stopped while this job ran`: the engine was stopped mid-job; the rows it found are kept. |
+| `422 invalid proxy: Chrome cannot log in to a SOCKS5 proxy` | Chrome takes no username and password on SOCKS5. Use the provider's `http://user:pass@host:port` address (URL-encode special characters), or a SOCKS5 proxy that allows your IP address. |
+| A job `failed` | Its `Error` says why: the web UI shows it under the job name, and `curl http://localhost:8080/api/v1/jobs/<id>` returns it. `scripts/scrape.py` prints it, and retries once after 60 s unless a retry cannot help. `Chrome cannot start … error while loading shared libraries`: run the `apt-get install` line in the message. `No Chrome, Chromium, Edge or Brave found`: run `python3 scripts/engine.py start`, which downloads one. `unusual-traffic page`: Google is rate-limiting your IP. The engine already waited and retried the keyword (`Waited and retried N time(s)`) and kept the rows found before that; wait, or add proxies. An error with `ERR_PROXY`, `ERR_SOCKS` or `ERR_TUNNEL`: the proxy is wrong or down. `proxy login refused: the proxy answered 407 to its username and password`: the proxy's username or password is wrong; `scripts/scrape.py` does not retry it. `the engine stopped while this job ran`: the engine crashed or was killed during this job more than 3 times; the rows it found are kept. |
 | `The engine says: stopped at max_time` | The job ran out of time and kept the rows it had. Raise `--max-time` (seconds, default 600) or lower `--depth`. |
-| `--min-reviews ignored` | Expected: `review_count` is empty with this engine (§3). Use `--min-rating`. |
+| `--min-reviews ignored` | Expected by default: `review_count` is empty while Chrome runs headless. Use `--min-rating`, or window mode (§3) to fill `review_count`. |
 | Scrapes feel slow | Google Maps itself is quick: a depth 2 search takes about 5 seconds. Most of a run is the email crawl, which checks every business website, 16 at a time. `--no-email` skips it. The web UI's email option reads homepages only. |
 | Empty CSV | Keyword too narrow or wrong coordinates. Check `lat`/`lon` (latitude first) and try a broader keyword. |
 | Docker build is slow | Normal on the first run: it downloads Python and Chromium once, then caches them. |
@@ -273,7 +312,8 @@ The skill holds the full rules. These are the essentials:
 - Start at `depth 5` and run one job at a time. Raise depth only when needed.
 - Keep email extraction on, the default, because emails are the key lead field. Use `--no-email` for a
   faster run without them.
-- Add a proxy for big jobs. The engine uses the first one in the list.
+- Add proxies for big jobs. With several, the keywords take turns, and a keyword Google refuses is
+  retried through the next one.
 - Never commit result files. They are git-ignored for you.
 - Changed something? `python3 scripts/test_scrape.py` and `python3 engine/test_engine.py` run the
   offline checks in seconds, with no engine, no network and no Chrome.

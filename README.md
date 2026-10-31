@@ -82,7 +82,7 @@ On Windows, type `py` in place of `python3`. Stop the engine with `python3 scrip
 builds the engine image, about a minute. It is the same engine on the same port, so every other
 command stays the same.
 
-Prefer clicking? http://localhost:8080 has a form; it returns the engine's raw CSV.
+Prefer clicking? http://localhost:8080 has a form; it returns the engine's raw CSV or JSON.
 Already running another copy of the kit on this machine? Set `SCRAPER_PORT` in `.env` first
 (SETUP §6, "second copy").
 
@@ -109,7 +109,7 @@ Illustrative rows:
 | Example Roasters | +1 512-555-0101 | hello@example.com | example.com | Coffee shop | 100 Congress Ave, Austin, TX | 4.7 | |
 | Sample Espresso Bar | +1 512-555-0102 | info@example.org | example.org | Cafe | 200 S Lamar Blvd, Austin, TX | 4.5 | |
 
-`review_count` stays empty for now: see [Honest limits](#honest-limits).
+`review_count` stays empty by default; window mode fills it: see [Honest limits](#honest-limits).
 
 `--socials` adds `instagram`, `facebook`, `linkedin`, `tiktok`, `youtube` and `x` columns. `--tech` adds
 `fb_pixel`, `google_ads_tag`, `analytics`, `bing_ads`, `linkedin_insight`, `tiktok_pixel`, `cms`,
@@ -168,7 +168,7 @@ scrapes Google Maps business listings only. It does not scrape social platforms 
 
 | | |
 |---|---|
-| **8 lead fields by default** | name, phone, email, website, category, address, rating, review count (empty for now). The engine writes 37 raw columns; `--full` keeps them all. |
+| **8 lead fields by default** | name, phone, email, website, category, address, rating, review count (empty by default). The engine writes 37 raw columns; `--full` keeps them all. |
 | **Email extraction, on by default** | After the Maps job, the script crawls every business website, 16 at a time: the homepage, then its contact and about pages if the homepage shows no email. It prints your found rate. |
 | **Beyond the 120 cap** | `--grid 3` splits the city into 3 x 3 map tiles, runs them one at a time and dedupes on `place_id`. |
 | **Social enrichment** | `--socials` finds Instagram, Facebook, LinkedIn, TikTok, YouTube and X profiles in code (HTTP + regex). Zero AI tokens. |
@@ -177,9 +177,9 @@ scrapes Google Maps business listings only. It does not scrape social platforms 
 | **Email checks** | `--verify-emails` looks up each domain's MX record over DNS (no key), drops dead domains and labels the mail host (`google_workspace`, `microsoft_365`, `other`, `none`; blank when the row has no email). |
 | **Auto-geocoding** | Type a city name. Coordinates are resolved for you via OpenStreetMap. Repeat `--city` to run several cities into one file. |
 | **Batch jobs** | Many keywords, one job, one CSV. The engine lists a place found by several keywords once. |
-| **Proxies** | For large or repeated runs: `--proxy URL` with `http`, `https`, `socks5` or `socks5h`. The engine uses the first one; usernames and passwords are not supported yet. |
+| **Proxies** | For large or repeated runs: `--proxy URL` with `http`, `https`, `socks5` or `socks5h`, and `user:pass@` on `http` and `https`. Repeat it and the keywords take turns; a keyword Google refuses is retried through the next proxy. |
 | **Agent-native** | A skill plus four slash commands. The agent handles create, poll, download, clean and present. |
-| **Safe defaults** | API bound to `127.0.0.1`, and the engine refuses requests from other websites in your browser (DNS rebinding, cross-site posts); an optional API key. No telemetry. Results git-ignored; website fetches skip private addresses; rate-limit and data-law guardrails built into the skill. |
+| **Safe defaults** | API bound to `127.0.0.1`, and the engine refuses requests from other websites in your browser (DNS rebinding, cross-site posts); an optional API key. No telemetry: the engine talks to Google Maps, and to the businesses' websites and `dns.google` only for jobs that ask. Proxy passwords show as `***`. Results git-ignored; website fetches skip private addresses; rate-limit and data-law guardrails built into the skill. |
 
 ### Batch jobs and the Python CLI
 
@@ -201,22 +201,34 @@ One keyword per line. One job. One CSV.
   runs one search per tile in a single batch, and dedupes the results on `place_id`. Tiles run one at a
   time, so a grid is slower and more likely to trip rate limits than a single search. Each depth step
   adds a batch of about 20 places.
-- **No review counts, hours or reviews for now.** Signed out, Google shows a headless browser
-  ratings but no review counts, and the kit does not disguise its browser to get them. So
-  `review_count` stays empty and `--min-reviews` is ignored with a warning; `--min-rating` works.
-  Opening hours, review text and photos are empty too until a later release reads them.
+- **Review counts, hours and reviews need window mode.** Signed out, Google shows a headless
+  browser its "limited view": ratings, but no review counts, no week of opening hours and no
+  reviews. The kit does not disguise its browser to get them, and changes no user agent. So by
+  default `review_count`, `open_hours` and `reviews_link` stay empty, and `--min-reviews` is ignored
+  with a warning; `--min-rating` works. Set `SCRAPER_HEADLESS=0` in `.env` and restart the engine,
+  and Chrome runs as a normal window placed off-screen. Google gives a normal window its full view,
+  so those columns fill and `--min-reviews` works. Window mode needs a desktop with a display, not
+  Docker (its image stays headless) and not a server without one, and an installed Chrome,
+  Chromium, Edge or Brave (the downloaded headless shell has no window). On macOS a second Chrome icon
+  shows in the Dock, and the window may take focus when a job starts. Review texts come through the
+  raw API's `reviews_max` (up to 5 per place, window mode only). Photos stay empty. Setup:
+  [SETUP §3](SETUP.md#review-counts-hours-and-reviews-window-mode).
 - **Emails only when a business publishes one.** The script reads the business homepage, then its
   contact and about pages. Listings with no site, or a site with no visible
   email, return an empty `emails` cell. Instagram bios are not read. Expect emails on a fraction of
   rows, not all of them.
 - **Rate limits are real.** Heavy use without proxies can get your IP temporarily rate-limited by
-  Google for minutes to hours. Your Google account is not affected. See [Responsible use](#responsible-use).
-- **The web UI is a simple form.** It downloads the raw CSV, and its email option reads homepages
-  only, so the scripts find more emails and return the clean 8 lead fields. Its one request outside
-  your machine is the sponsor box, which reads `assets/sponsors/sponsors.json` from this repo on
-  GitHub (a static file, cached for a day, no tracking). Scraped data stays on your machine.
-- **Proxies without passwords, one at a time.** The engine takes an `http://`, `https://`, `socks5://`
-  or `socks5h://` proxy that allows your IP address, and uses the first one you list.
+  Google for minutes to hours. When Google answers with its unusual-traffic page, the engine waits
+  and retries the keyword up to 2 times, then stops the job and keeps the rows found before that.
+  Your Google account is not affected. See [Responsible use](#responsible-use).
+- **The web UI is a simple form.** It downloads the raw CSV or JSON, and its email option reads
+  homepages only, so the scripts find more emails and return the clean 8 lead fields. The page loads
+  two static files from GitHub (`raw.githubusercontent.com`), with no tracking: the sponsor box's
+  `assets/sponsors/sponsors.json` from this repo (cached for a day), and the business category list
+  behind its "Add a business type" box (cached for 30 days). Scraped data stays on your machine.
+- **No SOCKS5 login.** Chrome cannot log in to a SOCKS5 proxy, so the engine refuses a SOCKS5 proxy
+  with a username and password (422). Use the provider's `http://user:pass@host:port` address, or a
+  SOCKS5 proxy that allows your IP address.
 
 ---
 
@@ -285,7 +297,7 @@ as untrusted, and a re-audit is requested in
 [vercel-labs/skills#2624](https://github.com/vercel-labs/skills/issues/2624).
 
 **What data do I get for each business?**
-Name, phone, email, website, category, address, rating and review count (empty for now) by default. Add `--socials`
+Name, phone, email, website, category, address, rating and review count (empty unless window mode is on) by default. Add `--socials`
 for Instagram, Facebook, LinkedIn, TikTok, YouTube and X, or `--full` for every raw column.
 
 **How many leads can I scrape?**
@@ -312,12 +324,14 @@ your IP **temporarily rate-limited** (minutes to hours). Your Google account is 
 
 - Run one job at a time. Start at `depth 5` and raise only when needed.
 - Watch for block signals: `failed` jobs, empty results, or far fewer rows than an identical earlier run.
-- Add proxies for large or repeated runs: `--proxy http://host:port` on the script, or the
-  `"proxies"` array on the raw API. The engine uses the first proxy in the list, and it needs one that
-  allows your IP address: usernames and passwords are not supported yet. Sponsor
+- Add proxies for large or repeated runs: `--proxy http://user:pass@host:port` on the script
+  (repeatable), or the `"proxies"` array on the raw API. URL-encode special characters in the
+  username or password. With several proxies the keywords take turns, and a keyword Google refuses,
+  or whose proxy fails, is retried through the next one. SOCKS5 works only without a username and
+  password. Proxy passwords show as `***` in the API and the web UI and never reach the log. Sponsor
   [Swiftproxy](https://www.swiftproxy.net/?ref=googlemapsscraperkit) takes 10% off with code `PROXY90`:
   ```json
-  "proxies": ["socks5://host:port"]
+  "proxies": ["http://user:pass@host1:port", "http://user:pass@host2:port"]
   ```
 - Treat output as leads to verify, not a dataset to resell. Phones and emails are personal data:
   follow GDPR, CCPA, CAN-SPAM and, in Brazil, LGPD — including the lawful basis, the purpose and an

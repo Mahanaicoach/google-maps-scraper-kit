@@ -16,9 +16,15 @@ the host's `127.0.0.1` only. That localhost binding is the security boundary: an
 The engine also answers only `localhost`, `127.0.0.1` and `[::1]` Host headers (421 otherwise) and
 refuses requests whose `Origin` is another site (403), so a web page in your browser cannot reach it
 through DNS rebinding or a cross-site post. The engine and `scripts/scrape.py` fetch business
-websites only when they resolve, redirect and connect to a public address. `scripts/engine.py start`
+websites only when they resolve, redirect and connect to a public address. Proxy passwords show as
+`***` in the API and the web UI and never reach the log. `scripts/engine.py start`
 runs a downloaded Chrome only when its SHA-256 matches the one pinned in `engine/browser.py`. A way
 around any of these checks is in scope.
+
+The engine sends no telemetry. It contacts Google Maps; for email or socials jobs, the businesses'
+own websites; and for `verify_emails` jobs, Google's public DNS (`dns.google`). The web UI page in
+your browser also loads two files from `raw.githubusercontent.com`: the sponsor list
+(`sponsors.json`) and the business category list. A request to anywhere else is in scope.
 
 ## Where to report
 
