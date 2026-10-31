@@ -27,6 +27,7 @@ On Windows, run the same commands with `py` or `python3`. Python is only the cli
 | `--no-email` | Skips email extraction for a faster run. Emails are on by default. |
 | `--no-deep-emails` | Checks homepages only for emails, not contact and about pages. |
 | `--grid N` | Splits the `--city` area into N x N map tiles, one job each, deduped. Needs `--city`. Max 10. |
+| `--no-split` | Keeps one job per search or tile. By default a search that returns 100 rows or more is re-run as 4 closer searches, up to 2 levels deep and 128 jobs per place. |
 | `--max-time` | Job time limit in seconds. Default `600`. |
 | `--out` | Output path. Default `results-<short job id>.csv`. A `.json` extension writes JSON. |
 | `--json` | Writes JSON instead of CSV. |

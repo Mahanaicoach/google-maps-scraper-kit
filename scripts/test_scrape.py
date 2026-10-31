@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Offline tests for scripts/scrape.py (standard library only, no network).
 Run: python3 scripts/test_scrape.py"""
-import csv, importlib.util, io, json, os, pathlib, sys, tempfile, threading, unittest
+import argparse, csv, importlib.util, io, json, os, pathlib, sys, tempfile, threading, unittest
 from contextlib import redirect_stdout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
@@ -37,6 +37,68 @@ class GridCells(unittest.TestCase):
 
     def test_tiny_box_floors_at_1000(self):
         self.assertEqual(scrape.grid_cells(["0", "0.001", "0", "0.001"], 2)[0]["radius"], 1000)
+
+
+class SplitCell(unittest.TestCase):
+    def test_quarters_half_span_one_zoom_in(self):
+        (c,) = scrape.grid_cells(BBOX, 1)  # 0.5 x 0.5 degree box, zoom 11
+        kids = scrape.split_cell(c)
+        self.assertEqual(len(kids), 4)
+        self.assertEqual({(k["lat"], k["lon"]) for k in kids},
+                         {("30.125000", "-97.875000"), ("30.125000", "-97.625000"),
+                          ("30.375000", "-97.875000"), ("30.375000", "-97.625000")})
+        for k in kids:
+            self.assertEqual(k["zoom"], 12)
+            self.assertEqual(k["radius"], scrape.math.ceil(c["radius"] / 2))
+            self.assertEqual((k["_dlat"], k["_dlon"], k["_level"]), (0.25, 0.25, 1))
+        grandkid = scrape.split_cell(kids[0])[0]
+        self.assertEqual((grandkid["zoom"], grandkid["_level"]), (13, 2))
+
+    def test_point_cell_is_the_plain_search_body(self):
+        c = scrape.point_cell("30.2672", "-97.7431")
+        self.assertEqual(scrape.job_body({"depth": 1}, c),
+                         {"depth": 1, "lat": "30.2672", "lon": "-97.7431", "zoom": 15, "radius": 10000})
+        self.assertEqual(scrape.split_cell(c)[0]["zoom"], 16)
+
+
+class Saturation(unittest.TestCase):
+    """A search that comes back full splits into 4 closer searches (OpenLeadFinder's fix for the
+    per-search ceiling); --no-split keeps one job; MAX_JOBS caps the fan-out."""
+    def run_place(self, rows_by_zoom, **over):
+        sent = []
+
+        def fake_run_job(body):
+            sent.append(body)
+            n = rows_by_zoom.get(body["zoom"], 0)
+            return f"job-{len(sent)}", [_row(f"z{body['zoom']} {body['lat']} {body['lon']} {k}") for k in range(n)]
+        ns = dict(lat="30.2672", lon="-97.7431", city=None, grid=None, depth=1, split=True)
+        ns.update(over)
+        with mock.patch.object(scrape, "run_job", fake_run_job), redirect_stdout(io.StringIO()) as log:
+            job_id, rows, skipped, njobs = scrape.scrape_place(
+                argparse.Namespace(**ns), {"keywords": ["x"], "depth": 1}, None, ["x"])
+        return sent, rows, skipped, njobs, log.getvalue()
+
+    def test_full_search_splits_once_then_stops(self):
+        sent, rows, skipped, njobs, log = self.run_place({15: 120, 16: 30})
+        self.assertEqual([b["zoom"] for b in sent], [15, 16, 16, 16, 16])
+        self.assertEqual((skipped, njobs, len(rows)), (0, 5, 240))  # 120 + 4 x 30 distinct titles
+        self.assertTrue(all(not k.startswith("_") for b in sent for k in b))  # geometry stays local
+        self.assertIn("dense area (120 rows)", log)
+
+    def test_splits_two_levels_deep_only(self):
+        sent, *_ = self.run_place({15: 120, 16: 120, 17: 120})
+        self.assertEqual(len(sent), 21)  # 1 + 4 + 16; level-2 tiles never split
+        self.assertEqual([b["zoom"] for b in sent].count(17), 16)
+
+    def test_no_split_keeps_one_job(self):
+        sent, rows, *_ = self.run_place({15: 120}, split=False)
+        self.assertEqual((len(sent), len(rows)), (1, 120))
+
+    def test_job_cap(self):
+        with mock.patch.object(scrape, "MAX_JOBS", 3):
+            sent, _, _, _, log = self.run_place({15: 120, 16: 120})
+        self.assertEqual(len(sent), 1)
+        self.assertIn("3 jobs reached", log)
 
 
 class Dedupe(unittest.TestCase):

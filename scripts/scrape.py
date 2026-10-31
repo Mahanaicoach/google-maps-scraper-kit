@@ -141,8 +141,44 @@ def grid_cells(bbox, n):
             zoom = round(math.log2(156543.03 * cos * 1000 / width))  # 156543 m/px at zoom 0
             cells.append({"lat": f"{lat:.6f}", "lon": f"{lon:.6f}",
                           "radius": max(1000, math.ceil(1.15 * diag / 2)),
-                          "zoom": min(17, max(11, zoom))})
+                          "zoom": min(17, max(11, zoom)),
+                          # tile geometry for split_cell(); "_" keys never reach the engine
+                          "_dlat": dlat, "_dlon": dlon, "_level": 0})
     return cells
+
+
+# Saturation splitting, OpenLeadFinder's fix for the ~120-per-search ceiling: a search that comes
+# back "full" is hiding more, so it is re-run as 4 quarter tiles one zoom level closer, and those
+# may split again up to SPLIT_LEVELS. The raw row count before dedupe is the signal. MAX_JOBS bounds
+# grid tiles plus splits per place, so a dense metro cannot run forever.
+SATURATION_ROWS = 100
+SPLIT_LEVELS = 2
+MAX_JOBS = 128
+POINT_SPAN_DEG = 0.06  # what one plain search at zoom 15 roughly covers, about 6.5 km
+
+
+def point_cell(lat, lon):
+    """The root tile of a plain (non-grid) search: the engine body the kit always sent, zoom 15
+    and radius 10000, plus the span split_cell() needs."""
+    cos = max(0.1, math.cos(math.radians(float(lat))))
+    return {"lat": str(lat), "lon": str(lon), "zoom": 15, "radius": 10000,
+            "_dlat": POINT_SPAN_DEG, "_dlon": POINT_SPAN_DEG / cos, "_level": 0}
+
+
+def split_cell(cell):
+    """The 4 quarter tiles of a saturated cell: centres a quarter of the span away, half the span
+    and radius, one zoom level closer."""
+    lat, lon = float(cell["lat"]), float(cell["lon"])
+    qlat, qlon = cell["_dlat"] / 4, cell["_dlon"] / 4
+    return [dict(cell, lat=f"{lat + i * qlat:.6f}", lon=f"{lon + j * qlon:.6f}",
+                 radius=max(1000, math.ceil(cell["radius"] / 2)), zoom=min(19, cell["zoom"] + 1),
+                 _dlat=cell["_dlat"] / 2, _dlon=cell["_dlon"] / 2, _level=cell["_level"] + 1)
+            for i in (-1, 1) for j in (-1, 1)]
+
+
+def job_body(body, cell):
+    """The engine body for one tile: the cell's lat/lon/zoom/radius, never its "_" geometry."""
+    return dict(body, **{k: v for k, v in cell.items() if not k.startswith("_")})
 
 
 def in_bbox(row, bbox, margin=0.10):
@@ -762,8 +798,9 @@ def keep_row(r, a):
 
 
 def scrape_place(a, body, city, keywords):
-    """All the engine jobs for one place: a single job, or --grid tiles one at a time clipped to the
-    city box -> (first job id or None, rows, failed tile count, tile count)."""
+    """All the engine jobs for one place: a single search, or --grid tiles, one at a time, clipped to
+    the city box when there is one. A search that comes back full (SATURATION_ROWS) splits into 4
+    closer searches unless --no-split -> (first job id or None, rows, failed job count, job count)."""
     lat, lon, bbox, cells = a.lat, a.lon, None, None
     if a.grid:  # always geocodes, because it needs the bounding box
         print(f"▶ Geocoding \"{city}\"…")
@@ -787,31 +824,44 @@ def scrape_place(a, body, city, keywords):
     body = dict(body, lat=str(lat), lon=str(lon), name=(f"{keywords[0]} @ {city}" if city else keywords[0])[:80])
     for k in keywords:
         print(f"    • {k}")
-    if not cells:
+    if cells:
+        print(f"▶ Grid {a.grid}x{a.grid}: {len(cells)} jobs, one at a time, {len(keywords)} keyword(s) depth={a.depth}")
+    else:
         print(f"▶ Creating job: {len(keywords)} keyword(s) @ {lat},{lon} depth={a.depth}")
+    queue = list(cells or [point_cell(lat, lon)])
+    job_id, rows, skipped, i, total, capped = None, [], 0, 0, len(queue), False
+    while queue:  # sequential on purpose: never parallel jobs against Google
+        cell, i = queue.pop(0), i + 1
+        tiled = bool(cells) or cell["_level"] > 0
+        if tiled:
+            print(f"▶ Cell {i}/{total} @ {cell['lat']},{cell['lon']} radius={cell['radius']}m zoom={cell['zoom']}")
         try:
-            job_id, rows = run_job(body)
-        except RuntimeError as e:
-            print(str(e))
-            return None, [], 0, 0
-        return job_id, rows, 0, 0
-    print(f"▶ Grid {a.grid}x{a.grid}: {len(cells)} jobs, one at a time, {len(keywords)} keyword(s) depth={a.depth}")
-    job_id, rows, skipped = None, [], 0
-    for i, cell in enumerate(cells, 1):  # sequential on purpose: never parallel jobs against Google
-        print(f"▶ Cell {i}/{len(cells)} @ {cell['lat']},{cell['lon']} radius={cell['radius']}m")
-        try:
-            jid, cell_rows = run_job(dict(body, **cell))
+            jid, cell_rows = run_job(job_body(body, cell))
         except Exception as e:
-            print(f"\n  ⚠ cell {i}/{len(cells)} skipped: {str(e).strip()}")
+            if not tiled:  # the one plain search failed: nothing to keep
+                print(str(e))
+                return None, [], 0, 0
+            print(f"\n  ⚠ cell {i}/{total} skipped: {str(e).strip()}")
             skipped += 1
             continue
         job_id = job_id or jid
         rows = dedupe(rows + cell_rows)
-        print(f"  cell {i}/{len(cells)}: {len(cell_rows)} rows, {len(rows)} unique so far")
-    # radius does not clip results in normal mode, so tiles leak outside the city
-    kept = [r for r in rows if in_bbox(r, bbox)]
-    print(f"  dropped {len(rows) - len(kept)} rows outside the city box")
-    return job_id, kept, skipped, len(cells)
+        if tiled:
+            print(f"  cell {i}/{total}: {len(cell_rows)} rows, {len(rows)} unique so far")
+        if a.split and len(cell_rows) >= SATURATION_ROWS and cell["_level"] < SPLIT_LEVELS:
+            if total + 4 > MAX_JOBS:
+                if not capped:
+                    print(f"  ⚠ {MAX_JOBS} jobs reached for this place; dense areas left unsplit.")
+                capped = True
+                continue
+            print(f"  ⚡ dense area ({len(cell_rows)} rows): splitting it into 4 closer searches")
+            queue[0:0] = split_cell(cell)  # look closer right away, then carry on with the grid
+            total += 4
+    if bbox:  # radius does not clip results in normal mode, so tiles leak outside the city
+        kept = [r for r in rows if in_bbox(r, bbox)]
+        print(f"  dropped {len(rows) - len(kept)} rows outside the city box")
+        rows = kept
+    return job_id, rows, skipped, total
 
 
 def main():
@@ -842,7 +892,11 @@ def main():
                     help="check homepages only, not contact and about pages")
     ap.add_argument("--grid", type=int, metavar="N",
                     help="split the --city area into N x N map tiles, one job each, deduped "
-                         "(breaks Google's ~120 per search cap; max 10)")
+                         "(covers a whole city past Google's ~120 per search cap; max 10)")
+    ap.add_argument("--no-split", dest="split", action="store_false", default=True,
+                    help=f"do not re-run a search that comes back full ({SATURATION_ROWS}+ rows) as 4 "
+                         f"closer searches; by default every full search or tile splits, up to "
+                         f"{SPLIT_LEVELS} levels and {MAX_JOBS} jobs per place")
     ap.add_argument("--max-time", type=int, default=600,
                     help="job time limit in SECONDS; the script waits that long for the "
                          "engine, plus a short grace (default: 600)")
