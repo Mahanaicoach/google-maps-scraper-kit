@@ -385,8 +385,12 @@ def make_handler(engine_port, pairs, csp):
                 n = int(self.headers.get("Content-Length") or 0)
                 body = self.rfile.read(n) if n else None
                 headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP}
-                conn = http.client.HTTPConnection("127.0.0.1", engine_port, timeout=600)
+                # Short connect timeout: Windows retries a refused loopback connect for ~2 s, which
+                # made a dead engine look like no proxy at all. Long scrapes still get 600 s to reply.
+                conn = http.client.HTTPConnection("127.0.0.1", engine_port, timeout=1)
                 try:
+                    conn.connect()
+                    conn.sock.settimeout(600)
                     conn.request(self.command, self.path, body, headers)
                     resp = conn.getresponse()
                     data = resp.read()
