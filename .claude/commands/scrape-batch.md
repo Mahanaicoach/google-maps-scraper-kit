@@ -8,8 +8,8 @@ Use the `google-maps-scraper` skill. The API scrapes **many keywords in ONE job*
 array, so a batch is one job with all the terms.
 
 1. Check the engine is up (`curl -s http://localhost:8080/api/v1/jobs`; `docker compose up -d` if not).
-2. Read the keyword list (one per line; ignore blank and `#` lines). If a `--city` was given, geocode it once
-   for `lat`/`lon`. Otherwise expect the location baked into each keyword, and geocode the first one.
+2. Pass the keyword file's path to `--keywords-file`; do not read the file into chat (one keyword per line;
+   blank and `#` lines are skipped). Pass `--city` if one was given; otherwise each keyword carries its place.
 3. **Ask about social profiles first.** Skip only if the user already said yes or no: *"Also grab social profiles
    (Instagram / Facebook / LinkedIn) for these? Emails are already included. (yes / no)"*. If yes, add `--socials`.
 4. **Warn, don't block:** a batch with many keywords is high-volume. Print ONE short warning that it can

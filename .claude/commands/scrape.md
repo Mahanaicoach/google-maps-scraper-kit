@@ -7,7 +7,7 @@ The user wants a Google Maps lead list. Query: **$ARGUMENTS**
 Use the `google-maps-scraper` skill and follow these steps:
 
 1. **Check the engine:** `curl -s http://localhost:8080/api/v1/jobs`. If it is down, run `docker compose up -d` from the kit root, wait ~10s, and retry.
-2. **Parse** the business type and city from the query. Look up the city's **latitude/longitude** (as strings).
+2. **Parse** the business type and city from the query. Use coordinates you already know (as strings), or let the script geocode with `--city`.
 3. **Ask about social profiles before scraping, every time.** Ask the user ONE short question:
    *"Want me to also grab their social profiles (Instagram / Facebook / LinkedIn / TikTok / YouTube / X)? Emails are already included by default. (yes / no)"*
    Wait for the answer. **Skip the question only if** the user already said yes or no to socials in the request.

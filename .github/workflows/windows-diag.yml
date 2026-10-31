@@ -1,0 +1,46 @@
+# TEMPORARY diagnostic (delete before merge): does the engine's Windows build return places at all
+# when started directly, without scripts/engine.py, in three variants?
+name: windows-diag
+on:
+  pull_request:
+    paths:
+      - .github/workflows/windows-diag.yml
+jobs:
+  diag:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: download the verified build
+        run: python -c "import sys; sys.path.insert(0, 'scripts'); import engine; print(engine.binary())"
+      - name: three variants, one depth-1 job each
+        run: |
+          BIN=$(ls .engine/*.exe)
+          port=8101
+          for flags in "-c 1" "-c 1 -disable-page-reuse" "-c 1 -debug"; do
+            mkdir -p "d$port"
+            "$BIN" -web -addr 127.0.0.1:$port -data-folder "d$port" $flags > "e$port.log" 2>&1 &
+            pid=$!
+            for i in $(seq 1 60); do curl -sf http://127.0.0.1:$port/api/v1/jobs >/dev/null && break; sleep 2; done
+            id=$(curl -s -X POST http://127.0.0.1:$port/api/v1/jobs -H 'Content-Type: application/json' \
+              -d '{"name":"diag","keywords":["coffee shops in Austin TX"],"lang":"en","zoom":15,"lat":"30.2672","lon":"-97.7431","depth":1,"email":false,"max_time":180}' \
+              | grep -oE '[0-9a-f-]{36}' | head -1)
+            for i in $(seq 1 40); do
+              s=$(curl -s http://127.0.0.1:$port/api/v1/jobs/$id | grep -oE '"Status":"[^"]*"' | cut -d'"' -f4)
+              [ "$s" = ok ] || [ "$s" = failed ] && break
+              grep -q "scrapemate exited" "e$port.log" && break
+              sleep 5
+            done
+            rows=$(curl -s http://127.0.0.1:$port/api/v1/jobs/$id/download | python -c "import csv,sys; print(len(list(csv.DictReader(sys.stdin))))")
+            echo "VARIANT [$flags]: status=$s rows=$rows target_closed=$(grep -c 'target closed' "e$port.log")"
+            kill $pid 2>/dev/null; taskkill //F //T //PID $pid >/dev/null 2>&1 || true
+            port=$((port+1))
+          done
+      - if: always()
+        run: for f in e*.log; do echo "== $f"; tail -5 "$f" | cut -c1-300; done

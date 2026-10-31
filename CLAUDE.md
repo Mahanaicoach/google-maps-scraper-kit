@@ -16,7 +16,8 @@ the API calls from memory. Use the skill.
 ## Slash commands
 The kit ships four commands in `.claude/commands/` that map to the skill: `/scrape` (single query),
 `/scrape-batch` (many queries, one job), `/scrape-setup` (start the engine), `/scrape-jobs` (list or delete).
-Local commands are pre-approved in `.claude/settings.json`, so you can run them without prompting the user.
+`.claude/settings.json` pre-approves the kit's scripts and engine checks as exact commands. Raw API calls
+with curl, deleting data and `scripts/engine.py start` ask the user first.
 
 ## Rate limits: warn, don't block
 If a request is large (high `depth`, many keywords, repeated runs, a grid, or `email:true`), **proceed**,

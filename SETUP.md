@@ -165,9 +165,9 @@ Claude Code also offers these commands. Type `/` to see them:
 | `/scrape-setup` | Start the scraper + health check |
 | `/scrape-jobs [list \| delete <id>]` | List or delete jobs |
 
-Plain requests work too: *"scrape gyms in Miami with phone numbers."* The kit's local commands and
-`localhost` calls are pre-approved in `.claude/settings.json`, so Claude Code does not prompt for
-each one.
+Plain requests work too: *"scrape gyms in Miami with phone numbers."* The kit's scripts and engine checks
+are pre-approved in `.claude/settings.json` as exact commands, so Claude Code does not prompt for each
+scrape. Raw API calls with curl, deleting data and `scripts/engine.py start` still ask first.
 
 ---
 

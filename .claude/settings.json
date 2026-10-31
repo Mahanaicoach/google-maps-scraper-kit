@@ -1,19 +1,15 @@
 {
-  "$comment": "Pre-approves the safe, local commands this kit uses so Claude can scrape without a permission prompt each time. All entries are local-only (localhost, this folder's scripts, the kit's own container). Deleting data (docker compose down -v) and anything that downloads code (scripts/engine.py start) still ask first.",
+  "$comment": "Pre-approves the safe, local commands this kit uses so Claude can scrape without a permission prompt each time: exact commands, not prefixes, so no approved line can carry extra arguments. Raw API calls (create, delete, download with curl), deleting data and anything that downloads code (scripts/engine.py start) still ask first.",
   "permissions": {
     "allow": [
+      "Bash(curl -s http://localhost:8080/api/v1/jobs)",
+      "Bash(curl http://localhost:8080/api/v1/jobs)",
       "Bash(docker compose up -d)",
       "Bash(docker compose down)",
       "Bash(docker compose stop)",
       "Bash(docker compose start)",
       "Bash(docker compose ps)",
       "Bash(docker ps:*)",
-      "Bash(curl http://localhost:8080/:*)",
-      "Bash(curl -s http://localhost:8080/:*)",
-      "Bash(curl http://127.0.0.1:8080/:*)",
-      "Bash(curl -s -X POST http://localhost:8080/:*)",
-      "Bash(curl -s -X DELETE http://localhost:8080/:*)",
-      "Bash(curl -X DELETE http://localhost:8080/:*)",
       "Bash(python3 scripts/test_scrape.py)",
       "Bash(./scripts/scrape.sh:*)",
       "Bash(bash scripts/scrape.sh:*)",
