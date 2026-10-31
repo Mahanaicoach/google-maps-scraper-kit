@@ -23,10 +23,11 @@ On Windows, run the same commands with `py` or `python3`. Python is only the cli
 | `keyword` | The search, with the place baked in, e.g. `"coffee shops in Austin TX"`. |
 | `lat`, `lon` | Coordinates. Optional when you pass `--city`. |
 | `--city` | Geocodes a city name to coordinates via OpenStreetMap. Repeat it to run several cities, one after another, into one deduped file. |
-| `--depth` | How far to scroll each search. Default `5`. Higher is slower and more likely to be blocked. |
+| `--depth` | How far to scroll each search. Default `5`. Signed-out Google Maps stops at about 20 places whatever the depth, so more map points (the automatic split, `--grid`) matter more than depth. |
 | `--no-email` | Skips email extraction for a faster run. Emails are on by default. |
 | `--no-deep-emails` | Checks homepages only for emails, not contact and about pages. |
 | `--grid N` | Splits the `--city` area into N x N map tiles, one job each, deduped. Needs `--city`. Max 10. |
+| `--no-split` | Keeps one job per search or tile. By default a search that comes back full (about 20 rows, Google's signed-out page) is re-run as 4 closer searches, at most 128 jobs per place. |
 | `--max-time` | Job time limit in seconds. Default `600`. |
 | `--out` | Output path. Default `results-<short job id>.csv`. A `.json` extension writes JSON. |
 | `--json` | Writes JSON instead of CSV. |
@@ -36,7 +37,7 @@ On Windows, run the same commands with `py` or `python3`. Python is only the cli
 | `--tech` | Adds `fb_pixel`, `google_ads_tag`, `analytics`, `bing_ads`, `linkedin_insight`, `tiktok_pixel` (yes/no, blank if the site did not load), `cms`, `mobile_friendly` and a 0-100 `intent_score`, and sorts by that score. Shares the homepage fetch with `--socials`. Zero AI tokens. |
 | `--keyword` | Adds an extra keyword to the same job. Repeatable. |
 | `--lang` | Two-letter language the engine asks Google for, e.g. `pt`, `es`, `de`. Default `en`. Use the market's language so category names come back in it. |
-| `--keywords-file` | Reads one keyword per line from a file. One job, one CSV. |
+| `--keywords-file` | Reads one keyword per line from a file. One job (more only when a search comes back full and splits), one CSV. |
 | `--proxy` | Proxy URL for the engine, repeatable: `http://`, `https://`, `socks5://` or `socks5h://`. This engine needs `user:pass@` for socks5. The engine rotates them; a wrong proxy fails the job and the script prints the engine's reason. |
 | `--min-rating`, `--min-reviews` | Keep rows rated X or higher, or with N or more reviews. Unrated rows drop. |
 | `--no-website` | Keep only businesses without a website: the classic web-design prospect list. |
@@ -59,7 +60,7 @@ Illustrative rows only:
 
 ## What to expect
 
-- Google Maps returns about 120 listings per search. Use `--grid 3` to cover a whole city past that cap.
+- Signed-out Google Maps returns about 20 listings per search. A full search is re-run as 4 closer searches on its own; use `--grid 3` to cover a whole city.
 - Grid tiles run one at a time, so a grid is slower and more likely to trip rate limits than one search.
 - Emails appear only when a business publishes one on its website. Many rows will have an empty `emails` cell.
 - Heavy use without proxies can get your IP temporarily rate-limited by Google. Your Google account is not affected.

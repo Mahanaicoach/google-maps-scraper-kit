@@ -45,7 +45,7 @@ Skipping the API also skips its guarantees. These are the limits you accept inst
 
 - Google can rate-limit you. Heavy use without proxies can get your IP temporarily rate-limited for minutes to hours. Your Google account is not affected.
 - Add proxies for large or repeated runs. The engine rotates `socks5`, `socks5h`, `http` and `https` proxies for you.
-- Google Maps stops at about 120 listings per search. Add `--grid 3` to split the city into 9 map tiles, with duplicates removed.
+- Signed-out Google Maps stops at about 20 listings per search; a full search is re-run as 4 closer searches on its own. Add `--grid 3` to split the city into 9 map tiles, with duplicates removed.
 - Emails appear only when a business publishes one on its website.
 - Scraping Google Maps is against Google's Terms of Service, so read [Responsible use](../README.md#responsible-use) before you run large jobs.
 

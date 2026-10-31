@@ -60,7 +60,7 @@ Illustrative rows only:
 
 ## What to expect
 
-- Google Maps returns about 120 listings per search. Ask for the whole city and the agent runs `--grid 3`, which splits it into 9 tiles and dedupes the results.
+- Signed-out Google Maps returns about 20 listings per search; the script re-runs a full search as 4 closer searches on its own. Ask for the whole city and the agent runs `--grid 3`, which splits it into 9 tiles and dedupes the results.
 - Emails come back only when a business publishes one on its website. Expect some empty cells.
 - For large jobs, the agent prints one short warning about temporary IP rate limits and suggests proxies, then proceeds.
 - The skill scrapes Google Maps business listings only. It does not scrape social platforms directly.

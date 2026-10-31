@@ -13,7 +13,7 @@
   <img alt="No API keys" src="https://img.shields.io/badge/API%20keys-none-334155?style=flat-square">
 </p>
 
-<p align="center"><sub>Last verified working: 2026-10-30 with engine v1.18.1 on macOS Apple Silicon.</sub></p>
+<p align="center"><sub>Last verified working: 2026-10-31 with engine v1.18.1 on macOS Apple Silicon.</sub></p>
 
 **A free, open-source Google Maps scraper for lead generation that runs on your own machine.**
 Name a business type and a city. Get back an outreach-ready CSV with name, phone, email, website,
@@ -26,7 +26,7 @@ English.
 
 | Goal | Start here |
 |---|---|
-| Get a lead list in the next 5 minutes | [Quick start](#quick-start) |
+| Get a lead list in the next 10 minutes | [Quick start](#quick-start) |
 | Let an AI coding agent run the scrape | [Use it with Claude Code or any agent](#use-it-with-claude-code-or-any-agent) |
 | Scrape many keywords or cities in one job | [Batch jobs](#batch-jobs-and-the-python-cli) |
 | Know what you get and where it stops | [What you get](#what-you-get) and [Honest limits](#honest-limits) |
@@ -74,6 +74,8 @@ docker compose up -d
 bash scripts/scrape.sh "coffee shops in Austin TX" 30.2672 -97.7431 5
 ```
 
+The first scrape takes about 4 minutes: one search, 4 closer searches when the first comes back full
+(`--no-split` keeps it to one), then the email check on every website found.
 On Windows, skip the `bash` line and use the Python CLI below with `py` in place of `python3`.
 Prefer clicking? http://localhost:8080 has a form; it returns the engine's raw 36-column CSV.
 Already running another copy of the kit on this machine? Set the port and names in `.env` first
@@ -85,8 +87,9 @@ No coordinates handy? Let the Python CLI geocode the city:
 python3 scripts/scrape.py "dentists in Denver CO" --city "Denver, CO" --depth 5 --socials
 ```
 
-A search at `--depth 5` usually returns 20 to 40 places. A higher `--depth` scrolls further, up to
-Google's cap of about 120 per search. Need the whole city? Add `--grid 3`:
+Signed-out Google Maps shows about 20 places per search and will not scroll further, so a search that
+comes back full is re-run as 4 closer searches on its own (5 jobs, about 100 places). Need the whole
+city? Add `--grid 3`:
 
 ```bash
 python3 scripts/scrape.py "dentists in Denver CO" --city "Denver, CO" --grid 3
@@ -160,7 +163,7 @@ scrapes Google Maps business listings only. It does not scrape social platforms 
 |---|---|
 | **8 lead fields by default** | name, phone, email, website, category, address, rating, review count. The engine captures 36 raw fields; `--full` keeps them all. |
 | **Email extraction, on by default** | After the Maps job, the script crawls every business website, 16 at a time: the homepage, then its contact and about pages if the homepage shows no email. It prints your found rate. |
-| **Beyond the 120 cap** | `--grid 3` splits the city into 3 x 3 map tiles, runs them one at a time and dedupes on `place_id`. |
+| **Beyond Google's per-search cap** | Signed-out Google Maps returns about 20 places per search. A full search is re-run as 4 closer searches on its own (5 jobs, about 100 places). `--grid 3` splits the city into 3 x 3 map tiles, runs them one at a time and dedupes on `place_id`. `--no-split` keeps one job per search. |
 | **Social enrichment** | `--socials` finds Instagram, Facebook, LinkedIn, TikTok, YouTube and X profiles in code (HTTP + regex). Zero AI tokens. |
 | **Who already advertises** | `--tech` spots a Meta Pixel, Google Ads tag, analytics, Bing Ads, LinkedIn Insight and TikTok pixels on each website, plus its platform (WordPress, Shopify, Wix…) and mobile support, then ranks leads by an `intent_score` from 0 to 100. Zero AI tokens. |
 | **Filters** | `--no-website` (businesses that still need a site), `--min-rating`, `--min-reviews`, `--has-phone`, `--has-email`, `--limit`. `--exclude earlier.csv` skips the places you already have, so a weekly re-run returns only new leads. |
@@ -180,17 +183,19 @@ socials and CSV output. It works on macOS, Linux and Windows.
 python3 scripts/scrape.py --keywords-file examples/queries.example.txt --city "Denver, CO"
 ```
 
-One keyword per line. One job. One CSV.
+One keyword per line. One job (more only when a search comes back full and splits). One CSV.
 
 ---
 
 ## Honest limits
 
-- **About 120 listings per search.** Google Maps stops scrolling at roughly 120 results per search.
-  That is Google's cap, not the kit's. `--grid` is the fix: it splits the city into N x N map tiles,
-  runs one search per tile in a single batch, and dedupes the results on `place_id`. Tiles run one at a
-  time, so a grid is slower and more likely to trip rate limits than a single search. A first search
-  at depth 5 usually returns 20 to 40.
+- **About 20 listings per search.** Since 2026 Google Maps shows signed-out visitors a "limited
+  view": about 20 places per search and no further scrolling, whatever `--depth` asks for (the old
+  cap was about 120). That is Google's limit, not the kit's. The kit gets more by searching more map
+  points: a search that comes back full is re-run as 4 closer searches on its own (`--no-split` turns
+  that off), and `--grid` splits the city into N x N map tiles, one search per tile, deduped on
+  `place_id`. Every extra search is another request to Google, so a grid is slower and more likely to
+  trip rate limits than a single search.
 - **Emails only when a business publishes one.** The script reads the business homepage, then its
   contact and about pages. Listings with no site, or a site with no visible
   email, return an empty `emails` cell. Instagram bios are not read. Expect emails on a fraction of
@@ -275,8 +280,8 @@ Name, phone, email, website, category, address, rating and review count by defau
 for Instagram, Facebook, LinkedIn, TikTok, YouTube and X, or `--full` for all 36 raw fields.
 
 **How many leads can I scrape?**
-Up to about 120 per search. Add `--grid 3` to split the city into 9 map tiles and get past that cap,
-with duplicates removed. Batch as many keywords as you like in one job. For large or repeated runs,
+About 20 per search from signed-out Google Maps, about 100 after the automatic re-run as 4 closer
+searches. Add `--grid 3` to split the city into 9 map tiles and cover all of it, with duplicates removed. Batch as many keywords as you like in one job. For large or repeated runs,
 add proxies (see [Responsible use](#responsible-use)).
 
 **Does it work on Windows, Linux and Apple Silicon Macs?**

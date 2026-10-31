@@ -12,7 +12,7 @@ Auto-geocode (no coordinates needed):
 Batch (one job, many keywords) from a file (one keyword per line):
     python3 scripts/scrape.py --keywords-file examples/queries.example.txt --city "Denver, CO"
 
-Whole city past Google's ~120 results per search (3 x 3 map tiles, run one at a time, deduped on place_id):
+Whole city (3 x 3 map tiles, run one at a time, deduped on place_id; one search returns about 20 places):
     python3 scripts/scrape.py "plumbers in Phoenix AZ" --city "Phoenix, AZ" --grid 3
 
 Check homepages only for emails, not contact and about pages:
@@ -23,7 +23,7 @@ Notes:
 - Geocoding uses OpenStreetMap Nominatim (free, no key). It allows ~1 request/sec and requires a
   descriptive User-Agent (set below). Do not loop it aggressively.
 """
-import argparse, csv, functools, io, ipaddress, json, math, os, re, shutil, socket, subprocess, sys, time
+import argparse, collections, csv, functools, io, ipaddress, json, math, os, re, shutil, socket, subprocess, sys, time
 import html as _html, http.client, urllib.request, urllib.parse, urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
@@ -95,13 +95,19 @@ def poll_attempts(max_time):
     return max(1, budget // POLL_EVERY)
 
 
+_NO_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+_LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
+
+
 def req(method, path, body=None):
     headers = {"Content-Type": "application/json", "User-Agent": UA}
     if KEY:
         headers["X-API-Key"] = KEY
     data = json.dumps(body).encode() if body is not None else None
     r = urllib.request.Request(BASE + path, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(r, timeout=60) as resp:
+    # An HTTP_PROXY in the shell must not catch the local engine: that fails with a proxy error.
+    opener = _NO_PROXY.open if urllib.parse.urlparse(BASE).hostname in _LOCAL_HOSTS else urllib.request.urlopen
+    with opener(r, timeout=60) as resp:
         return resp.status, resp.read()
 
 
@@ -141,8 +147,56 @@ def grid_cells(bbox, n):
             zoom = round(math.log2(156543.03 * cos * 1000 / width))  # 156543 m/px at zoom 0
             cells.append({"lat": f"{lat:.6f}", "lon": f"{lon:.6f}",
                           "radius": max(1000, math.ceil(1.15 * diag / 2)),
-                          "zoom": min(17, max(11, zoom))})
+                          "zoom": min(17, max(11, zoom)),
+                          # tile geometry for split_cell(); "_" keys never reach the engine
+                          "_dlat": dlat, "_dlon": dlon, "_level": 0})
     return cells
+
+
+# Saturation splitting, OpenLeadFinder's fix for Google's per-search ceiling. Since 2026 Google Maps
+# shows signed-out visitors a "limited view": about 20 places per search and no further scrolling,
+# whatever depth asks for. A search that comes back full is hiding more, so it is re-run as 4 quarter
+# tiles one zoom level closer, and those may split again up to SPLIT_LEVELS. The raw row count per
+# keyword before dedupe is the signal. MAX_JOBS bounds grid tiles plus splits per place.
+SATURATION_ROWS = 20   # the limited view's page size
+SPLIT_LEVELS = 1       # a full search becomes 5 jobs, about 100 places; --grid covers a whole city
+MAX_JOBS = 128
+POINT_SPAN_DEG = 0.06  # what one plain search at zoom 15 roughly covers, about 6.5 km
+
+
+def point_cell(lat, lon):
+    """The root tile of a plain (non-grid) search: the engine body the kit always sent, zoom 15
+    and radius 10000, plus the span split_cell() needs."""
+    cos = max(0.1, math.cos(math.radians(float(lat))))
+    return {"lat": str(lat), "lon": str(lon), "zoom": 15, "radius": 10000,
+            "_dlat": POINT_SPAN_DEG, "_dlon": POINT_SPAN_DEG / cos, "_level": 0}
+
+
+def split_cell(cell):
+    """The 4 quarter tiles of a saturated cell: centres a quarter of the span away, half the span
+    and radius, one zoom level closer."""
+    lat, lon = float(cell["lat"]), float(cell["lon"])
+    qlat, qlon = cell["_dlat"] / 4, cell["_dlon"] / 4
+    return [dict(cell, lat=f"{lat + i * qlat:.6f}", lon=f"{lon + j * qlon:.6f}",
+                 radius=max(1000, math.ceil(cell["radius"] / 2)), zoom=min(19, cell["zoom"] + 1),
+                 _dlat=cell["_dlat"] / 2, _dlon=cell["_dlon"] / 2, _level=cell["_level"] + 1)
+            for i in (-1, 1) for j in (-1, 1)]
+
+
+BAN_HINT = ("  0 places from Google: a typo in the keyword, a spot with none, or Google rate-limiting this\n"
+            "  IP (a block looks exactly like an empty market). Check the keyword on the Google Maps\n"
+            "  website; if places show there, wait 15-30 minutes or add a proxy and run it again.")
+
+
+def filters_active(a):
+    """True when a row filter is on, so --limit cannot be judged before the filters run."""
+    return any(getattr(a, k, None) for k in ("min_rating", "min_reviews", "no_website", "has_phone",
+                                             "has_email", "exclude"))
+
+
+def job_body(body, cell):
+    """The engine body for one tile: the cell's lat/lon/zoom/radius, never its "_" geometry."""
+    return dict(body, **{k: v for k, v in cell.items() if not k.startswith("_")})
 
 
 def in_bbox(row, bbox, margin=0.10):
@@ -186,6 +240,10 @@ def load_rows(path):
         rows = json.load(f) if path.lower().endswith(".json") else list(csv.DictReader(f))
     if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
         raise ValueError(f"{path} is not a results file (expected a list of rows)")
+    for r in rows:  # undo csv_safe()'s formula guard, so "'@Home Cafe" matches the engine's "@Home Cafe"
+        for k, v in r.items():
+            if isinstance(v, str) and len(v) > 1 and v[0] == "'" and v[1] in "=+-@\t\r":
+                r[k] = v[1:]
     return rows
 
 
@@ -302,25 +360,34 @@ def run_job(body):
 
 
 def _get(path):
-    """GET with three tries: a poll or a download must survive a passing 502 or timeout."""
-    for attempt in range(3):
+    """GET with six tries over about 30 s: a poll or a download must survive a passing 502, a timeout
+    or an engine restart."""
+    for attempt in range(6):
         try:
             return req("GET", path)
         except urllib.error.HTTPError as e:
-            if e.code < 500 or attempt == 2:
+            if e.code < 500 or attempt == 5:
                 raise
         except OSError:
-            if attempt == 2:
+            if attempt == 5:
                 raise
-        time.sleep(3)
+        time.sleep(5)
 
 
 def _run_job_once(body, restarted=False):
     since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    try:
-        _, raw = req("POST", "/api/v1/jobs", body)
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"✗ Create failed: HTTP {e.code} — {e.read().decode()[:200]}")
+    for attempt in (1, 2):  # one retry: the proxy answers 502 for a moment while the engine restarts
+        try:
+            _, raw = req("POST", "/api/v1/jobs", body)
+            break
+        except urllib.error.HTTPError as e:
+            if e.code < 500 or attempt == 2:
+                raise RuntimeError(f"✗ Create failed: HTTP {e.code} — {e.read().decode()[:200]}")
+            time.sleep(5)
+        except OSError:
+            if attempt == 2:
+                raise
+            time.sleep(5)
     job_id = json.loads(raw).get("id")
     if not job_id:
         raise RuntimeError("✗ No job id returned.")
@@ -432,7 +499,10 @@ _SKIP_HANDLE = {"", "home", "pages", "people", "help", "about", "policies", "pol
                 "legal", "tos", "privacy", "settings", "sharer", "tr", "profile.php",
                 "plugins", "dialog", "intent", "login", "share.php", "permalink.php",
                 "p", "reel", "reels", "explore", "stories", "tv", "watch", "events",
-                "groups", "marketplace", "gaming", "photo", "hashtag", "search", "share", "i"}
+                "groups", "marketplace", "gaming", "photo", "hashtag", "search", "share", "i",
+                # website builders link to their own profiles from every site they host
+                "wix", "wixcom", "squarespace", "wordpress", "wordpressdotcom", "godaddy", "shopify",
+                "weebly", "duda", "webflow"}
 
 def _is_public_ip(ip):
     try:
@@ -506,14 +576,48 @@ def _fetch_html(url, timeout=10):
         r = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0 (compatible; " + UA + ")", "Accept": "text/html"})
         with _OPENER.open(r, timeout=timeout) as resp:
-            return resp.read(400_000).decode("utf-8", "replace")
+            # Read in chunks against a wall-clock deadline: a site that drips bytes forever would
+            # otherwise hold one of the SITE_WORKERS until 400 KB arrived.
+            data, deadline = b"", time.monotonic() + 2 * timeout
+            while len(data) < 400_000 and time.monotonic() < deadline:
+                chunk = resp.read1(65536)
+                if not chunk:
+                    break
+                data += chunk
+            return data[:400_000].decode("utf-8", "replace")
     except Exception:
         return ""
 
 @functools.lru_cache(maxsize=256)  # ponytail: homepages only (up to 400 KB each); evicted pages just refetch
 def _fetch_cached(url):
-    """Homepage fetch shared by the email crawl, --socials and --tech (one fetch per site)."""
-    return _fetch_html(url, timeout=8)
+    """Homepage fetch shared by the email crawl, --socials and --tech (one fetch per site). A site that
+    fails as listed is retried on the other scheme and with www. toggled: many apex domains have no
+    A record, and many hosts answer on https only."""
+    html = _fetch_html(url, timeout=8)
+    if html:
+        return html
+    p = urllib.parse.urlsplit(url if "://" in url else "http://" + url)
+    host = p.hostname or ""
+    if not host:
+        return ""
+    port = f":{p.port}" if p.port else ""
+    tail = p.path + ("?" + p.query if p.query else "")
+    other = host[4:] if host.startswith("www.") else "www." + host
+    scheme2 = "https" if p.scheme == "http" else "http"
+    for variant in (f"{scheme2}://{host}{port}{tail}", f"{p.scheme}://{other}{port}{tail}", f"{scheme2}://{other}{port}{tail}"):
+        html = _fetch_html(variant, timeout=8)
+        if html:
+            return html
+    return ""
+
+_SOCIAL_HOSTS = ("facebook.com", "fb.com", "fb.me", "instagram.com", "instagr.am", "linkedin.com", "lnkd.in",
+                 "x.com", "twitter.com", "tiktok.com", "youtube.com", "yelp.com")
+
+def is_social(url):
+    """True when the "website" is a social or review profile, not the business's own site: nothing
+    to crawl for emails or pixels, and no MX lookup on facebook.com."""
+    h = _host(url or "")
+    return any(h == s or h.endswith("." + s) for s in _SOCIAL_HOSTS)
 
 def _find_socials(html):
     out = {k: "" for k in SOCIAL_FIELDS}
@@ -549,7 +653,10 @@ def enrich_sites(results, find, fields, label, workers=None):
     for r in results:                       # make sure every row has the keys
         for k in fields:
             r.setdefault(k, "")
-    _each_site([r for r in results if r.get("website")],
+    for r in results:  # a Facebook or Instagram page in the website slot IS the social profile
+        if r.get("website") and is_social(r["website"]):
+            r.update({k: v for k, v in _find_socials(r["website"]).items() if v})
+    _each_site([r for r in results if r.get("website") and not is_social(r["website"])],
                lambda r: r.update(find(_fetch_cached(r["website"]))), label, workers)
 
 
@@ -614,8 +721,11 @@ _JUNK_DOMAIN = ("example", "sentry", "wixpress", "wix.com", "godaddy", "squaresp
                 "domain.com", "email.com", "yourdomain", "mysite.com", "schema.org", "w3.org", "sentry.io",
                 # link-in-bio pages and website agencies: their support address is not the business's
                 "linktr.ee", "linkin.bio", "beacons.ai", "officite")
+_JUNK_DOMAIN += ("gov", "mil", "hubspot", "mailchimp", "constantcontact", "sendgrid", "yext",
+                 "birdeye", "podium", "zocdoc")
 _JUNK_LOCAL = {"name", "email", "user", "you", "someone", "example", "username",
-               "youremail", "yourname", "firstname", "lastname", "sample"}
+               "youremail", "yourname", "firstname", "lastname", "sample",
+               "noreply", "no-reply", "donotreply", "do-not-reply", "mailer-daemon", "postmaster"}
 # A JSON-escaped <, >, ", ' or & glued to the address (">orders@x.com" in page source),
 # which the regex reads as part of the local part: u003eorders@x.com.
 _ESCAPE_PREFIX = re.compile(r"^(?:u00(?:3c|3e|22|27|26))+")
@@ -650,13 +760,24 @@ def clean_website(url):
     query = p.query if len(kept) == len(q) else urllib.parse.urlencode(kept)
     return urllib.parse.urlunsplit(p._replace(query=query, fragment=frag))
 
+def csv_safe(v):
+    """Excel and Sheets run a cell that starts with = + - @ as a formula, so a scraped name such as
+    "=HYPERLINK(...)" gets a leading quote. A phone number ("+1 512 555 0101") is left alone."""
+    s = "" if v is None else str(v)
+    if s[:1] in ("=", "@", "\t", "\r") or (s[:1] in ("+", "-") and not re.fullmatch(r"[+-][\d\s().-]*", s)):
+        return "'" + s
+    return s
+
+
 def is_real_email(e):
     """False for anything not worth sending to: a template placeholder (user@domain.com,
     example@gmail.com), a vendor/boilerplate domain, or an image path that parsed as an address."""
     local, _, dom = e.rpartition("@")
-    if not EMAIL_RE.fullmatch(e) or e.endswith(_JUNK_EXT):
-        return False
-    return local not in _JUNK_LOCAL and not any(j in dom for j in _JUNK_DOMAIN)
+    if not EMAIL_RE.fullmatch(e) or e.endswith(_JUNK_EXT) or re.fullmatch(r"[0-9a-f]{16,}", local):
+        return False  # a 16+ hex local part is a tracking token, not an inbox
+    labels = dom.split(".")  # whole labels: sentry.wixpress.com is junk, sentrysecurity.com and gov-tech.io are not
+    junk = any((dom == j or dom.endswith("." + j)) if "." in j else j in labels for j in _JUNK_DOMAIN)
+    return local not in _JUNK_LOCAL and not junk
 
 
 # "name [at] domain [dot] com", "name (at) domain dot com" and friends, adapted from OpenLeadFinder.
@@ -668,20 +789,34 @@ _TLD = (r"(?:com|net|org|co|io|biz|info|us|uk|ca|au|de|fr|es|it|nl|eu|edu|gov|me
         r"shop|online|store|xyz|ai)")
 _DEOBF_RE = re.compile(rf"(?<!{_LOCAL})({_LOCAL}+)\s*{_AT}\s*([A-Za-z0-9.\-]+?)\s*{_DOT}\s*({_TLD})\b", re.I)
 
+_CFEMAIL_RE = re.compile(r'data-cfemail="([0-9a-fA-F]+)"|/cdn-cgi/l/email-protection#([0-9a-fA-F]+)')
+
+def _cf_decode(hexstr):
+    """Cloudflare's email protection: every byte XOR the first one. One of the biggest reasons a site
+    'has no email' (OpenLeadFinder)."""
+    try:
+        key = int(hexstr[:2], 16)
+        return bytes(int(hexstr[i:i + 2], 16) ^ key for i in range(2, len(hexstr) - 1, 2)).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return ""
+
+def _on_site(e, site):
+    return bool(site) and (e.endswith("@" + site) or e.endswith("." + site))
+
 def extract_emails(html, site_host):
-    """Emails from mailto: links, plain text and obfuscated spans, junk dropped, site-domain first,
-    max 3. HTML entities are decoded first, so info&#64;site.com counts."""
+    """Emails from mailto: links, plain text, obfuscated spans and Cloudflare-protected links, junk
+    dropped, site-domain first, max 3. HTML entities are decoded first, so info&#64;site.com counts."""
     site = _host(site_host or "")
     text = _html.unescape(html or "")[:400_000]
     found = []
     deobf = [f"{m[0]}@{m[1]}.{m[2]}" for m in _DEOBF_RE.findall(text)]
+    deobf += [_cf_decode(a or b) for a, b in _CFEMAIL_RE.findall(text)]
     for e in MAILTO_RE.findall(text) + EMAIL_RE.findall(text) + deobf:
         e = _ESCAPE_PREFIX.sub("", urllib.parse.unquote(e).strip().lower())
         if not is_real_email(e) or e in found:
             continue
         found.append(e)
-    on_site = lambda e: site and (e.endswith("@" + site) or e.endswith("." + site))
-    return sorted(found, key=lambda e: not on_site(e))[:3]
+    return sorted(found, key=lambda e: not _on_site(e, site))[:3]
 
 def contact_links(html, base_url):
     """Up to 3 same-site contact/about URLs: discovered links first, then fixed fallbacks."""
@@ -691,7 +826,7 @@ def contact_links(html, base_url):
     if not host:  # malformed or empty website: nothing to join the paths onto
         return out
     for href, text in HREF_RE.findall(html or ""):
-        if not re.search(r"contact|about|team|staff|support", href + " " + text, re.I):
+        if not re.search(r"contact|about|team|staff|support|location|impressum|kontakt", href + " " + text, re.I):
             continue
         try:
             url = urllib.parse.urldefrag(urllib.parse.urljoin(base_url, href.strip()))[0]
@@ -699,7 +834,7 @@ def contact_links(html, base_url):
             continue
         if url.startswith(("http://", "https://")) and _host(url) == host and url not in out:
             out.append(url)
-    for path in ("/contact", "/contact-us", "/about", "/about-us"):
+    for path in ("/contact", "/contact-us", "/about", "/about-us", "/locations", "/team", "/impressum", "/kontakt"):
         url = urllib.parse.urljoin(base_url, path)
         if len(out) < 3 and url not in out:
             out.append(url)
@@ -711,11 +846,12 @@ def enrich_emails(results, deep=True, workers=None):
         site = r["website"]
         home = _fetch_cached(site)
         found = extract_emails(home, site)
-        if deep and home and not found:
+        if deep and home and not any(_on_site(e, _host(site)) for e in found):  # a gmail on the homepage is not the end
             pages = "\n".join(_fetch_html(u, timeout=8) for u in contact_links(home, site))
-            found = extract_emails(pages, site)
+            found = extract_emails(home + "\n" + pages, site)
         r["emails"] = ", ".join(found)
-    _each_site([r for r in results if r.get("website") and not r.get("emails")], work, "emails", workers)
+    _each_site([r for r in results if r.get("website") and not r.get("emails") and not is_social(r["website"])],
+               work, "emails", workers)
 
 
 # ── Optional email domain check (--verify-emails): can the domain receive mail, and who hosts it ──
@@ -762,8 +898,9 @@ def keep_row(r, a):
 
 
 def scrape_place(a, body, city, keywords):
-    """All the engine jobs for one place: a single job, or --grid tiles one at a time clipped to the
-    city box -> (first job id or None, rows, failed tile count, tile count)."""
+    """All the engine jobs for one place: a single search, or --grid tiles, one at a time, clipped to
+    the city box when there is one. A search that comes back full (SATURATION_ROWS) splits into 4
+    closer searches unless --no-split -> (first job id or None, rows, failed job count, job count)."""
     lat, lon, bbox, cells = a.lat, a.lon, None, None
     if a.grid:  # always geocodes, because it needs the bounding box
         print(f"▶ Geocoding \"{city}\"…")
@@ -787,31 +924,70 @@ def scrape_place(a, body, city, keywords):
     body = dict(body, lat=str(lat), lon=str(lon), name=(f"{keywords[0]} @ {city}" if city else keywords[0])[:80])
     for k in keywords:
         print(f"    • {k}")
-    if not cells:
+    if cells:
+        print(f"▶ Grid {a.grid}x{a.grid}: {len(cells)} jobs, one at a time, {len(keywords)} keyword(s) depth={a.depth}")
+    else:
         print(f"▶ Creating job: {len(keywords)} keyword(s) @ {lat},{lon} depth={a.depth}")
+    queue = list(cells or [point_cell(lat, lon)])
+    job_id, rows, skipped, i, total, capped, warned = None, [], 0, 0, len(queue), False, False
+    enough = a.limit if a.limit and not filters_active(a) else None  # rows wanted; None = all
+    ok_cells = empty_cells = 0
+    while queue:  # sequential on purpose: never parallel jobs against Google
+        cell, i = queue.pop(0), i + 1
+        tiled = bool(cells) or cell["_level"] > 0
+        if tiled:
+            print(f"▶ Cell {i}/{total} @ {cell['lat']},{cell['lon']} radius={cell['radius']}m zoom={cell['zoom']}")
         try:
-            job_id, rows = run_job(body)
-        except RuntimeError as e:
-            print(str(e))
-            return None, [], 0, 0
-        return job_id, rows, 0, 0
-    print(f"▶ Grid {a.grid}x{a.grid}: {len(cells)} jobs, one at a time, {len(keywords)} keyword(s) depth={a.depth}")
-    job_id, rows, skipped = None, [], 0
-    for i, cell in enumerate(cells, 1):  # sequential on purpose: never parallel jobs against Google
-        print(f"▶ Cell {i}/{len(cells)} @ {cell['lat']},{cell['lon']} radius={cell['radius']}m")
-        try:
-            jid, cell_rows = run_job(dict(body, **cell))
+            jid, cell_rows = run_job(job_body(body, cell))
+        except KeyboardInterrupt:  # keep what the finished jobs returned instead of losing them all
+            print(f"\n⚠ Stopped early: keeping the rows from the {i - 1 - skipped} finished job(s).")
+            skipped, a.stop = skipped + 1 + len(queue), True
+            break
         except Exception as e:
-            print(f"\n  ⚠ cell {i}/{len(cells)} skipped: {str(e).strip()}")
+            if not tiled:  # the one plain search failed: nothing to keep
+                print(str(e))
+                return None, [], 0, 0
+            print(f"\n  ⚠ cell {i}/{total} skipped: {str(e).strip()}")
             skipped += 1
             continue
         job_id = job_id or jid
         rows = dedupe(rows + cell_rows)
-        print(f"  cell {i}/{len(cells)}: {len(cell_rows)} rows, {len(rows)} unique so far")
-    # radius does not clip results in normal mode, so tiles leak outside the city
-    kept = [r for r in rows if in_bbox(r, bbox)]
-    print(f"  dropped {len(rows) - len(kept)} rows outside the city box")
-    return job_id, kept, skipped, len(cells)
+        if tiled:
+            print(f"  cell {i}/{total}: {len(cell_rows)} rows, {len(rows)} unique so far")
+        ok_cells, empty_cells = ok_cells + bool(cell_rows), empty_cells + (not cell_rows)
+        if not ok_cells and empty_cells >= min(5, total) and queue:  # nothing but empty areas: a block, not a market
+            print(f"  ⚠ {empty_cells} areas in a row returned 0 places: Google is most likely rate-limiting this IP "
+                  f"(or the area has none), so the remaining {len(queue)} job(s) are skipped. Check the keyword on "
+                  f"the Google Maps website; if places show there, wait 15-30 minutes or add a proxy, then rerun.")
+            skipped += len(queue)
+            queue.clear()
+            break
+        if enough and len(rows) >= enough:
+            print(f"  --limit {enough} reached: skipping the remaining {len(queue)} job(s)")
+            total -= len(queue)
+            break
+        # Google's cap is per search, so a batch job is "full" when its biggest keyword is.
+        per_keyword = max([0] + list(collections.Counter(r.get("input_id") for r in cell_rows).values()))
+        if a.split and per_keyword >= SATURATION_ROWS and cell["_level"] < SPLIT_LEVELS:
+            if total + 4 > MAX_JOBS:
+                if not capped:
+                    print(f"  ⚠ {MAX_JOBS} jobs reached for this place; dense areas left unsplit.")
+                capped = True
+                continue
+            print(f"  ⚡ dense area ({per_keyword} rows): splitting it into 4 closer searches")
+            if not warned:
+                print("  ℹ Each split adds 4 jobs against Google; add --no-split to keep one job per search.")
+                warned = True
+            queue[0:0] = split_cell(cell)  # look closer right away, then carry on with the grid
+            total += 4
+    answered = len(rows)
+    if bbox:  # radius does not clip results in normal mode, so tiles leak outside the city
+        kept = [r for r in rows if in_bbox(r, bbox)]
+        print(f"  dropped {len(rows) - len(kept)} rows outside the city box")
+        rows = kept
+    if job_id and not answered and not skipped:
+        print(BAN_HINT)
+    return job_id, rows, skipped, total
 
 
 def main():
@@ -842,7 +1018,11 @@ def main():
                     help="check homepages only, not contact and about pages")
     ap.add_argument("--grid", type=int, metavar="N",
                     help="split the --city area into N x N map tiles, one job each, deduped "
-                         "(breaks Google's ~120 per search cap; max 10)")
+                         "(covers a whole city; one search returns about 20 places; max 10)")
+    ap.add_argument("--no-split", dest="split", action="store_false", default=True,
+                    help=f"do not re-run a search that comes back full ({SATURATION_ROWS}+ rows) as 4 "
+                         f"closer searches; by default every full search or tile splits, up to "
+                         f"{SPLIT_LEVELS} levels and {MAX_JOBS} jobs per place")
     ap.add_argument("--max-time", type=int, default=600,
                     help="job time limit in SECONDS; the script waits that long for the "
                          "engine, plus a short grace (default: 600)")
@@ -886,6 +1066,16 @@ def main():
         sys.exit("✗ --limit must be 1 or more.")
     if a.has_email and not a.email:
         sys.exit("✗ --has-email needs the email crawl: drop --no-email.")
+    if a.verify_emails and not a.email:
+        sys.exit("✗ --verify-emails needs the email crawl: drop --no-email.")
+    if a.json and a.out and a.out.lower().endswith(".csv"):
+        sys.exit("✗ --json with a .csv --out: drop --json, or name the file .json.")
+    if not a.city and a.lat and a.lon:
+        try:
+            float(a.lat), float(a.lon)
+        except ValueError:
+            sys.exit(f"✗ lat and lon must be numbers, e.g. 30.2672 -97.7431 (got {a.lat!r} {a.lon!r}).")
+    a.stop = False  # set by scrape_place on Ctrl-C, so the next --city is not started
     if a.city and (a.lat or a.lon):
         print("ℹ --city given, so the lat/lon arguments are ignored.")
     if a.out and os.path.dirname(a.out):  # fail now, not after the scrape, if the folder is unusable
@@ -898,7 +1088,7 @@ def main():
         if not a.city:
             sys.exit("✗ --grid needs --city: the city's bounding box is what gets split into tiles.")
         if not 1 <= a.grid <= 10:
-            sys.exit("✗ --grid must be between 1 and 10 (10 x 10 = 100 jobs is the ceiling).")
+            sys.exit(f"✗ --grid must be between 1 and 10 (10 x 10 = 100 tiles; with splits at most {MAX_JOBS} jobs per place).")
 
     cities = a.city or [None]
     try:
@@ -953,6 +1143,8 @@ def main():
         job_id, skipped, ncells = job_id or jid, skipped + s, ncells + n
         failed_places += jid is None
         rows = dedupe(rows + place_rows)
+        if a.stop:
+            break
     if job_id is None:
         sys.exit("✗ No job finished; the reason is in the ✗ line above.")
     if failed_places:
@@ -973,6 +1165,8 @@ def main():
         fields = LEAD
     if a.has_email and "emails" not in fields:
         sys.exit("✗ --has-email needs the emails column: add emails to --fields.")
+    if a.verify_emails and "emails" not in fields:
+        sys.exit("✗ --verify-emails needs the emails column: add emails to --fields.")
     if before and not rows:
         print(f"⚠ Nothing left: the filters and --exclude dropped all {before} rows. Loosen them and rerun; "
               f"the file below has only a header.")
@@ -992,7 +1186,7 @@ def main():
             verify_emails(rows)
             fields = fields + ["email_host"]
             dead = total - sum(1 for r in rows if r.get("emails"))
-            print(f"  dropped {dead} addresses on domains that do not exist")
+            print(f"  {dead} businesses lost their addresses: the domains do not exist")
     if a.has_email:
         rows = [r for r in rows if r.get("emails")][:a.limit or None]
         print(f"  --has-email kept {len(rows)} rows")
@@ -1029,7 +1223,7 @@ def main():
             with open(path, "w", newline="", encoding="utf-8-sig") as f:
                 w = csv.DictWriter(f, fieldnames=fields)
                 w.writeheader()
-                w.writerows(results)
+                w.writerows([{k: csv_safe(v) for k, v in r.items()} for r in results])
     try:
         write(out)
     except OSError as e:  # the target is locked (open in Excel) or unwritable: never lose a finished scrape

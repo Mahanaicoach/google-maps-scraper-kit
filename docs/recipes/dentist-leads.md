@@ -16,7 +16,7 @@ Check the preview and the found-rate line for emails. If the rows look right, wi
 
 ## Step 2: Cover the whole city
 
-One search stops at about 120 listings. Split the city into a 3 x 3 grid of map tiles:
+One search stops at about 20 listings (about 100 after the automatic split). Split the city into a 3 x 3 grid of map tiles:
 
 ```bash
 python3 scripts/scrape.py "dentists in Denver CO" --city "Denver, CO" --grid 3

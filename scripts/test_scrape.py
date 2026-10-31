@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Offline tests for scripts/scrape.py (standard library only, no network).
 Run: python3 scripts/test_scrape.py"""
-import csv, importlib.util, io, json, os, pathlib, sys, tempfile, threading, unittest
+import argparse, csv, importlib.util, io, json, os, pathlib, sys, tempfile, threading, unittest
 from contextlib import redirect_stdout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
@@ -37,6 +37,220 @@ class GridCells(unittest.TestCase):
 
     def test_tiny_box_floors_at_1000(self):
         self.assertEqual(scrape.grid_cells(["0", "0.001", "0", "0.001"], 2)[0]["radius"], 1000)
+
+
+class SplitCell(unittest.TestCase):
+    def test_quarters_half_span_one_zoom_in(self):
+        (c,) = scrape.grid_cells(BBOX, 1)  # 0.5 x 0.5 degree box, zoom 11
+        kids = scrape.split_cell(c)
+        self.assertEqual(len(kids), 4)
+        self.assertEqual({(k["lat"], k["lon"]) for k in kids},
+                         {("30.125000", "-97.875000"), ("30.125000", "-97.625000"),
+                          ("30.375000", "-97.875000"), ("30.375000", "-97.625000")})
+        for k in kids:
+            self.assertEqual(k["zoom"], 12)
+            self.assertEqual(k["radius"], scrape.math.ceil(c["radius"] / 2))
+            self.assertEqual((k["_dlat"], k["_dlon"], k["_level"]), (0.25, 0.25, 1))
+        grandkid = scrape.split_cell(kids[0])[0]
+        self.assertEqual((grandkid["zoom"], grandkid["_level"]), (13, 2))
+
+    def test_point_cell_is_the_plain_search_body(self):
+        c = scrape.point_cell("30.2672", "-97.7431")
+        self.assertEqual(scrape.job_body({"depth": 1}, c),
+                         {"depth": 1, "lat": "30.2672", "lon": "-97.7431", "zoom": 15, "radius": 10000})
+        self.assertEqual(scrape.split_cell(c)[0]["zoom"], 16)
+
+
+class Saturation(unittest.TestCase):
+    """A search that comes back full splits into 4 closer searches (OpenLeadFinder's fix for the
+    per-search ceiling); --no-split keeps one job; MAX_JOBS caps the fan-out."""
+    def run_place(self, rows_by_zoom, keywords=1, interrupt_at=None, **over):
+        sent = []
+
+        def fake_run_job(body):
+            sent.append(body)
+            if interrupt_at == len(sent):
+                raise KeyboardInterrupt
+            n = rows_by_zoom.get(body["zoom"], 0)
+            rows = [_row(f"z{body['zoom']} {body['lat']} {body['lon']} {k}") for k in range(n)]
+            for k, r in enumerate(rows):
+                r["input_id"] = f"kw{k % keywords}"  # the engine tags each row with its keyword
+            return f"job-{len(sent)}", rows
+        ns = dict(lat="30.2672", lon="-97.7431", city=None, grid=None, depth=1, split=True, limit=None)
+        ns.update(over)
+        with mock.patch.object(scrape, "run_job", fake_run_job), redirect_stdout(io.StringIO()) as log:
+            job_id, rows, skipped, njobs = scrape.scrape_place(
+                argparse.Namespace(**ns), {"keywords": ["x"], "depth": 1}, None, ["x"])
+        return sent, rows, skipped, njobs, log.getvalue()
+
+    def test_full_search_splits_once_then_stops(self):
+        sent, rows, skipped, njobs, log = self.run_place({15: 120, 16: 30})
+        self.assertEqual([b["zoom"] for b in sent], [15, 16, 16, 16, 16])
+        self.assertEqual((skipped, njobs, len(rows)), (0, 5, 240))  # 120 + 4 x 30 distinct titles
+        self.assertTrue(all(not k.startswith("_") for b in sent for k in b))  # geometry stays local
+        self.assertIn("dense area (120 rows)", log)
+
+    def test_splits_one_level_by_default_two_when_asked(self):
+        sent, *_ = self.run_place({15: 120, 16: 120, 17: 120})
+        self.assertEqual(len(sent), 5)  # 1 + 4; the children are full too but SPLIT_LEVELS is 1
+        with mock.patch.object(scrape, "SPLIT_LEVELS", 2):
+            sent, *_ = self.run_place({15: 120, 16: 120, 17: 120})
+        self.assertEqual(len(sent), 21)  # 1 + 4 + 16; level-2 tiles never split
+        self.assertEqual([b["zoom"] for b in sent].count(17), 16)
+
+    def test_limited_view_page_is_full(self):
+        sent, *_ = self.run_place({15: 20})  # exactly the limited view's 20: hiding more
+        self.assertEqual(len(sent), 5)
+        sent, *_ = self.run_place({15: 19})
+        self.assertEqual(len(sent), 1)
+
+    def test_three_empty_tiles_in_a_row_stop_the_grid(self):
+        sent = []
+        def fake_run_job(body):
+            sent.append(body)
+            return "j", []
+        ns = dict(lat=None, lon=None, city="Denver, CO", grid=3, depth=1, split=True, limit=None)
+        with mock.patch.object(scrape, "run_job", fake_run_job), \
+             mock.patch.object(scrape, "geocode", return_value=("30.25", "-97.75", BBOX)), \
+             redirect_stdout(io.StringIO()) as log:
+            _, rows, skipped, total = scrape.scrape_place(argparse.Namespace(**ns), {"keywords": ["dentists"]},
+                                                          "Denver, CO", ["dentists"])
+        self.assertEqual(sent[0]["keywords"], ["dentists"])  # the keyword reaches the engine unchanged
+        self.assertEqual((len(sent), rows, skipped, total), (5, [], 4, 9))  # five empty tiles, four skipped
+        self.assertIn("returned 0 places: Google is most likely rate-limiting", log.getvalue())
+        self.assertNotIn("0 places from Google", log.getvalue())  # the breaker message is enough
+
+    def test_rows_clipped_by_the_city_box_are_not_a_block(self):
+        def fake_run_job(body):
+            return "j", [_row("far", lat="50.0")]  # answered, but outside the bbox
+        ns = dict(lat=None, lon=None, city="Austin, TX", grid=1, depth=1, split=True, limit=None)
+        with mock.patch.object(scrape, "run_job", fake_run_job), \
+             mock.patch.object(scrape, "geocode", return_value=("30.25", "-97.75", BBOX)), \
+             redirect_stdout(io.StringIO()) as log:
+            _, rows, *_ = scrape.scrape_place(argparse.Namespace(**ns), {"keywords": ["x"]}, "Austin, TX", ["x"])
+        self.assertEqual(rows, [])
+        self.assertIn("dropped 1 rows outside the city box", log.getvalue())
+        self.assertNotIn("0 places from Google", log.getvalue())
+
+    def test_empty_single_search_prints_the_block_hint(self):
+        sent, rows, _, _, log = self.run_place({15: 0})
+        self.assertEqual((len(sent), rows), (1, []))
+        self.assertIn("0 places from Google", log)
+
+    def test_no_split_keeps_one_job(self):
+        sent, rows, *_ = self.run_place({15: 120}, split=False)
+        self.assertEqual((len(sent), len(rows)), (1, 120))
+
+    def test_job_cap(self):
+        with mock.patch.object(scrape, "MAX_JOBS", 3):
+            sent, _, _, _, log = self.run_place({15: 120, 16: 120})
+        self.assertEqual(len(sent), 1)
+        self.assertIn("3 jobs reached", log)
+
+    def test_batch_is_full_per_keyword_not_in_total(self):
+        sent, *_ = self.run_place({15: 45}, keywords=3)  # 15 rows per keyword: nobody hit the cap
+        self.assertEqual(len(sent), 1)
+        sent, *_ = self.run_place({15: 60}, keywords=3)  # 20 each: full
+        self.assertEqual(len(sent), 5)
+
+    def test_limit_stops_the_fan_out_unless_filters_need_more(self):
+        sent, rows, _, njobs, log = self.run_place({15: 120, 16: 30}, limit=50)
+        self.assertEqual((len(sent), len(rows), njobs), (1, 120, 1))
+        self.assertIn("--limit 50 reached", log)
+        sent, *_ = self.run_place({15: 120, 16: 30}, limit=50, has_phone=True)  # a filter may drop rows
+        self.assertEqual(len(sent), 5)
+
+    def test_ctrl_c_keeps_finished_jobs(self):
+        sent, rows, skipped, njobs, log = self.run_place({15: 120, 16: 30}, interrupt_at=3)
+        self.assertEqual((len(sent), len(rows)), (3, 150))  # root + 1 child finished, 3 never ran
+        self.assertEqual(skipped, 3)
+        self.assertIn("Stopped early", log)
+
+    def test_bad_lat_lon_exit_cleanly(self):
+        argv = ["scrape.py", "dentists in Austin TX", "abc", "-97.7"]
+        with mock.patch.object(sys, "argv", argv), redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
+            scrape.main()
+        self.assertIn("must be numbers", str(cm.exception))
+
+
+class CsvSafe(unittest.TestCase):
+    def test_formulas_quoted_phones_kept(self):
+        self.assertEqual(scrape.csv_safe("=HYPERLINK(\"http://x\")"), "'=HYPERLINK(\"http://x\")")
+        self.assertEqual(scrape.csv_safe("@SUM(1)"), "'@SUM(1)")
+        self.assertEqual(scrape.csv_safe("-2+3"), "'-2+3")
+        self.assertEqual(scrape.csv_safe("+1 (512) 555-0101"), "+1 (512) 555-0101")
+        self.assertEqual(scrape.csv_safe("Joe's Pizza"), "Joe's Pizza")
+        self.assertEqual(scrape.csv_safe(None), "")
+
+
+class CloudflareEmails(unittest.TestCase):
+    def test_cfemail_decoded_and_ranked(self):
+        enc = "".join(f"{b ^ 0x5a:02x}" for b in b"hello@acme.com")
+        html = f'<a href="/cdn-cgi/l/email-protection#5a{enc}">[email protected]</a>'
+        self.assertEqual(scrape.extract_emails(html, "https://acme.com"), ["hello@acme.com"])
+        html2 = f'<span class="__cf_email__" data-cfemail="5a{enc}">[email protected]</span> <a href="mailto:sales@other.net">x</a>'
+        self.assertEqual(scrape.extract_emails(html2, "acme.com"), ["hello@acme.com", "sales@other.net"])
+        self.assertEqual(scrape._cf_decode("zz"), "")
+
+    def test_more_junk(self):
+        for e in ("noreply@acme.com", "do-not-reply@acme.com", "a1b2c3d4e5f6a7b8c9d0@acme.com",
+                  "info@cdc.gov", "news@mailchimp.com", "x@sentry.wixpress.com", "x@sentry-next.wixpress.com"):
+            self.assertFalse(scrape.is_real_email(e), e)
+        for e in ("info@sentrysecurity.com", "hi@examplecafe.com", "abc123@acme.com", "info@mygovernor.com",
+                  "mail@gov-tech.io", "a@podium-fitness.com", "a@example-dental.com"):
+            self.assertTrue(scrape.is_real_email(e), e)
+
+    def test_own_domain_email_on_homepage_stops_the_crawl(self):
+        fetched = []
+        def fake_html(url, timeout=8):
+            fetched.append(url)
+            return ""
+        rows = [{"website": "https://www.acme.com/", "emails": ""}, {"website": "https://beta.org", "emails": ""}]
+        homes = {"https://www.acme.com/": 'mail <a href="mailto:hello@acme.com">x</a>',
+                 "https://beta.org": 'only <a href="mailto:owner@gmail.com">g</a>'}
+        with mock.patch.object(scrape, "_fetch_cached", lambda u: homes[u]), \
+             mock.patch.object(scrape, "_fetch_html", fake_html), redirect_stdout(io.StringIO()):
+            scrape.enrich_emails(rows, deep=True)
+        self.assertEqual(rows[0]["emails"], "hello@acme.com")
+        self.assertEqual(rows[1]["emails"], "owner@gmail.com")  # kept, but the contact pages were tried
+        self.assertTrue(all(u.startswith("https://beta.org") for u in fetched) and len(fetched) == 3, fetched)
+
+    def test_exclude_file_matches_despite_the_formula_guard(self):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "earlier.csv")
+        with open(p, "w", newline="", encoding="utf-8-sig") as f:
+            w = csv.DictWriter(f, fieldnames=["title", "address"]); w.writeheader()
+            w.writerow({"title": scrape.csv_safe("@Home Cafe"), "address": "1 Main"})
+        self.assertEqual(scrape.load_rows(p)[0]["title"], "@Home Cafe")
+
+
+class SocialWebsite(unittest.TestCase):
+    def test_profile_in_website_slot_is_not_crawled(self):
+        rows = [{"website": "https://www.facebook.com/joespizza", "emails": ""},
+                {"website": "https://instagram.com/joes.pizza/", "emails": ""},
+                {"website": "https://joespizza.com", "emails": ""}]
+        fetched = []
+        def fake_fetch(url):
+            fetched.append(url)
+            return '<a href="https://instagram.com/from_site">ig</a>'
+        with mock.patch.object(scrape, "_fetch_cached", fake_fetch), redirect_stdout(io.StringIO()):
+            scrape.enrich_sites(rows, scrape._find_socials, scrape.SOCIAL_FIELDS, "socials")
+            scrape.enrich_emails(rows, deep=False)
+        self.assertEqual(fetched, ["https://joespizza.com", "https://joespizza.com"])  # one fetch per real site
+        self.assertEqual(rows[0]["facebook"], "https://www.facebook.com/joespizza")
+        self.assertEqual(rows[1]["instagram"], "https://instagram.com/joes.pizza")
+        self.assertEqual(rows[2]["instagram"], "https://instagram.com/from_site")
+        self.assertTrue(scrape.is_social("m.facebook.com/x") and not scrape.is_social("facebook.com.evil.biz"))
+
+    def test_homepage_retried_on_other_scheme_and_www(self):
+        tried = []
+        def fake(url, timeout=8):
+            tried.append(url)
+            return "<html>ok</html>" if url == "https://www.acme.com" else ""
+        scrape._fetch_cached.cache_clear()
+        with mock.patch.object(scrape, "_fetch_html", fake):
+            self.assertEqual(scrape._fetch_cached("http://acme.com"), "<html>ok</html>")
+        self.assertEqual(tried, ["http://acme.com", "https://acme.com", "http://www.acme.com", "https://www.acme.com"])
 
 
 class Dedupe(unittest.TestCase):
@@ -598,7 +812,8 @@ class Resilience(unittest.TestCase):
         # HTTPError owns a temp file; close both at the end or Python warns about it at exit.
         e502 = scrape.urllib.error.HTTPError("u", 502, "bad gateway", {}, None)
         e404 = scrape.urllib.error.HTTPError("u", 404, "nf", {}, None)
-        self.addCleanup(e502.close); self.addCleanup(e404.close)
+        for e in (e502, e404):  # HTTPError.close() raises on 3.9 when there is no fp; close the fp itself
+            self.addCleanup(lambda e=e: e.fp and e.fp.close())
         answers = iter([e502, OSError("timed out"), (200, b"null")])
         def fake_req(method, path, body=None):
             a = next(answers)

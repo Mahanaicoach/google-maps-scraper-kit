@@ -106,8 +106,10 @@ python3 scripts/scrape.py "cafes in Austin TX" --city "Austin, TX" --depth 5
 python3 scripts/scrape.py --keywords-file examples/queries.example.txt --city "Denver, CO"
 ```
 
-**Go past Google's ~120 results per search.** `--grid 3` splits the city into a 3 x 3 grid of map
-tiles. That is 9 jobs, run one at a time, with duplicates removed:
+**Go past Google's ~20 results per search.** Signed-out Google Maps shows about 20 places per search,
+so a search that comes back full is re-run as 4 closer searches on its own (5 jobs; `--no-split` keeps
+one). `--grid 3` splits the city into a 3 x 3 grid of map tiles instead. That is 9 jobs, run one at a
+time, with duplicates removed:
 ```bash
 python3 scripts/scrape.py "plumbers in Phoenix AZ" --city "Phoenix, AZ" --grid 3
 ```
@@ -197,7 +199,7 @@ curl -X DELETE http://localhost:8080/api/v1/jobs/<job-id>
 | `422 missing geo coordinates` | Job body needs `lat` and `lon` as **strings**, e.g. `"30.2672"`. |
 | `422 missing name` / `422 missing lang` | Job body needs `name` (any label) and `lang` (`"en"`). All six required fields: `name`, `keywords`, `lang`, `lat`, `lon`, `max_time`. |
 | Job stuck `working` forever, or every new job stays `pending` | Engine v1.18.x sometimes finishes a job without marking it done ([gosom/google-maps-scraper#346](https://github.com/gosom/google-maps-scraper/issues/346)) and then holds every later job on `pending`. It is common: in our depth-1 tests it hit between one job in four and every other job. `scripts/scrape.py` spots it in the engine log within about 30 seconds, keeps the rows, restarts the engine and waits for it to come back. It also deletes the stuck job from the engine's list, because the web UI shows no Download button for a `working` job. If you hit this from the web UI or the API, fetch the rows with `curl -o results.csv http://localhost:8080/api/v1/jobs/<id>/download`, delete the job, then run `docker restart gmaps-scraper` (or the name you set in `SCRAPER_CONTAINER`). A new job that sits on `pending` for about 50 s while the engine shows no activity gets the same restart from `scripts/scrape.py`, which then re-creates the job, and a `failed` job is retried once after 60 s. A job that stays `working` with no rows can also mean Google is throttling your IP: wait, or add proxies. |
-| Scrapes feel slow | A depth 5 search with emails takes about a minute: the engine reads Google Maps with 4 workers (`-c 4` in `docker-compose.yml`; the engine's own default is 1), then the script checks the business websites for emails, 16 at a time. `--no-email` skips the website check. The web UI uses the engine's own email option, which is several times slower. |
+| Scrapes feel slow | One search with emails takes about a minute, and a search that comes back full runs 4 more (about 4 minutes in all; `--no-split` keeps it to one): the engine reads Google Maps with 4 workers (`-c 4` in `docker-compose.yml`; the engine's own default is 1), then the script checks the business websites for emails, 16 at a time. `--no-email` skips the website check. The web UI uses the engine's own email option, which is several times slower. |
 | Empty CSV | Keyword too narrow or wrong geo — widen `radius` or fix `lat`/`lon`. |
 | Docker pull is slow | Normal on first run; it caches after that. |
 | `docker: 'compose' is not a docker command` / `unknown shorthand flag: 'd'` | The Compose plugin is missing. It ships with Docker Desktop — uninstalling Desktop leaves a **dangling symlink** in `~/.docker/cli-plugins/` that looks installed but isn't (`ls -l ~/.docker/cli-plugins/docker-compose`). Install it (`brew install docker-compose`), or skip Compose entirely — see *No Compose?* below. |
