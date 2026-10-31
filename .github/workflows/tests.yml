@@ -74,8 +74,13 @@ jobs:
       - run: python scripts/engine.py status
       - run: python scripts/engine.py restart
       - run: python scripts/engine.py status
+      - name: remember the engine's private port
+        shell: bash
+        run: echo "ENGINE_PORT=$(python -c "import json; print(json.load(open('.engine/state.json'))['engine_port'])")" >> "$GITHUB_ENV"
       - if: always()
         run: python scripts/engine.py stop
-      - name: stop really stopped it
+      - name: stop really stopped it (the proxy and the engine itself)
         shell: bash
-        run: "! python scripts/engine.py status"
+        run: |
+          ! python scripts/engine.py status
+          ! curl -s -m 3 "http://127.0.0.1:$ENGINE_PORT/api/v1/jobs"

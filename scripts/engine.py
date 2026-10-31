@@ -49,6 +49,7 @@ ORIGIN_OK = re.compile(rf"^(https?://{LOCAL}(:\d+)?)?$", re.I)
 HOP = {"connection", "keep-alive", "transfer-encoding", "upgrade", "proxy-connection", "te",
        "trailer", "content-length", "content-encoding", "accept-encoding"}
 _NO_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # HTTP_PROXY must not catch localhost
+PY = "py" if os.name == "nt" else "python3"  # what the user types; the README says `py` on Windows
 
 
 def public_port():
@@ -93,13 +94,15 @@ def binary(download=True):
     if os.path.exists(path) and sha256(path) == digest:
         return path
     if not download:
-        sys.exit("✗ The engine build is missing or changed. Run: python3 scripts/engine.py start")
+        sys.exit(f"✗ The engine build is missing or changed. Run: {PY} scripts/engine.py start")
     os.makedirs(HOME, exist_ok=True)
     print(f"▶ Downloading the engine ({name}, about 60 MB) from its GitHub release…")
     tmp = path + ".part"
     with urllib.request.urlopen(RELEASE + name, timeout=60) as resp, open(tmp, "wb") as f:
         for chunk in iter(lambda: resp.read(1 << 20), b""):
             f.write(chunk)
+            if os.path.exists(LOCK):  # a slow download must not look like a crashed start
+                os.utime(LOCK)
     if sha256(tmp) != digest:
         os.remove(tmp)
         sys.exit("✗ The download does not match the SHA-256 pinned in engine.py, so it was deleted "
@@ -119,13 +122,14 @@ def read_state():
 
 
 def probe(port, timeout=2):
-    """"native", "other" (something else answers, e.g. the Docker engine) or None (nothing)."""
+    """"native" (this script's proxy and engine answer), "native-down" (the proxy answers but its
+    engine is gone, e.g. it crashed), "other" (something else, e.g. the Docker engine) or None."""
     try:
         with _NO_PROXY.open(f"http://127.0.0.1:{port}/api/v1/jobs", timeout=timeout) as r:
             return "native" if (r.headers.get("X-Engine") or "").startswith("gmskit-native/") else "other"
     except urllib.error.HTTPError as e:
         e.close()
-        return "other"
+        return "native-down" if (e.headers.get("X-Engine") or "").startswith("gmskit-native/") else "other"
     except Exception:
         return None
 
@@ -155,49 +159,60 @@ def spawn(cmd, log):
 
 
 def command_line(pid):
-    """The command line of `pid`, or "" if it is gone or cannot be read."""
+    """The command line of `pid`; "" if the process is gone; None if it cannot be read (PowerShell
+    blocked or too slow), which stop must not mistake for "gone"."""
     try:
         if os.name == "nt":
             ps = ["powershell", "-NoProfile", "-Command",
                   f"(Get-CimInstance Win32_Process -Filter 'ProcessId={int(pid)}').CommandLine"]
-            return subprocess.run(ps, capture_output=True, text=True, errors="replace", timeout=20).stdout
+            out = subprocess.run(ps, capture_output=True, text=True, errors="replace", timeout=20)
+            if out.returncode:
+                return None
+            return out.stdout
         if os.path.exists(f"/proc/{int(pid)}/cmdline"):
             with open(f"/proc/{int(pid)}/cmdline", "rb") as f:
                 return f.read().replace(b"\0", b" ").decode("utf-8", "replace")
         return subprocess.run(["ps", "-p", str(int(pid)), "-o", "command="], capture_output=True,
                               text=True, errors="replace", timeout=10).stdout
     except (OSError, ValueError, subprocess.SubprocessError):
-        return ""
+        return None
 
 
 def ours(pid):
-    """True if `pid` is still this kit's engine or proxy. After a reboot or crash the pid in
-    state.json may belong to an unrelated process, which stop must never kill."""
+    """True if `pid` is still this kit's engine or proxy, None if that cannot be told. After a reboot
+    or crash the pid in state.json may belong to an unrelated process, which stop must never kill."""
     cmd = command_line(pid)
+    if cmd is None:
+        return None
     return HOME in cmd or (os.path.basename(__file__) in cmd and "_proxy" in cmd)
 
 
 def kill(pid):
-    """Stop a process and its children (the engine starts Chromium)."""
-    if not ours(pid):
-        return
+    """Stop a process and its children (the engine starts Chromium). False if it could not be told
+    whether `pid` is ours, so the caller can say so instead of claiming it stopped."""
+    mine = ours(pid)
+    if mine is None:
+        return False
+    if not mine:
+        return True
     if os.name == "nt":
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
-        return
+        return True
     try:
         os.killpg(pid, signal.SIGTERM)
     except (ProcessLookupError, PermissionError):
-        return
+        return True
     for _ in range(50):
         try:
             os.killpg(pid, 0)
         except (ProcessLookupError, PermissionError):
-            return
+            return True
         time.sleep(0.1)
     try:
         os.killpg(pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
         pass
+    return True
 
 
 def tail(path, lines=15):
@@ -236,6 +251,10 @@ def start(download=True):
         return
     if seen == "other":
         busy(port)
+    if seen == "native-down":
+        print("ℹ The engine had stopped behind its proxy; starting it again.")
+    if os.name == "nt":
+        print("ℹ Windows without Docker is not verified yet: if scrapes return 0 places, use Docker.")
     if read_state():
         stop(quiet=True)  # stale state from a crash or reboot: clean up whatever is still ours
     if not port_free(port):
@@ -271,11 +290,12 @@ def _start(port, path):
     with open(STATE, "w", encoding="utf-8") as f:
         json.dump({"engine_pid": engine.pid, "proxy_pid": proxy.pid, "port": port,
                    "engine_port": engine_port, "log": LOG, "version": VERSION}, f)
-    for _ in range(90):
+    deadline = time.time() + 90
+    while time.time() < deadline:
         if probe(port) == "native":
             print(f"✓ Engine running without Docker: http://localhost:{port}\n"
                   f"  The first scrape downloads Chromium (about 170 MB) once.\n"
-                  f"  Stop it with: python3 scripts/engine.py stop")
+                  f"  Stop it with: {PY} scripts/engine.py stop")
             return
         for proc, log, what in ((engine, LOG, "engine"), (proxy, PROXY_LOG, "proxy")):
             if proc.poll() is not None:
@@ -292,9 +312,12 @@ def stop(quiet=False):
         if not quiet:
             print("The engine is not running.")
         return
-    for key in ("proxy_pid", "engine_pid"):
-        if st.get(key):
-            kill(st[key])
+    unknown = [st[k] for k in ("proxy_pid", "engine_pid") if st.get(k) and not kill(st[k])]
+    if unknown:
+        how = "taskkill /PID {} /T /F" if os.name == "nt" else "kill {}"
+        sys.exit("✗ Could not check whether these processes are the engine, so they were left running: "
+                 + ", ".join(map(str, unknown)) + "\n  Stop them yourself: "
+                 + "; ".join(how.format(p) for p in unknown))
     try:
         os.remove(STATE)
     except OSError:
@@ -308,11 +331,14 @@ def status():
     seen = probe(port)
     if seen == "native":
         print(f"✓ Running without Docker on http://localhost:{port} (engine {VERSION})")
+    elif seen == "native-down":
+        print(f"✗ The proxy answers but its engine has stopped. Run: {PY} scripts/engine.py restart")
+        sys.exit(1)
     elif seen == "other":
         print(f"ℹ Port {port} answers, but not as this script's engine (the Docker engine, probably).")
         sys.exit(1)
     else:
-        print("✗ Not running. Start it with: python3 scripts/engine.py start")
+        print(f"✗ Not running. Start it with: {PY} scripts/engine.py start")
         sys.exit(1)
 
 

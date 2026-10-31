@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Offline tests for scripts/engine.py and scrape.py's no-Docker hooks (standard library only, no
 network). Run: python3 scripts/test_engine.py"""
-import importlib.util, io, json, os, sys, tempfile, threading, unittest, urllib.request
+import importlib.util, io, json, os, sys, tempfile, threading, time, unittest, urllib.error, urllib.request
 from contextlib import redirect_stdout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
@@ -18,6 +18,7 @@ def load(name):
 
 engine, scrape = load("engine"), load("scrape")
 scrape.ENGINE_CONTAINER = "kit-tests-no-such-container"  # never read or restart a real engine
+PY = "py" if os.name == "nt" else "python3"
 
 
 class ConfRules(unittest.TestCase):
@@ -87,6 +88,35 @@ class Download(unittest.TestCase):
 
 
 class Processes(unittest.TestCase):
+    def test_a_process_started_by_the_kit_is_recognised_and_stopped(self):
+        home = tempfile.mkdtemp()
+        with mock.patch.object(engine, "HOME", home):
+            proc = engine.spawn([sys.executable, "-c", "import time; time.sleep(60)", home],
+                                os.path.join(home, "child.log"))
+            try:
+                for _ in range(50):  # the command line is readable once the process has started
+                    if engine.ours(proc.pid):
+                        break
+                    time.sleep(0.1)
+                self.assertTrue(engine.ours(proc.pid))
+                self.assertTrue(engine.kill(proc.pid))
+                proc.wait(timeout=20)
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+
+    def test_stop_keeps_the_state_when_it_cannot_tell_whose_pid_it_is(self):
+        home = tempfile.mkdtemp()
+        state = os.path.join(home, "state.json")
+        with open(state, "w") as f:
+            json.dump({"engine_pid": 4242, "proxy_pid": 4243}, f)
+        with mock.patch.object(engine, "STATE", state), \
+             mock.patch.object(engine, "command_line", return_value=None):
+            with self.assertRaises(SystemExit) as e:
+                engine.stop()
+        self.assertIn("4242", str(e.exception))
+        self.assertTrue(os.path.exists(state))  # still there, so a later stop can try again
+
     def test_stop_never_kills_a_process_that_is_not_the_kits(self):
         # After a reboot the pid in state.json can belong to anything; this test runner is not ours.
         self.assertFalse(engine.ours(os.getpid()))
@@ -187,6 +217,17 @@ class Proxy(unittest.TestCase):
         _, headers, body = self.fetch("/api/v1/jobs?gosom=1")
         self.assertEqual(body, b'{"echo": "/api/v1/jobs?gosom=1"}')  # JSON passes through untouched
 
+    def test_proxy_up_engine_down_is_still_recognised_as_native(self):
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), engine.make_handler(1, [], None))
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            self.assertEqual(engine.probe(srv.server_port), "native-down")
+            with mock.patch.object(scrape, "BASE", f"http://127.0.0.1:{srv.server_port}"), \
+                 mock.patch.object(scrape, "_native_seen", False):
+                self.assertTrue(scrape._answers_as_native())
+        finally:
+            srv.shutdown(); srv.server_close()
+
     def test_engine_down_is_a_502_not_a_crash(self):
         handler = engine.make_handler(1, [], None)  # nothing listens on port 1
         srv = ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -265,7 +306,20 @@ class ScrapeHooks(unittest.TestCase):
              mock.patch.object(scrape, "req", return_value=(200, b"null")):
             self.assertTrue(scrape.restart_engine())
         self.assertTrue(ran[0][1].endswith("engine.py") and ran[0][2] == "restart", ran)
-        self.assertEqual(scrape.restart_hint(), "python3 scripts/engine.py restart")
+        self.assertEqual(scrape.restart_hint(), f"{PY} scripts/engine.py restart")
+
+    def test_a_failed_restart_keeps_the_native_hint_and_says_why(self):
+        # engine.py restart deletes state.json on its way down; if start then fails, the hint must
+        # not turn into `docker restart` for a user who has no Docker.
+        os.remove(self.state)
+        def fake_run(cmd, **kw):
+            return mock.Mock(returncode=1, stdout="", stderr="✗ The engine build is missing or changed.")
+        with mock.patch.object(scrape, "_native_seen", True), \
+             mock.patch.object(scrape, "native_engine", side_effect=[{"port": 8080}, None, None]), \
+             mock.patch.object(scrape.subprocess, "run", fake_run), redirect_stdout(io.StringIO()) as out:
+            self.assertFalse(scrape.restart_engine())
+            self.assertEqual(scrape.restart_hint(), f"{PY} scripts/engine.py restart")
+        self.assertIn("missing or changed", out.getvalue())
 
 
 if __name__ == "__main__":

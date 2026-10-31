@@ -80,7 +80,8 @@ On Windows, skip the `bash` line and use the Python CLI below with `py` in place
 Prefer clicking? http://localhost:8080 has a form; it returns the engine's raw 36-column CSV.
 
 **No Docker?** Replace `docker compose up -d` with `python3 scripts/engine.py start`. It downloads the
-engine's own build for macOS, Windows or Linux (about 60 MB, checked against its published SHA-256),
+engine's own build for macOS or Linux (about 60 MB, checked against a pinned SHA-256; Windows is not
+verified yet),
 runs it on this machine behind the same guard proxy, and `python3 scripts/engine.py stop` ends it
 (stop it when you are done: unlike Docker, the engine's own port stays reachable from this computer).
 The first scrape downloads Chromium once (about 170 MB). Details: [SETUP.md](SETUP.md#running-without-docker).
@@ -292,12 +293,13 @@ add proxies (see [Responsible use](#responsible-use)).
 
 **Does it work on Windows, Linux and Apple Silicon Macs?**
 Yes. With Docker anywhere it runs, or without Docker through `python3 scripts/engine.py start` on
-macOS (Apple Silicon through Rosetta), Windows and Linux on Intel/AMD. On Windows, use
+macOS (Apple Silicon through Rosetta) and Linux on Intel/AMD (Windows without Docker is not verified yet). On Windows, use
 `scripts/scrape.py`, or run `scrape.sh` under WSL2 or Git Bash. [SETUP.md](SETUP.md) has the details.
 
 **Do I have to install Docker?**
-No. `python3 scripts/engine.py start` runs the same engine without it. Docker stays the default because
-it needs no Chromium download on your machine and works on Linux arm64 too.
+No, on macOS and Linux: `python3 scripts/engine.py start` runs the same engine without it. On Windows
+the no-Docker engine is not verified yet (see SETUP.md), so use Docker there for now. Docker stays the
+default because it needs no Chromium download on your machine and works on Linux arm64 too.
 
 **Is scraping Google Maps legal?**
 It is against Google's Terms of Service, and phones and emails are personal data. Read

@@ -254,6 +254,12 @@ python3 scripts/engine.py stop      # instead of docker compose stop
   ([gosom/google-maps-scraper#338](https://github.com/gosom/google-maps-scraper/issues/338)), so
   `scrape.py` uses depth 2 there. Google shows about 20 places per search either way; the kit's split
   searches do the rest.
+- **Windows is not verified yet.** `engine.py` starts, checks, restarts and stops the engine on
+  Windows, but on GitHub's Windows Server test machines the engine's own Windows build returned no
+  places, also when started by hand ("unexpected page type", "target closed":
+  [gosom#322](https://github.com/gosom/google-maps-scraper/issues/322),
+  [gosom#137](https://github.com/gosom/google-maps-scraper/issues/137)). It may work on a Windows
+  desktop; if a scrape returns 0 places, use Docker.
 - **Not supported:** Linux on arm64 (no engine build). Use Docker there.
 - **Stuck jobs** ([gosom/google-maps-scraper#346](https://github.com/gosom/google-maps-scraper/issues/346))
   are spotted in `.engine/engine.log` and fixed with `python3 scripts/engine.py restart`, the same way

@@ -261,6 +261,9 @@ def _answers_as_native():
         try:
             with _NO_PROXY.open(BASE + "/api/v1/jobs", timeout=5) as r:
                 _native_seen = (r.headers.get("X-Engine") or "").startswith("gmskit-native/")
+        except urllib.error.HTTPError as e:  # a 502 from the proxy whose engine died is still native
+            _native_seen = (e.headers.get("X-Engine") or "").startswith("gmskit-native/")
+            e.close()
         except Exception:
             pass
     return _native_seen
@@ -311,7 +314,10 @@ def engine_log(since):
     return out.returncode == 0, out.stdout + out.stderr
 
 def restart_hint():
-    return "python3 scripts/engine.py restart" if native_engine() else f"docker restart {ENGINE_CONTAINER}"
+    # _native_seen survives a failed `engine.py restart`, which deletes state.json on its way down.
+    native = native_engine() or _native_seen
+    return f"{'py' if os.name == 'nt' else 'python3'} scripts/engine.py restart" if native \
+        else f"docker restart {ENGINE_CONTAINER}"
 
 def engine_run_ended(since):
     """True if the local engine's log shows a scraper run ending after `since` (UTC, ISO 8601).
@@ -339,7 +345,11 @@ def restart_engine():
     else:
         return False
     try:
-        if subprocess.run(cmd, capture_output=True, timeout=180).returncode != 0:
+        out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180)
+        if out.returncode != 0:
+            why = (out.stderr or out.stdout).strip().splitlines()[-3:]
+            if why:  # e.g. engine.py's "The engine build is missing or changed", not a bare failure
+                print("\n  The restart failed: " + " ".join(why))
             return False
     except (OSError, subprocess.SubprocessError):
         return False
