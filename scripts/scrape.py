@@ -271,12 +271,17 @@ def _run_job_once(body):
     print(f"  job id: {job_id}")
     CURRENT_JOB = job_id
     try:
-        return _poll(body, job_id)
+        result = _poll(body, job_id)
     except OSError as e:  # the engine went away (restart, crash) or the job was deleted mid-poll
+        CURRENT_JOB = None
         raise RuntimeError(f"\n✗ Lost the engine while job {job_id} ran ({e}). If the engine comes back, "
                            f"it keeps the rows found so far: {BASE}/api/v1/jobs/{job_id}/download")
-    finally:
+    except Exception:
         CURRENT_JOB = None
+        raise
+    # Not a finally: on Ctrl-C (not an Exception) the id must survive for the message in __main__.
+    CURRENT_JOB = None
+    return result
 
 
 def _poll(body, job_id):
@@ -300,8 +305,8 @@ def _poll(body, job_id):
             print()
             if BLOCKED in error:  # the rows before the block are kept; searching on would extend it
                 raise Blocked(f"⚠ The engine says: {error}", job_id, download_rows(job_id))
-            if error:
-                print(f"ℹ The engine says: {error}")
+            if error:  # stopped at max_time, or some keywords failed: the rows count, the job is incomplete
+                raise Partial(f"⚠ The engine says: {error}", job_id, download_rows(job_id))
             return job_id, download_rows(job_id)
         if status == "failed":
             print()
@@ -735,9 +740,9 @@ def scrape_place(a, body, city, keywords):
             job_id, rows = run_job(body)
         except Blocked:
             raise
-        except Partial as e:
+        except Partial as e:  # its rows count, but the place is incomplete
             print(str(e))
-            return e.job_id, e.rows, 0, 0
+            return e.job_id, e.rows, 1, 1
         except RuntimeError as e:
             print(str(e))
             return None, [], 0, 0
@@ -949,7 +954,8 @@ def main():
     else:
         print(f"✓ Done — {len(rows)} businesses (fields: {', '.join(fields)}).")
     if skipped:
-        print(f"⚠ Incomplete: {skipped} of {ncells} tiles failed, so parts of the area are missing. Rerun later.")
+        print(f"⚠ Incomplete: {skipped} of {ncells} tiles or places failed or stopped early, so parts of the "
+              f"area are missing. Rerun later.")
 
     if a.email and "emails" in fields and not a.no_website:  # no website, nothing to crawl
         pages = "homepage, then contact and about pages" if a.deep_emails else "homepage only"

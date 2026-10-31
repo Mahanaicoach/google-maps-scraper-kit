@@ -122,9 +122,21 @@ class JobOutcomes(unittest.TestCase):
 
     def test_ok_with_a_note_says_why_it_stopped_early(self):
         note = "stopped at max_time; the rows found so far are kept"
-        (_, rows), _, _, text = run_jobs([[("ok", note)]], downloads={"j1": self.CSV})
-        self.assertEqual(len(rows), 2)
-        self.assertIn(f"The engine says: {note}", text)
+        err, posts, _, _ = run_jobs([[("ok", note)]], downloads={"j1": self.CSV})
+        self.assertIsInstance(err, scrape.Partial)  # the rows count, the job is incomplete
+        self.assertEqual((len(err.rows), posts), (2, 1))
+        self.assertIn(f"The engine says: {note}", str(err))
+
+    def test_ctrl_c_keeps_the_job_id_for_its_message(self):
+        def fake_req(method, path, body=None):
+            if method == "POST":
+                return 201, b'{"id":"j7"}'
+            raise KeyboardInterrupt
+        with mock.patch.object(scrape, "req", fake_req), redirect_stdout(io.StringIO()), \
+             self.assertRaises(KeyboardInterrupt):
+            scrape.run_job({"max_time": 1})
+        self.assertEqual(scrape.CURRENT_JOB, "j7")  # __main__ prints its DELETE command
+        scrape.CURRENT_JOB = None
 
     def test_failed_job_is_retried_once(self):
         reason = "Page.navigate: no reply within 30 s"
@@ -246,8 +258,14 @@ class StopsWhenBlocked(unittest.TestCase):
                                         [scrape.Partial("⚠ part way", "job-1", [_row("A")])] +
                                         [("job-%d" % n, [_row("B")]) for n in (2, 3, 4)])
         self.assertEqual(titles, ["Biz A", "Biz B"])
-        self.assertIn("Incomplete: 1 of 4 tiles failed", text)
+        self.assertIn("Incomplete: 1 of 4 tiles or places failed", text)
         self.assertNotIn("rate-limiting", text)
+
+    def test_a_single_job_cut_short_is_reported_incomplete(self):
+        _, titles, text = self.run_main(["plumbers in Austin TX", "30.2", "-97.7"],
+                                        [scrape.Partial("⚠ The engine says: stopped at max_time", "job-1", [_row("A")])])
+        self.assertEqual(titles, ["Biz A"])
+        self.assertIn("Incomplete: 1 of 1 tiles or places", text)
 
     def test_cities_stop_at_the_blocked_one(self):
         calls, titles, _ = self.run_main(["plumbers", "--city", "Austin, TX", "--city", "Waco, TX"],
@@ -515,7 +533,7 @@ class EndToEnd(unittest.TestCase):
         text = log.getvalue()
         self.assertIn("cell 4/4: 3 rows, 6 unique so far", text)
         self.assertIn("cell 3/4 skipped", text)
-        self.assertIn("Incomplete: 1 of 4 tiles failed", text)
+        self.assertIn("Incomplete: 1 of 4 tiles or places failed", text)
         self.assertIn("dropped 1 rows outside the city box", text)
         with open(out, newline="", encoding="utf-8-sig") as f:  # the kit writes a BOM for Excel
             rows = list(csv.reader(f))
