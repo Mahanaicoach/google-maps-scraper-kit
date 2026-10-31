@@ -184,10 +184,27 @@ class JobOutcomes(unittest.TestCase):
     def test_failed_part_way_keeps_its_rows(self):
         # The engine was stopped while the job ran: it marks the job failed and keeps the rows.
         reason = "the engine stopped while this job ran; its rows so far are kept"
-        (jid, rows), posts, _, text = run_jobs([[("working", ""), ("failed", reason)]],
-                                               downloads={"j1": self.CSV})
-        self.assertEqual((jid, len(rows), posts), ("j1", 2, 1))
-        self.assertIn(reason, text)
+        err, posts, _, _ = run_jobs([[("working", ""), ("failed", reason)]], downloads={"j1": self.CSV})
+        self.assertIsInstance(err, scrape.Partial)
+        self.assertEqual((err.job_id, len(err.rows), posts), ("j1", 2, 1))
+        self.assertIn(reason, str(err))
+
+    def test_engine_gone_mid_poll_is_a_clean_error(self):
+        # Docker restarting the engine, a crash, or the job deleted from the web UI: a RuntimeError
+        # the callers handle, never a traceback.
+        gone = scrape.urllib.error.URLError(ConnectionRefusedError(61, "Connection refused"))
+        def fake_req(method, path, body=None):
+            if method == "POST":
+                return 201, b'{"id":"j1"}'
+            raise gone
+        with mock.patch.object(scrape, "req", fake_req), mock.patch.object(scrape.time, "sleep"), \
+             redirect_stdout(io.StringIO()), self.assertRaises(RuntimeError) as cm:
+            scrape.run_job({"max_time": 1})
+        self.assertIn("Lost the engine while job j1 ran", str(cm.exception))
+        self.assertIsNone(scrape.CURRENT_JOB)
+        with mock.patch.object(scrape, "req", side_effect=gone), self.assertRaises(RuntimeError) as cm:
+            scrape.run_job({"max_time": 1})
+        self.assertIn("Could not reach the engine", str(cm.exception))
 
     def test_budget_runs_out_keeps_written_rows(self):
         (jid, rows), posts, _, text = run_jobs([[("working", "")] * 3], attempts=3, downloads={"j1": self.CSV})
@@ -210,7 +227,10 @@ class StopsWhenBlocked(unittest.TestCase):
              mock.patch.object(scrape, "run_job", side_effect=results) as run, \
              mock.patch.object(scrape, "geocode", side_effect=lambda place, with_bbox=False: ("30.25", "-97.75") + ((BBOX,) if with_bbox else ())), \
              mock.patch.object(sys, "argv", ["scrape.py", *argv, "--no-email", "--out", out]), redirect_stdout(log):
-            scrape.main()
+            try:
+                scrape.main()
+            except SystemExit as e:  # a run cut short by Google exits non-zero, after writing the file
+                log.write(str(e))
         with open(out, newline="", encoding="utf-8-sig") as f:
             return run.call_count, [r["title"] for r in csv.DictReader(f)], log.getvalue()
 
@@ -219,7 +239,15 @@ class StopsWhenBlocked(unittest.TestCase):
                                             [("job-1", [_row("A"), _row("B")]), scrape.Blocked("✗ Job failed.")])
         self.assertEqual((calls, titles), (2, ["Biz A", "Biz B"]))  # cells 3 and 4 never searched
         self.assertIn("Stopped at cell 2/4", text)
-        self.assertIn("rate-limiting this IP", text)
+        self.assertIn("Incomplete: Google is rate-limiting this IP", text)
+
+    def test_a_tile_that_failed_part_way_counts_as_incomplete(self):
+        _, titles, text = self.run_main(["plumbers", "--city", "Austin, TX", "--grid", "2"],
+                                        [scrape.Partial("⚠ part way", "job-1", [_row("A")])] +
+                                        [("job-%d" % n, [_row("B")]) for n in (2, 3, 4)])
+        self.assertEqual(titles, ["Biz A", "Biz B"])
+        self.assertIn("Incomplete: 1 of 4 tiles failed", text)
+        self.assertNotIn("rate-limiting", text)
 
     def test_cities_stop_at_the_blocked_one(self):
         calls, titles, _ = self.run_main(["plumbers", "--city", "Austin, TX", "--city", "Waco, TX"],
@@ -625,8 +653,8 @@ class RegexSpeed(unittest.TestCase):
 class Resilience(unittest.TestCase):
     def test_get_retries_transient_errors(self):
         # HTTPError owns a temp file; close both at the end or Python warns about it at exit.
-        e502 = scrape.urllib.error.HTTPError("u", 502, "bad gateway", {}, None)
-        e404 = scrape.urllib.error.HTTPError("u", 404, "nf", {}, None)
+        e502 = scrape.urllib.error.HTTPError("u", 502, "bad gateway", {}, io.BytesIO(b""))  # a body: close() needs one on 3.9
+        e404 = scrape.urllib.error.HTTPError("u", 404, "nf", {}, io.BytesIO(b""))
         self.addCleanup(e502.close); self.addCleanup(e404.close)
         answers = iter([e502, OSError("timed out"), (200, b"null")])
         def fake_req(method, path, body=None):

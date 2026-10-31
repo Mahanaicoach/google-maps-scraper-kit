@@ -261,6 +261,14 @@ def stop(quiet=False):
         print("✓ Engine stopped. Its jobs and results stay in .engine/data.")
 
 
+def restart():
+    if not read_state() and probe(public_port()) == "ours":  # docker compose started it, not this script
+        sys.exit("ℹ This engine runs in Docker, not under engine.py. Restart it with: docker compose restart\n"
+                 "  (after an update: docker compose up -d --build)")
+    stop(quiet=True)
+    start(download=False)
+
+
 def status():
     port = public_port()
     seen = probe(port)
@@ -279,7 +287,7 @@ def status():
 
 def main():
     cmds = {"start": start, "stop": stop, "status": status,
-            "restart": lambda: (stop(quiet=True), start(download=False))}
+            "restart": restart}
     if len(sys.argv) != 2 or sys.argv[1] not in cmds:
         sys.exit(f"usage: {PY} scripts/engine.py start|stop|status|restart")
     if sys.version_info < (3, 9):

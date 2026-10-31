@@ -429,6 +429,28 @@ class Bind(Fakes):
         self.assertIn("Docker image only", str(cm.exception))
 
 
+class ChromeStartErrors(unittest.TestCase):
+    """scripts/scrape.py names Chrome start errors by their first words (and never retries them):
+    the engine's messages must keep starting that way."""
+
+    def test_scrape_recognises_every_start_error(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts"))
+        import scrape
+        msgs = [browser.start_error("/x/chrome", 127, "chrome: error while loading shared libraries: libnss3.so"),
+                browser.start_error("/x/chrome", 1, "[1:2:FATAL:x.cc(1)] boom")]
+        saved = browser.find_chrome
+        browser.find_chrome = lambda: None
+        try:
+            for path in (None, os.path.join(tempfile.gettempdir(), "no-such-chrome-binary")):
+                with self.assertRaises(browser.BrowserError) as cm:
+                    browser.Browser(path=path, timeout=1)
+                msgs.append(str(cm.exception))
+        finally:
+            browser.find_chrome = saved
+        for m in msgs:
+            self.assertTrue(m.startswith(scrape.CHROME_START), m)
+
+
 class ScrapeClient(Server):
     """scripts/scrape.py's own create, poll and download against this engine, with the worker running."""
 

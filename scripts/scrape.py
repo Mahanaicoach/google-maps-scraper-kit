@@ -200,12 +200,20 @@ class JobFailed(RuntimeError):
     pass
 
 
-class Blocked(RuntimeError):
-    """Google answered with its unusual-traffic page. More searches from this IP only extend the
-    block, so the grid and city loops stop. Carries the rows found before it (job_id, rows)."""
+class Partial(RuntimeError):
+    """A job that ended early with some rows (job_id, rows): the caller keeps them and counts the
+    tile or place as incomplete."""
     def __init__(self, message, job_id=None, rows=()):
         super().__init__(message)
         self.job_id, self.rows = job_id, list(rows)
+
+
+class Blocked(Partial):
+    """Google answered with its unusual-traffic page. More searches from this IP only extend the
+    block, so the grid and city loops stop."""
+
+
+CURRENT_JOB = None  # the job being polled, for the Ctrl-C message
 
 
 def run_job(body):
@@ -250,14 +258,28 @@ def _get(path):
 
 
 def _run_job_once(body):
+    global CURRENT_JOB
     try:
         _, raw = req("POST", "/api/v1/jobs", body)
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"✗ Create failed: HTTP {e.code} — {e.read().decode()[:200]}")
+    except OSError as e:
+        raise RuntimeError(f"✗ Could not reach the engine at {BASE} to create the job ({e}).")
     job_id = json.loads(raw).get("id")
     if not job_id:
         raise RuntimeError("✗ No job id returned.")
     print(f"  job id: {job_id}")
+    CURRENT_JOB = job_id
+    try:
+        return _poll(body, job_id)
+    except OSError as e:  # the engine went away (restart, crash) or the job was deleted mid-poll
+        raise RuntimeError(f"\n✗ Lost the engine while job {job_id} ran ({e}). If the engine comes back, "
+                           f"it keeps the rows found so far: {BASE}/api/v1/jobs/{job_id}/download")
+    finally:
+        CURRENT_JOB = None
+
+
+def _poll(body, job_id):
 
     attempts = poll_attempts(body.get("max_time"))
     print(f"▶ Polling (up to ~{attempts * POLL_EVERY // 60} min)…")
@@ -288,8 +310,8 @@ def _run_job_once(body):
             except Exception:
                 rows = []
             if rows:
-                print(f"⚠ The job failed part way ({error or 'no reason given'}); keeping its {len(rows)} rows.")
-                return job_id, rows
+                raise Partial(f"⚠ The job failed part way ({error or 'no reason given'}); keeping its "
+                              f"{len(rows)} rows.", job_id, rows)
             raise JobFailed(job_id, error)
         time.sleep(POLL_EVERY)
     # Still pending or working: the engine may have run an earlier job first. It keeps this one, so
@@ -713,6 +735,9 @@ def scrape_place(a, body, city, keywords):
             job_id, rows = run_job(body)
         except Blocked:
             raise
+        except Partial as e:
+            print(str(e))
+            return e.job_id, e.rows, 0, 0
         except RuntimeError as e:
             print(str(e))
             return None, [], 0, 0
@@ -728,6 +753,11 @@ def scrape_place(a, body, city, keywords):
             e.rows = [r for r in dedupe(rows + e.rows) if in_bbox(r, bbox)]
             print(f"\n  ⚠ Stopped at cell {i}/{len(cells)}: the cells after it were not searched.")
             raise
+        except Partial as e:  # its rows count, but the tile is incomplete
+            print(f"\n  ⚠ cell {i}/{len(cells)} incomplete: {str(e).strip()}")
+            skipped += 1
+            job_id, rows = job_id or e.job_id, dedupe(rows + e.rows)
+            continue
         except Exception as e:
             print(f"\n  ⚠ cell {i}/{len(cells)} skipped: {str(e).strip()}")
             skipped += 1
@@ -876,16 +906,13 @@ def main():
             "depth": a.depth, "email": False, "max_time": a.max_time}
     if a.proxy:
         body["proxies"] = a.proxy
-    job_id, rows, skipped, ncells, failed_places = None, [], 0, 0, 0
-    for i, city in enumerate(cities):  # one place at a time, like the grid tiles
+    job_id, rows, skipped, ncells, failed_places, blocked = None, [], 0, 0, 0, False
+    for city in cities:  # one place at a time, like the grid tiles
         try:
             jid, place_rows, s, n = scrape_place(a, body, city, keywords)
         except Blocked as e:
             print(str(e))
-            print("⚠ Google is rate-limiting this IP, so the scrape stopped here; the rows found so far "
-                  "are kept. Wait (minutes to hours), or add proxies, then rerun with --exclude on this file.")
-            job_id, rows = job_id or e.job_id, dedupe(rows + e.rows)
-            failed_places += len(cities) - i - (1 if e.rows else 0)
+            job_id, rows, blocked = job_id or e.job_id, dedupe(rows + e.rows), True
             break
         job_id, skipped, ncells = job_id or jid, skipped + s, ncells + n
         failed_places += jid is None
@@ -984,10 +1011,17 @@ def main():
     for r in results[:5]:
         tail = f" | IG:{r.get('instagram','') or '—'}" if a.socials else f" | {r.get('website','')}"
         print(f"  • {r.get('title','')} | {r.get('phone','')} | {r.get('emails','')}{tail}")
+    if blocked:  # a non-zero exit, so an agent or a scheduled run knows the scrape was cut short
+        sys.exit("⚠ Incomplete: Google is rate-limiting this IP, so the scrape stopped; the file has the "
+                 "rows found before that. Wait (minutes to hours) or add proxies, then rerun with "
+                 "--exclude on this file to get only the rest.")
 
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        sys.exit(f"\n✗ Stopped. A job already created keeps running in the engine; list jobs at {BASE}/api/v1/jobs")
+        if CURRENT_JOB:
+            sys.exit(f"\n✗ Stopped; nothing was saved. Job {CURRENT_JOB} keeps running in the engine. "
+                     f"Cancel it with:\n    curl -X DELETE {BASE}/api/v1/jobs/{CURRENT_JOB}")
+        sys.exit(f"\n✗ Stopped; nothing was saved. Jobs: {BASE}/api/v1/jobs")

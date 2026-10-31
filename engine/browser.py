@@ -49,6 +49,9 @@ APT_LINE = ("sudo apt-get install -y libnss3 libnspr4 libatk1.0-0 libatk-bridge2
             "libcairo2 libasound2")
 
 
+PY = "py" if os.name == "nt" else "python3"  # what the user types in the messages below
+
+
 class BrowserError(RuntimeError):
     pass
 
@@ -193,7 +196,7 @@ class Browser:
     def __init__(self, path=None, headless=True, profile=None, lang="en-US", proxy=None, timeout=30):
         self.path = path or find_chrome()
         if not self.path:
-            raise BrowserError("No Chrome, Chromium, Edge or Brave found. Run `python3 scripts/engine.py start`, "
+            raise BrowserError(f"No Chrome, Chromium, Edge or Brave found. Run `{PY} scripts/engine.py start`, "
                                "which downloads one, or install Google Chrome.")
         self._own_profile = profile is None
         self.profile = profile or tempfile.mkdtemp(prefix="gmskit-chrome-")

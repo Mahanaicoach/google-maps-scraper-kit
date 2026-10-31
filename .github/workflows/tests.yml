@@ -15,12 +15,16 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.12"]
+        include:  # the oldest Python the docs promise (macOS's own python3 is 3.9)
+          - os: ubuntu-latest
+            python: "3.9"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
       - run: python scripts/test_scrape.py
       - run: python engine/test_cdp.py
       - run: python engine/test_engine.py

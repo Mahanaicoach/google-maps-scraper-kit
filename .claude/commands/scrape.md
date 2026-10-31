@@ -6,7 +6,7 @@ The user wants a Google Maps lead list. Query: **$ARGUMENTS**
 
 Use the `google-maps-scraper` skill and follow these steps:
 
-1. **Check the engine:** `curl -s http://localhost:8080/api/v1/jobs`. If it is down, run `python3 scripts/engine.py start` from the kit root (or `docker compose up -d` if the user runs the engine in Docker), and retry.
+1. **Check the engine:** `curl -s http://localhost:8080/api/v1/jobs`. If it is down, run `python3 scripts/engine.py status` from the kit root: it names the browser the engine will use. If it names one, run `python3 scripts/engine.py start` and retry. If it finds none, ask the user before you start it (it would download Chrome for Testing, about 100 MB), or suggest Docker (`docker compose up -d`).
 2. **Parse** the business type and city from the query. Look up the city's **latitude/longitude** (as strings).
 3. **Ask about social profiles before scraping, every time.** Ask the user ONE short question:
    *"Want me to also grab their social profiles (Instagram / Facebook / LinkedIn / TikTok / YouTube / X)? Emails are already included by default. (yes / no)"*
