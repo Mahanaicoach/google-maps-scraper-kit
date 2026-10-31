@@ -145,7 +145,9 @@ def spawn(cmd, log):
     """Start a process that outlives this script, its output appended to `log`."""
     with open(log, "ab") as out:  # the child keeps its own handle
         if os.name == "nt":
-            flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+            # A hidden console, not DETACHED_PROCESS: with no console at all, the Chromium the
+            # engine starts closed at its first page ("target closed") on Windows.
+            flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
             return subprocess.Popen(cmd, stdout=out, stderr=out, stdin=subprocess.DEVNULL,
                                     creationflags=flags, cwd=HOME)
         return subprocess.Popen(cmd, stdout=out, stderr=out, stdin=subprocess.DEVNULL,
