@@ -1035,5 +1035,118 @@ class ApiKeyDocs(Server):
         self.assertEqual(self.call("GET", "/api/v1/jobs/00000000-0000-0000-0000-000000000000/download")[0], 401)
 
 
+
+class LoopOne(Fakes):
+    """Audit loop 1: blocks with no places yet, resumes after the search, refused logins, races."""
+
+    def setUp(self):
+        super().setUp()
+        self.saved_waits = (jobs.BACKOFF, jobs.ROTATE_WAIT)
+        jobs.BACKOFF, jobs.ROTATE_WAIT = (0.05, 0.05), 0.01
+
+    def tearDown(self):
+        jobs.BACKOFF, jobs.ROTATE_WAIT = self.saved_waits
+        super().tearDown()
+
+    def test_real_collect_calls_a_429_blocked(self):
+        q = queue.Queue()
+        class C:
+            closed = None
+            def subscribe(self, *a):
+                return q
+            def unsubscribe(self, *a):
+                pass
+        class P:
+            sid, cdp = "s", C()
+            def set_cookie(self, *a):
+                pass
+            def navigate(self, url):
+                q.put({"requestId": "1", "response": {"url": "https://www.google.com/search?tbm=map&pb=x",
+                                                      "status": 429, "mimeType": "text/html"}})
+            def url(self):
+                return "https://www.google.com/maps/search/x"
+            def wait_for(self, expr, timeout=15):
+                return True
+            def eval(self, expr):
+                return {"cls": False, "text": ""} if expr == maps.JS_END else []
+            def send(self, *a, **k):
+                raise CDPError("no body")
+        t = time.time()
+        real_collect = self.saved[2]  # Fakes swapped maps.collect for the fake one
+        places, reason, _ = real_collect(P(), "https://www.google.com/maps/search/x", depth=3, log=lambda m: None)
+        self.assertEqual((places, reason), ([], "blocked"))  # not "blocked+dom-fallback"
+        self.assertLess(time.time() - t, 5)  # no 10 s wait for a first batch that Google refused
+
+    def test_resume_after_the_reviews_keeps_them(self):
+        RESULTS["cafes in Austin"] = ([place(1, website="https://a.com"), place(2)], "end-of-list")
+        def reviews(rows, d, deadline, stop, proxies, save=None):
+            for r in rows:
+                r["user_reviews"] = '[{"Rating": 5}]'
+            return len(rows)
+        self.worker.add_reviews = reviews
+        stopping = lambda *a, **k: self.worker.shutdown() or 0  # the engine stops during the website pass
+        with unittest.mock.patch.object(jobs, "add_site_data", side_effect=stopping):
+            jid, job = self.run_one(reviews_max=1, email=True)
+        self.assertEqual((job["Status"], job["Progress"]["stage"]), ("pending", "websites"))
+        w2 = jobs.Worker(self.store, self.lines.append)
+        w2.add_reviews = lambda *a, **k: self.fail("the reviews were done already")
+        with unittest.mock.patch.object(jobs, "fetch", return_value="hi@a.com"):
+            w2.run_job(self.store.claim())
+        rows = self.rows(jid)
+        self.assertEqual(SEARCHED, ["cafes in Austin"])  # searched once, across the restart
+        self.assertEqual([r["user_reviews"] for r in rows], ['[{"Rating": 5}]'] * 2)
+        self.assertEqual((rows[0]["emails"], self.store.get(jid)["Status"]), ("hi@a.com", "ok"))
+
+    def test_blocked_job_resumed_in_its_website_pass_keeps_rows_and_its_note(self):
+        RESULTS["cafes in Austin"] = ([place(1, website="https://a.com")], ["slow-blocked"])
+        def collect(page, url, on_batch=None, **kw):
+            SEARCHED.append("cafes in Austin")
+            on_batch([place(1, website="https://a.com")], 1)  # streamed, then Google refuses the rest
+            return [], "blocked", {"batches": 1, "dom_links": 0}
+        maps.collect = collect
+        stopping = lambda *a, **k: self.worker.shutdown() or 0
+        with unittest.mock.patch.object(jobs, "add_site_data", side_effect=stopping):
+            jid, job = self.run_one(email=True)
+        self.assertEqual(job["Status"], "pending")
+        SEARCHED.clear()
+        with unittest.mock.patch.object(jobs, "fetch", return_value=""):
+            jobs.Worker(self.store, self.lines.append).run_job(self.store.claim())
+        job = self.store.get(jid)
+        self.assertEqual(SEARCHED, [])  # never back to the block
+        self.assertEqual((job["Status"], [r["title"] for r in self.rows(jid)]), ("ok", ["Biz 1"]))
+        self.assertIn("unusual-traffic page", job["Error"])
+        self.assertIn("Waited and retried 2 time(s)", job["Error"])
+
+    def test_a_refused_login_stops_the_job(self):
+        def collect(page, url, **kw):
+            SEARCHED.append(url)
+            raise CDPError(jobs.LOGIN_REFUSED)
+        maps.collect = collect
+        _, job = self.run_one(keywords=["a", "b", "c"], proxies=["http://u:bad@h:1"])
+        self.assertEqual((job["Status"], job["Error"], len(SEARCHED)), ("failed", jobs.LOGIN_REFUSED, 1))
+
+    def test_shutdown_before_the_job_starts(self):
+        name, data = jobs.validate(GOOD)
+        jid = self.store.create(name, data)
+        job = self.store.claim()
+        self.worker.stopped.set()
+        self.worker.run_job(job)
+        self.assertEqual((self.store.get(jid)["Status"], FakeBrowser.made), ("pending", []))
+
+    def test_an_engine_that_cannot_bind_leaves_the_jobs_alone(self):
+        name, data = jobs.validate(GOOD)
+        jid = self.store.create(name, data)
+        self.store.claim()  # another engine on this data folder runs it
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        s.listen(8)
+        argv = ["serve.py", "--port", str(s.getsockname()[1]), "--data", os.path.join(self.dir, "data")]
+        try:
+            with unittest.mock.patch.object(sys, "argv", argv), self.assertRaises(SystemExit):
+                serve.main()
+        finally:
+            s.close()
+        self.assertEqual(self.store.get(jid)["Status"], "working")
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

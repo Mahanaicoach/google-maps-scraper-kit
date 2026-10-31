@@ -518,18 +518,19 @@ def main():
     browser.make_home()
     browser.sweep_profiles()
     store = jobs.Store(a.data)
-    resumed, failed = store.recover()
-    if resumed:
-        log(f"{resumed} job(s) were still working when the engine last stopped: they resume from their last "
-            "finished keyword")
-    if failed:
-        log(f"{failed} job(s) stopped mid-run {jobs.MAX_RESUMES + 1} times: marked failed, rows kept")
     headless = env["SCRAPER_HEADLESS"].strip().lower() not in ("0", "false", "no", "off")
     worker = jobs.Worker(store, log, headless=headless)
     try:
         servers = make_servers(port, store, worker, env["SCRAPER_API_KEY"], a.host)
     except OSError as e:
         sys.exit(f"✗ Cannot listen on {a.host}:{port}: {e}")
+    # Only now: an engine that cannot bind (another one runs on this data) must not touch its jobs.
+    resumed, failed = store.recover()
+    if resumed:
+        log(f"{resumed} job(s) were still working when the engine last stopped: they resume from their last "
+            "finished keyword")
+    if failed:
+        log(f"{failed} job(s) stopped mid-run {jobs.MAX_RESUMES + 1} times: marked failed, rows kept")
     worker.start()
     chrome = browser.find_chrome()
     where = f"http://localhost:{port}" if a.host == "127.0.0.1" else \

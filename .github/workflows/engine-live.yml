@@ -22,7 +22,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 25  # four live steps: scrape, two proxy checks, window mode with reviews
     defaults:
       run:
         shell: bash

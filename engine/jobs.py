@@ -311,16 +311,24 @@ class Store:
             except OSError:
                 pass
 
-    def finish(self, jid, rows, cols, status, error, progress):
-        """Replace the job's CSV in one step and record how the job ended, under one lock; False
+    def rewrite(self, jid, rows, cols):
+        """Replace the job's CSV in one step (after a pass that changed rows); its new size, or None
         (nothing written) if the job was deleted."""
         with self.lock:
             if not self._exists(jid):
-                return False
+                return None
             tmp = self.csv_path(jid) + ".tmp"
             with open(tmp, "wb") as f:
                 f.write(to_csv(rows, cols))
             os.replace(tmp, self.csv_path(jid))
+            return os.path.getsize(self.csv_path(jid))
+
+    def finish(self, jid, rows, cols, status, error, progress):
+        """Replace the job's CSV in one step and record how the job ended, under one lock; False
+        (nothing written) if the job was deleted."""
+        with self.lock:
+            if self.rewrite(jid, rows, cols) is None:
+                return False
             with self.db:
                 self.db.execute("UPDATE jobs SET status = ?, error = ?, progress = ? WHERE id = ?",
                                 (status, error[:500], json.dumps(progress), jid))
@@ -414,6 +422,8 @@ class Worker(threading.Thread):
         deadline = started + budget
         stop = threading.Event()
         self._running = (jid, stop)
+        if self.stopped.is_set():  # shutdown() came between claim() and now
+            stop.set()
         if not self.store.get(jid):  # deleted between claim() and now, before cancel() could see it
             self._running = (None, None)
             return
@@ -421,9 +431,11 @@ class Worker(threading.Thread):
         reviews = d.get("reviews_max") and stage in ("search", "reviews")
         if stage == "search":
             self.store.cut(jid, p.get("bytes", 0))  # the rows of a keyword cut short are searched again
-        rows = self.store.read_rows(jid) if p.get("bytes") else []
+        rows = self.store.read_rows(jid)  # [] when the cut removed the file
         seen = {place_key(r) for r in rows}
-        errors, notes, blocked, retries, rot = [], [], False, 0, 0
+        # What an earlier run of this job saw, for its final note (a job resumed after its search).
+        errors = [p["last_error"]] * p.get("failed", 0) if p.get("last_error") else []
+        notes, blocked, retries, rot, refused = [], p.get("blocked", False), p.get("retried", 0), 0, set()
         cur = {"i": done, "kw": ""}
         if done or p.get("resumes"):
             self.log(f"job {jid} resumed at keyword {done + 1}/{len(kws)} with {len(rows)} places, {budget:.0f} s left")
@@ -457,10 +469,10 @@ class Worker(threading.Thread):
         timer.start()
         try:
             save(stage=stage, done=done, total=len(kws))
-            if (done < len(kws) or reviews) and budget > 0:
+            if ((stage == "search" and done < len(kws)) or reviews) and budget > 0 and not stop.is_set():
                 self._browser = browser.Browser(lang=locale(d), headless=self.headless)
             i = done
-            while i < len(kws) and self._browser:
+            while stage == "search" and i < len(kws) and self._browser:
                 left = deadline - time.monotonic()
                 if stop.is_set() or left <= 0:
                     break
@@ -471,17 +483,21 @@ class Worker(threading.Thread):
                 try:
                     places, reason, stats = self._collect(proxy, url, d["depth"], left, stop, on_batch)
                 except (CDPError, OSError) as e:
+                    if str(e) == LOGIN_REFUSED:
+                        refused.add(proxy)
                     if (PROXY_FAILED.search(str(e)) and len(proxies) > 1 and retries < len(BACKOFF)
-                            and not self._browser.cdp.closed and not stop.is_set()):
+                            and len(refused) < len(set(proxies)) and not self._browser.cdp.closed
+                            and not stop.is_set()):
                         retries, rot = retries + 1, rot + 1
                         self.log(f"job {jid} keyword {i + 1}/{len(kws)}: the proxy failed; retry {retries}/"
                                  f"{len(BACKOFF)} through the next proxy")
                         continue
                     errors.append(str(e))
                     self.log(f"job {jid} keyword {i + 1}/{len(kws)}: error: {e}")
-                    if self._browser.cdp.closed:  # Chrome is gone: the other keywords would fail too
+                    # Chrome is gone, or no proxy takes the job's login: the other keywords would fail too
+                    if self._browser.cdp.closed or (refused and len(refused) >= len(set(proxies))):
                         break
-                    i += 1
+                    i, retries = i + 1, 0
                     continue
                 on_batch(places, stats["batches"])  # places no batch carried (one place, the DOM fallback)
                 if stop.is_set():  # deleted, or the engine is exiting: this keyword did not finish
@@ -494,6 +510,7 @@ class Worker(threading.Thread):
                             self.log(f"job {jid} keyword {i + 1}/{len(kws)}: Google's unusual-traffic page; "
                                      f"retry {retries}/{len(BACKOFF)} in {wait} s"
                                      + (" through the next proxy" if len(proxies) > 1 else ""))
+                            save()
                             if stop.wait(wait):
                                 break
                             continue
@@ -512,13 +529,20 @@ class Worker(threading.Thread):
                     if self._browser.cdp.closed:
                         break
                 i += 1
-            if reviews and rows and self._browser and not (stop.is_set() or blocked):
-                save(stage="reviews")
-                n = self.add_reviews(rows, d, deadline, stop, proxies)
+            if stage == "search" and not stop.is_set():  # the search is over, for good: never search again
+                stage = "reviews" if reviews else "websites"
+                save(stage=stage, bytes=self.store.append(jid, [], cols), blocked=blocked, retried=retries,
+                     failed=len(errors), last_error=errors[-1] if errors else "")
+            if stage == "reviews" and rows and self._browser and not (stop.is_set() or blocked):
+                n = self.add_reviews(rows, d, deadline, stop, proxies, save)
+                self.store.rewrite(jid, rows, cols)  # keep the reviews if the engine stops during the next pass
                 self.log(f"job {jid}: reviews for {n}/{sum(1 for r in rows if r.get('place_id'))} places")
                 if not n and self.headless:
                     notes.append("no reviews: Google's limited view, which a headless Chrome gets, shows none; "
                                  "set SCRAPER_HEADLESS=0 to run Chrome as a window")
+            if stage == "reviews" and not stop.is_set():
+                stage = "websites"
+                save(stage=stage)
         except browser.BrowserError as e:
             errors.append(str(e))
             self.log(f"job {jid}: {e}")
@@ -527,16 +551,18 @@ class Worker(threading.Thread):
             if self._browser:
                 self._browser.close()
                 self._browser = None
-        if (d["email"] or d.get("socials")) and rows and not stop.is_set():
-            save(stage="websites")
+        if stage == "websites" and (d["email"] or d.get("socials")) and rows and not stop.is_set():
             n = add_site_data(rows, max(deadline - time.monotonic(), EMAIL_MIN_SECONDS), email=d["email"],
                               socials=d.get("socials"), verify=d.get("verify_emails"), stop=stop.is_set)
             self.log(f"job {jid}: website data for {n}/{sum(1 for r in rows if r['website'])} websites")
         self._running = (None, None)
         if self.stopped.is_set() and self.store.get(jid):  # the engine is exiting: resume on the next start
+            if stage != "search":  # rows a pass changed; while searching the CSV is the record already
+                self.store.rewrite(jid, rows, cols)
             save()
             self.store.update(jid, "pending")
-            self.log(f"job {jid} paused at keyword {p.get('done', 0) + 1}/{len(kws)}: resumes when the engine starts again")
+            self.log(f"job {jid} paused at keyword {p.get('done', 0) + 1}/{len(kws)} ({stage}): resumes when the "
+                     "engine starts again")
             return
         block = ("Google answered with its unusual-traffic page: this IP is rate-limited for now. "
                  + (f"Waited and retried {retries} time(s). " if retries else "") + "Wait, or add proxies")
@@ -585,7 +611,7 @@ class Worker(threading.Thread):
             if ctx and not self._browser.cdp.closed:
                 self._browser.dispose(ctx)
 
-    def add_reviews(self, rows, d, deadline, stop, proxies):
+    def add_reviews(self, rows, d, deadline, stop, proxies, save=lambda: None):
         """Review count, stars histogram and up to reviews_max reviews per place, from each place's
         panel (the result batches carry no review texts): one page load per place, until the
         deadline. The number of places that got reviews."""
@@ -613,6 +639,7 @@ class Worker(threading.Thread):
                     if k in ("user_reviews", "reviews_per_rating") or not r.get(k):
                         r[k] = str(v)
                 n += "user_reviews" in got
+                save()  # elapsed time, for a resume after a crash
         except (CDPError, OSError):
             pass  # Chrome went away: the reviews so far are kept
         finally:

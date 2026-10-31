@@ -170,7 +170,7 @@ def collect(page, url, depth=1, max_seconds=180, log=print, stop=lambda: False, 
 
         try:  # a Chrome error mid-scroll keeps the places already read
             end = time.time() + 10  # the first batch arrives with the page
-            while time.time() < end and batches.count == 0:
+            while time.time() < end and batches.count == 0 and not batches.limited:
                 take()
                 time.sleep(0.4)
             log(f"  batch {batches.count}: {len(seen)} places")
@@ -213,7 +213,7 @@ def collect(page, url, depth=1, max_seconds=180, log=print, stop=lambda: False, 
             if not seen:
                 raise
             return list(seen.values()), f"error: {e}", {"batches": batches.count, "dom_links": 0}
-        if not seen:  # the batch format changed under us: fall back to what the page shows
+        if not seen and reason != "blocked":  # the batch format changed under us: fall back to the page
             for a in links:
                 p = parse_link(a["href"], a["label"])
                 seen.setdefault(p["data_id"] or p["link"], p)
