@@ -252,15 +252,32 @@ ENGINE_STATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardi
 _LOG_TIME = re.compile(r'"time":"([^"]+)"')
 
 
+_native_seen = False
+
+def _answers_as_native():
+    """True if BASE is served by scripts/engine.py's proxy (its replies carry X-Engine)."""
+    global _native_seen
+    if not _native_seen:
+        try:
+            with _NO_PROXY.open(BASE + "/api/v1/jobs", timeout=5) as r:
+                _native_seen = (r.headers.get("X-Engine") or "").startswith("gmskit-native/")
+        except Exception:
+            pass
+    return _native_seen
+
 def native_engine():
-    """scripts/engine.py's state when it runs the engine without Docker on BASE's port, else None."""
+    """scripts/engine.py's state when it runs the engine without Docker on BASE's port, else None.
+    The state file alone is not enough: after a reboot it can be stale while Docker serves the
+    port, so the proxy's own X-Engine header decides."""
     try:
         with open(ENGINE_STATE, encoding="utf-8") as f:
             st = json.load(f)
     except (OSError, ValueError):
         return None
     u = urllib.parse.urlparse(BASE)
-    return st if u.hostname in LOCAL_HOSTS and (u.port or 80) == st.get("port") else None
+    if u.hostname not in LOCAL_HOSTS or (u.port or 80) != st.get("port"):
+        return None
+    return st if _answers_as_native() else None
 
 def _local_docker():
     return urllib.parse.urlparse(BASE).hostname in LOCAL_HOSTS and shutil.which("docker") is not None
@@ -280,8 +297,10 @@ def engine_log(since):
                 lines = f.read().decode("utf-8", "replace").splitlines()
         except (OSError, KeyError):
             return False, ""
+        # The engine's own lines ("error scraping job <id>: ...") are plain Go log lines with no
+        # JSON time, so they stay in; only timed scrapemate lines are cut at `since`.
         return True, "\n".join(l for l in lines
-                               if (m := _LOG_TIME.search(l)) and m.group(1)[:19] >= since[:19])
+                               if not (m := _LOG_TIME.search(l)) or m.group(1)[:19] >= since[:19])
     if not _local_docker():
         return False, ""
     try:

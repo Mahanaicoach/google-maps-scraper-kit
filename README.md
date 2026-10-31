@@ -81,7 +81,8 @@ Prefer clicking? http://localhost:8080 has a form; it returns the engine's raw 3
 
 **No Docker?** Replace `docker compose up -d` with `python3 scripts/engine.py start`. It downloads the
 engine's own build for macOS, Windows or Linux (about 60 MB, checked against its published SHA-256),
-runs it on this machine behind the same guard proxy, and `python3 scripts/engine.py stop` ends it.
+runs it on this machine behind the same guard proxy, and `python3 scripts/engine.py stop` ends it
+(stop it when you are done: unlike Docker, the engine's own port stays reachable from this computer).
 The first scrape downloads Chromium once (about 170 MB). Details: [SETUP.md](SETUP.md#running-without-docker).
 Already running another copy of the kit on this machine? Set the port and names in `.env` first
 (SETUP §6, "second copy"), or `docker compose up -d` takes over the other copy's containers.

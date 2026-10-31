@@ -31,10 +31,12 @@ class ConfRules(unittest.TestCase):
         self.assertIn("htmx:beforeSwap", script)
         self.assertTrue(script.endswith("</body>"))
         self.assertIn("connect-src 'self' raw.githubusercontent.com", csp)
+        self.assertIn(r"/^\s*<tbody/", script)  # nginx keeps \s; so must the native proxy
 
     def test_quotes_and_escapes(self):
         pairs, csp = engine.conf_rules(r"""sub_filter 'it\'s' "say \"hi\"";  add_header Content-Security-Policy "default-src 'self'";""")
         self.assertEqual(pairs, [("it's", 'say "hi"')])
+        self.assertEqual(engine.conf_rules(r"sub_filter 'a' '/\d+\s/';")[0], [("a", r"/\d+\s/")])
         self.assertEqual(csp, "default-src 'self'")
 
 
@@ -107,7 +109,11 @@ class Upstream(BaseHTTPRequestHandler):
             self.send_header(k, v)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def do_HEAD(self):
+        self.do_GET()
 
     def do_GET(self):
         if self.path == "/":
@@ -156,6 +162,24 @@ class Proxy(unittest.TestCase):
         code, _, body = self.fetch("/api/v1/jobs", "POST", b'{"a": 1}', {"Origin": "http://localhost:8080"})
         self.assertEqual((code, body), (200, b'{"a": 1}'))
 
+    def test_every_reply_says_it_is_the_native_proxy(self):
+        _, headers, _ = self.fetch("/api/v1/jobs")
+        self.assertTrue(headers["X-Engine"].startswith("gmskit-native/"))
+        self.assertEqual(engine.probe(self.px.server_port), "native")
+        self.assertEqual(engine.probe(self.up.server_port), "other")  # e.g. the Docker engine
+        self.assertIsNone(engine.probe(1))
+
+    def test_head_keeps_the_real_length_and_chunked_bodies_are_refused(self):
+        code, headers, body = self.fetch("/api/v1/jobs", "HEAD")
+        self.assertEqual((code, body), (200, b""))
+        self.assertEqual(headers["Content-Length"], str(len(b'{"echo": "/api/v1/jobs"}')))
+        import http.client
+        c = http.client.HTTPConnection("127.0.0.1", self.px.server_port, timeout=10)
+        c.putrequest("POST", "/api/v1/jobs"); c.putheader("Transfer-Encoding", "chunked"); c.endheaders()
+        c.send(b"2\r\n{}\r\n0\r\n\r\n")
+        r = c.getresponse(); r.read(); c.close()
+        self.assertEqual(r.status, 411)
+
     def test_html_gets_the_page_fixes_and_csp_json_does_not(self):
         code, headers, body = self.fetch("/")
         self.assertEqual(body, b"<a href=x>kit</a><script>x</script></body>")
@@ -186,7 +210,8 @@ class ScrapeHooks(unittest.TestCase):
         with open(self.state, "w") as f:
             json.dump({"port": 8080, "log": self.log}, f)
         self.patches = [mock.patch.object(scrape, "ENGINE_STATE", self.state),
-                        mock.patch.object(scrape, "BASE", "http://localhost:8080")]
+                        mock.patch.object(scrape, "BASE", "http://localhost:8080"),
+                        mock.patch.object(scrape, "_answers_as_native", return_value=True)]
         for p in self.patches:
             p.start()
 
@@ -204,6 +229,17 @@ class ScrapeHooks(unittest.TestCase):
             self.assertIsNone(scrape.native_engine())
         with mock.patch.object(scrape, "BASE", "http://scraper.example:8080"):
             self.assertIsNone(scrape.native_engine())
+
+    def test_stale_state_with_docker_on_the_port_is_not_native(self):
+        # After a reboot state.json can outlive the engine while Docker serves 8080.
+        with mock.patch.object(scrape, "_answers_as_native", return_value=False):
+            self.assertIsNone(scrape.native_engine())
+            self.assertEqual(scrape.restart_hint(), f"docker restart {scrape.ENGINE_CONTAINER}")
+
+    def test_engine_error_reads_the_plain_go_log_lines(self):
+        self.write_log("2026/10/31 04:37:35 error scraping job abc-123: bad proxy url",
+                       '{"time":"2026-10-31T01:00:00Z","message":"scrapemate exited"}')
+        self.assertEqual(scrape.engine_error("abc-123"), "bad proxy url")
 
     def test_log_read_from_since_on(self):
         self.write_log('{"time":"2026-10-31T01:00:00.5Z","message":"scrapemate exited"}',

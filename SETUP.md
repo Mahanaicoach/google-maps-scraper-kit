@@ -237,10 +237,15 @@ python3 scripts/engine.py stop      # instead of docker compose stop
 ```
 
 - **What it does.** The first `start` downloads the engine's v1.18.1 release build from its GitHub
-  page (about 60 MB) and checks it against the SHA-256 published there; a mismatch is deleted, never
-  run. It starts the engine on a private port and serves http://localhost:8080 through a small Python
-  proxy with the same Host and Origin checks and page fixes as the Docker setup (it reads them from
-  `ui-branding.conf`). Scripts, slash commands and the web UI work exactly as with Docker.
+  page (about 60 MB) and checks it against the SHA-256 pinned in `engine.py`; a mismatch is deleted,
+  never run. It starts the engine on a private port and serves http://localhost:8080 through a small
+  Python proxy with the same Host and Origin checks and page fixes as the Docker setup (it reads them
+  from `ui-branding.conf`). Scripts, slash commands and the web UI use it the same way.
+- **One difference from Docker.** Docker hides the engine inside its own network; here its private
+  port is open on this machine (bound to 127.0.0.1 only, so not to your network). The engine has no
+  password, so other programs on this computer, or a web page that finds the port, could reach it
+  without the proxy's checks. Stop it when you are not scraping: `python3 scripts/engine.py stop`.
+- **After a reboot** run `start` again; it cleans up after itself.
 - **First scrape.** The engine downloads Chromium once, about 170 MB, into Playwright's cache
   (macOS `~/Library/Caches/ms-playwright`, Linux `~/.cache/ms-playwright`, Windows
   `%LOCALAPPDATA%\ms-playwright`).

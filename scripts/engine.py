@@ -9,8 +9,8 @@ SHA-256, and starts it on this machine behind the same guard proxy the Docker se
 
 Standard library only. The engine listens on a private port; this script's proxy serves
 http://localhost:8080 (SCRAPER_PORT in .env) with the Host and Origin checks, page fixes and
-Content-Security-Policy read from ui-branding.conf, so scripts, slash commands and the web UI work
-exactly as with Docker. Everything lives in .engine/ in the kit folder; delete it to remove the engine.
+Content-Security-Policy read from ui-branding.conf, so scripts, slash commands and the web UI use it
+as they use Docker. Everything lives in .engine/ in the kit folder; delete it to remove the engine.
 """
 import hashlib, http.client, json, os, platform, re, signal, socket, subprocess, sys, time
 import urllib.parse, urllib.request
@@ -25,12 +25,16 @@ for _stream in (sys.stdout, sys.stderr):  # ▶ ✓ ✗ on a Windows cp1252 cons
 KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HOME = os.path.join(KIT, ".engine")
 STATE = os.path.join(HOME, "state.json")
+LOCK = os.path.join(HOME, "start.lock")
 LOG = os.path.join(HOME, "engine.log")
+PROXY_LOG = os.path.join(HOME, "proxy.log")
 CONF = os.path.join(KIT, "ui-branding.conf")
 VERSION = "1.18.1"  # same engine release as the Docker image in docker-compose.yml
+MARK = "gmskit-native/" + VERSION  # X-Engine header on every proxy reply: tells native from Docker
+LOG_KEEP = 2_000_000  # bytes of engine.log kept across starts
 RELEASE = f"https://github.com/gosom/google-maps-scraper/releases/download/v{VERSION}/"
-# Release assets and their SHA-256 as GitHub publishes them. A download that does not match is
-# deleted, never run. Apple Silicon runs the Intel build through Rosetta; there is no arm64 build.
+# Release assets and their SHA-256, pinned here from GitHub's release page. A download that does not
+# match is deleted, never run. Apple Silicon runs the Intel build through Rosetta (no arm64 build).
 BUILDS = {
     "darwin": ("google_maps_scraper-1.18.1-darwin-amd64",
                "9793889f88df54944c8faaf8ed90363c60b324d15444dd7bb692662f9aa50a75"),
@@ -44,20 +48,18 @@ HOST_OK = re.compile(rf"^{LOCAL}(:\d+)?$", re.I)
 ORIGIN_OK = re.compile(rf"^(https?://{LOCAL}(:\d+)?)?$", re.I)
 HOP = {"connection", "keep-alive", "transfer-encoding", "upgrade", "proxy-connection", "te",
        "trailer", "content-length", "content-encoding", "accept-encoding"}
+_NO_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # HTTP_PROXY must not catch localhost
 
 
 def public_port():
-    """SCRAPER_PORT from the environment or the kit's .env, like docker-compose.yml."""
-    port = os.environ.get("SCRAPER_PORT")
-    try:
-        with open(os.path.join(KIT, ".env"), encoding="utf-8") as f:
-            for line in f:
-                k, sep, v = line.strip().partition("=")
-                if sep and k == "SCRAPER_PORT" and not port:
-                    port = v.strip().strip("\"'")
-    except OSError:
-        pass
-    return int(port or 8080)
+    """The port scrape.py talks to: SCRAPER_PORT / SCRAPER_BASE_URL from the environment or .env,
+    read by scrape.py's own loader so both always agree."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import scrape
+    u = urllib.parse.urlparse(scrape.BASE)
+    if u.hostname not in ("localhost", "127.0.0.1", "::1"):
+        sys.exit(f"✗ SCRAPER_BASE_URL points at {scrape.BASE}; engine.py runs the engine on this machine only.")
+    return u.port or 80
 
 
 def build():
@@ -100,7 +102,7 @@ def binary(download=True):
             f.write(chunk)
     if sha256(tmp) != digest:
         os.remove(tmp)
-        sys.exit("✗ The download does not match the engine's published SHA-256, so it was deleted "
+        sys.exit("✗ The download does not match the SHA-256 pinned in engine.py, so it was deleted "
                  "and not run. Try again, or use Docker.")
     os.replace(tmp, path)
     os.chmod(path, 0o755)
@@ -116,12 +118,16 @@ def read_state():
         return None
 
 
-def answers(port, timeout=2):
+def probe(port, timeout=2):
+    """"native", "other" (something else answers, e.g. the Docker engine) or None (nothing)."""
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/v1/jobs", timeout=timeout) as r:
-            return r.status == 200
+        with _NO_PROXY.open(f"http://127.0.0.1:{port}/api/v1/jobs", timeout=timeout) as r:
+            return "native" if (r.headers.get("X-Engine") or "").startswith("gmskit-native/") else "other"
+    except urllib.error.HTTPError as e:
+        e.close()
+        return "other"
     except Exception:
-        return False
+        return None
 
 
 def port_free(port):
@@ -137,25 +143,36 @@ def port_free(port):
 
 def spawn(cmd, log):
     """Start a process that outlives this script, its output appended to `log`."""
-    out = open(log, "ab")
-    if os.name == "nt":
-        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    with open(log, "ab") as out:  # the child keeps its own handle
+        if os.name == "nt":
+            flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+            return subprocess.Popen(cmd, stdout=out, stderr=out, stdin=subprocess.DEVNULL,
+                                    creationflags=flags, cwd=HOME)
         return subprocess.Popen(cmd, stdout=out, stderr=out, stdin=subprocess.DEVNULL,
-                                creationflags=flags, cwd=HOME).pid
-    return subprocess.Popen(cmd, stdout=out, stderr=out, stdin=subprocess.DEVNULL,
-                            start_new_session=True, cwd=HOME).pid
+                                start_new_session=True, cwd=HOME)
+
+
+def command_line(pid):
+    """The command line of `pid`, or "" if it is gone or cannot be read."""
+    try:
+        if os.name == "nt":
+            ps = ["powershell", "-NoProfile", "-Command",
+                  f"(Get-CimInstance Win32_Process -Filter 'ProcessId={int(pid)}').CommandLine"]
+            return subprocess.run(ps, capture_output=True, text=True, errors="replace", timeout=20).stdout
+        if os.path.exists(f"/proc/{int(pid)}/cmdline"):
+            with open(f"/proc/{int(pid)}/cmdline", "rb") as f:
+                return f.read().replace(b"\0", b" ").decode("utf-8", "replace")
+        return subprocess.run(["ps", "-p", str(int(pid)), "-o", "command="], capture_output=True,
+                              text=True, errors="replace", timeout=10).stdout
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return ""
 
 
 def ours(pid):
     """True if `pid` is still this kit's engine or proxy. After a reboot or crash the pid in
     state.json may belong to an unrelated process, which stop must never kill."""
-    if os.name == "nt":
-        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-                             capture_output=True, text=True, errors="replace").stdout.lower()
-        return "google_maps_scraper" in out or "python" in out or "py.exe" in out
-    out = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True,
-                         errors="replace").stdout
-    return HOME in out or (os.path.basename(__file__) in out and "_proxy" in out)
+    cmd = command_line(pid)
+    return HOME in cmd or (os.path.basename(__file__) in cmd and "_proxy" in cmd)
 
 
 def kill(pid):
@@ -181,38 +198,90 @@ def kill(pid):
         pass
 
 
+def tail(path, lines=15):
+    try:
+        with open(path, "rb") as f:
+            f.seek(max(0, os.path.getsize(path) - 8000))
+            return "\n".join(f.read().decode("utf-8", "replace").splitlines()[-lines:])
+    except OSError:
+        return ""
+
+
+def trim_log():
+    """Keep the last LOG_KEEP bytes of engine.log, so it cannot grow without bound across starts."""
+    try:
+        if os.path.getsize(LOG) > LOG_KEEP:
+            with open(LOG, "rb") as f:
+                f.seek(-LOG_KEEP, os.SEEK_END)
+                keep = f.read()
+            with open(LOG, "wb") as f:
+                f.write(keep)
+    except OSError:
+        pass
+
+
+def busy(port):
+    hint = f"netstat -ano | findstr :{port}" if os.name == "nt" else f"lsof -nP -iTCP:{port} -sTCP:LISTEN"
+    sys.exit(f"✗ Port {port} is in use. Is the Docker engine running? Stop it with `docker compose stop`,\n"
+             f"  or set SCRAPER_PORT in .env to a free port. To see what holds it: {hint}")
+
+
 def start(download=True):
     port = public_port()
-    st = read_state()
-    if st and answers(port):
-        print(f"✓ The engine is already running: http://localhost:{port}")
+    seen = probe(port)
+    if seen == "native":
+        print(f"✓ The engine is already running without Docker: http://localhost:{port}")
         return
-    if st:
-        stop(quiet=True)
+    if seen == "other":
+        busy(port)
+    if read_state():
+        stop(quiet=True)  # stale state from a crash or reboot: clean up whatever is still ours
     if not port_free(port):
-        sys.exit(f"✗ Port {port} is in use. Is the Docker engine running? Stop it with "
-                 f"`docker compose stop`, or set SCRAPER_PORT in .env to a free port.")
-    path = binary(download)
+        busy(port)
+    os.makedirs(HOME, exist_ok=True)
+    try:  # one start at a time: a second one waits for nothing and stops here
+        lock = os.open(LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        if time.time() - os.path.getmtime(LOCK) < 300:
+            sys.exit("✗ Another `engine.py start` is running. Wait for it, or delete .engine/start.lock.")
+        os.remove(LOCK)  # left by a start that crashed
+        lock = os.open(LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    try:
+        _start(port, binary(download))
+    finally:
+        os.close(lock)
+        os.remove(LOCK)
+
+
+def _start(port, path):
     with socket.socket() as s:  # a free private port for the engine itself
         s.bind(("127.0.0.1", 0))
         engine_port = s.getsockname()[1]
     os.makedirs(os.path.join(HOME, "data"), exist_ok=True)
-    engine = spawn([path, "-web", "-addr", f"127.0.0.1:{engine_port}",
-                    "-data-folder", os.path.join(HOME, "data"), "-c", "4"], LOG)
-    proxy = spawn([sys.executable, os.path.abspath(__file__), "_proxy", str(port), str(engine_port)],
-                  os.path.join(HOME, "proxy.log"))
+    trim_log()
+    try:
+        engine = spawn([path, "-web", "-addr", f"127.0.0.1:{engine_port}",
+                        "-data-folder", os.path.join(HOME, "data"), "-c", "4"], LOG)
+        proxy = spawn([sys.executable, os.path.abspath(__file__), "_proxy", str(port), str(engine_port)],
+                      PROXY_LOG)
+    except OSError as e:  # e.g. antivirus blocking the downloaded program
+        sys.exit(f"✗ Could not start the engine: {e}")
     with open(STATE, "w", encoding="utf-8") as f:
-        json.dump({"engine_pid": engine, "proxy_pid": proxy, "port": port,
+        json.dump({"engine_pid": engine.pid, "proxy_pid": proxy.pid, "port": port,
                    "engine_port": engine_port, "log": LOG, "version": VERSION}, f)
-    for _ in range(60):
-        if answers(port):
+    for _ in range(90):
+        if probe(port) == "native":
             print(f"✓ Engine running without Docker: http://localhost:{port}\n"
                   f"  The first scrape downloads Chromium (about 170 MB) once.\n"
                   f"  Stop it with: python3 scripts/engine.py stop")
             return
+        for proc, log, what in ((engine, LOG, "engine"), (proxy, PROXY_LOG, "proxy")):
+            if proc.poll() is not None:
+                stop(quiet=True)
+                sys.exit(f"✗ The {what} exited at once (code {proc.returncode}). The end of {log}:\n{tail(log)}")
         time.sleep(1)
     stop(quiet=True)
-    sys.exit(f"✗ The engine did not start. Its log: {LOG}")
+    sys.exit(f"✗ The engine did not answer within 90 seconds. The end of {LOG}:\n{tail(LOG)}")
 
 
 def stop(quiet=False):
@@ -233,10 +302,13 @@ def stop(quiet=False):
 
 
 def status():
-    st = read_state()
     port = public_port()
-    if st and answers(port):
-        print(f"✓ Running without Docker on http://localhost:{port} (engine {st.get('version')})")
+    seen = probe(port)
+    if seen == "native":
+        print(f"✓ Running without Docker on http://localhost:{port} (engine {VERSION})")
+    elif seen == "other":
+        print(f"ℹ Port {port} answers, but not as this script's engine (the Docker engine, probably).")
+        sys.exit(1)
     else:
         print("✗ Not running. Start it with: python3 scripts/engine.py start")
         sys.exit(1)
@@ -245,9 +317,10 @@ def status():
 # ── The guard proxy: the nginx `ui` service of docker-compose.yml, in Python ──
 def conf_rules(text):
     """(sub_filter pairs, Content-Security-Policy) from ui-branding.conf, so Docker and native
-    mode share one set of page fixes."""
+    mode share one set of page fixes. Unescapes only what nginx does (\\" \\' \\\\), so a regex
+    such as \\s in the injected script survives."""
     q = r"""('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")"""
-    unq = lambda s: re.sub(r"\\(.)", r"\1", s[1:-1])
+    unq = lambda s: re.sub(r"""\\(["'\\])""", r"\1", s[1:-1])
     pairs = [(unq(a), unq(b)) for a, b in re.findall(rf"sub_filter\s+{q}\s+{q}\s*;", text, re.S)]
     csp = re.search(rf"add_header\s+Content-Security-Policy\s+{q}", text)
     return pairs, unq(csp.group(1)) if csp else None
@@ -260,11 +333,12 @@ def make_handler(engine_port, pairs, csp):
         def log_message(self, *a):
             pass
 
-        def _send(self, code, headers, body):
+        def _send(self, code, headers, body, length=None):
             self.send_response(code)
             for k, v in headers:
                 self.send_header(k, v)
-            self.send_header("Content-Length", str(len(body)))
+            self.send_header("X-Engine", MARK)
+            self.send_header("Content-Length", str(len(body) if length is None else length))
             self.end_headers()
             if self.command != "HEAD":
                 self.wfile.write(body)
@@ -276,18 +350,25 @@ def make_handler(engine_port, pairs, csp):
                 return self._send(421, [], b"")
             if not ORIGIN_OK.match(self.headers.get("Origin", "")):
                 return self._send(403, [], b"")
-            n = int(self.headers.get("Content-Length") or 0)
-            body = self.rfile.read(n) if n else None
-            headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP}
-            conn = http.client.HTTPConnection("127.0.0.1", engine_port, timeout=600)
+            if "chunked" in (self.headers.get("Transfer-Encoding") or "").lower():
+                self.close_connection = True
+                return self._send(411, [], b"send a Content-Length")
             try:
-                conn.request(self.command, self.path, body, headers)
-                resp = conn.getresponse()
-                data = resp.read()
-            except OSError:
+                n = int(self.headers.get("Content-Length") or 0)
+                body = self.rfile.read(n) if n else None
+                headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP}
+                conn = http.client.HTTPConnection("127.0.0.1", engine_port, timeout=600)
+                try:
+                    conn.request(self.command, self.path, body, headers)
+                    resp = conn.getresponse()
+                    data = resp.read()
+                finally:
+                    conn.close()
+            except (ValueError, UnicodeError):
+                self.close_connection = True
+                return self._send(400, [], b"bad request")
+            except (OSError, http.client.HTTPException):
                 return self._send(502, [], b"engine not reachable")
-            finally:
-                conn.close()
             out = [(k, v) for k, v in resp.getheaders() if k.lower() not in HOP]
             if "text/html" in (resp.getheader("Content-Type") or ""):
                 html = data.decode("utf-8", "replace")
@@ -297,7 +378,8 @@ def make_handler(engine_port, pairs, csp):
                 if csp:
                     out = [(k, v) for k, v in out if k.lower() != "content-security-policy"]
                     out.append(("Content-Security-Policy", csp))
-            self._send(resp.status, out, data)
+            length = resp.getheader("Content-Length") if self.command == "HEAD" else None
+            self._send(resp.status, out, data, length)
 
         do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = do_HEAD = _forward
     return Proxy

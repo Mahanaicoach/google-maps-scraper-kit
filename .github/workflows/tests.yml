@@ -76,3 +76,6 @@ jobs:
       - run: python scripts/engine.py status
       - if: always()
         run: python scripts/engine.py stop
+      - name: stop really stopped it
+        shell: bash
+        run: "! python scripts/engine.py status"
