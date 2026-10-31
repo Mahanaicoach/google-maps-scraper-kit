@@ -1240,6 +1240,11 @@ class ApiP3(Server):
         self.assertNotIn("lobstr.io</a>", ui)
         self.assertIn("socials: $('socials').checked", ui)
         self.assertIn("if (proxies.length) body.proxies = proxies", ui)
+        # sponsor tiles: hidden until sponsors.json lists one Mahan marked "ui": true, https links only, four at most
+        self.assertIn('<aside class="sponsors" id="sponsors" aria-labelledby="h-sp" hidden>', ui)
+        for rule in ("s.ui === true", "s.url.startsWith('https://')", ".slice(0, 4)", "noopener noreferrer sponsored"):
+            self.assertIn(rule, ui)
+        self.assertNotIn(".innerHTML", ui)  # sponsor text is set as text, never parsed as HTML
         self.assertIn(serve.CATEGORIES, ui)  # loaded by the browser from GitHub, pinned to a commit
         self.assertRegex(serve.CATEGORIES, r"/[0-9a-f]{40}/")
         script = re.search(r"<script nonce=[^>]+>(.*)</script>", ui, re.S).group(1)

@@ -153,12 +153,12 @@ PAGE = """<!doctype html>
 <title>Google Maps Scraper Kit</title>
 <style nonce="{nonce}">
 :root {{ color-scheme: light dark; --paper: #f5f3ee; --sheet: #fffdf8; --ink: #17191c; --soft: #5b5f66; --rule: #dcd8ce;
-  --go: #0b7a5b; --go-ink: #fff; --ring: #2f8f73; --bad: #b42318; --tag: #8a5a00;
+  --go: #0b7a5b; --go-ink: #fff; --ring: #2f8f73; --bad: #b42318; --tag: #8a5a00; --alt: #3d5a80;
   --serif: ui-serif, "New York", Charter, "Iowan Old Style", Georgia, serif;
   --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }}
 @media (prefers-color-scheme: dark) {{ :root {{ --paper: #111312; --sheet: #181b19; --ink: #ebe8e1; --soft: #a3a69f;
-  --rule: #2c312d; --go: #46c49a; --go-ink: #0b1410; --ring: #7fdcbc; --bad: #ff8a7a; --tag: #e7b45a; }} }}
+  --rule: #2c312d; --go: #46c49a; --go-ink: #0b1410; --ring: #7fdcbc; --bad: #ff8a7a; --tag: #e7b45a; --alt: #8fb3de; }} }}
 * {{ box-sizing: border-box; }}
 body {{ margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.5 var(--sans); }}
 main {{ max-width: 860px; margin: 0 auto; padding: 0 20px 64px; }}
@@ -168,10 +168,24 @@ a {{ color: inherit; text-underline-offset: 3px; }} a:hover {{ color: var(--go);
 h1 {{ margin: 0; font: 600 1.6rem/1.2 var(--serif); letter-spacing: -.01em; }}
 .top nav {{ display: flex; gap: 16px; font-size: .9rem; color: var(--soft); }}
 .mono {{ font-family: var(--mono); font-size: .85em; }} .soft {{ color: var(--soft); font-size: .875rem; }}
-.sponsors {{ display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; padding: 10px 0;
-  border-bottom: 1px solid var(--rule); font-size: .875rem; color: var(--soft); }}
-.sponsors .tag {{ color: var(--tag); font: 600 .7rem/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; }}
-.sponsors a b {{ color: var(--ink); }} .sponsors .join {{ margin-left: auto; }}
+.sponsors {{ padding-top: 18px; }}
+.sp-head {{ display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }}
+.tag {{ color: var(--tag); font: 600 .7rem/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; }}
+.sp-head a {{ color: var(--soft); font-size: .8rem; }}
+.sp-grid {{ display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); }}
+.sp {{ display: flex; align-items: center; gap: 14px; min-height: 76px; padding: 14px 16px; color: var(--ink);
+  text-decoration: none; background: var(--sheet); border: 1px solid var(--rule); border-radius: 12px;
+  transition: border-color .15s, box-shadow .15s; }}
+.sp:hover {{ color: var(--ink); border-color: var(--ink); box-shadow: 0 8px 20px -14px rgba(0, 0, 0, .5); }}
+.sp-mark {{ flex: none; display: grid; place-items: center; width: 42px; height: 42px; border-radius: 10px;
+  color: var(--sheet); background: var(--brand, var(--go)); font: 700 1.15rem/1 var(--serif); }}
+.sp:nth-child(2) .sp-mark {{ background: var(--brand, var(--ink)); }} .sp:nth-child(3) .sp-mark {{ background: var(--brand, var(--tag)); }}
+.sp:nth-child(4) .sp-mark {{ background: var(--brand, var(--alt)); }}  /* neutral per tile, never a guessed brand colour */
+.sp-body {{ display: grid; gap: 2px; min-width: 0; }} .sp-body b {{ font: 600 1.02rem/1.25 var(--serif); }}
+.sp-line {{ display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+  color: var(--soft); font-size: .85rem; line-height: 1.4; }}
+.sp-go {{ flex: none; margin-left: auto; color: var(--soft); transition: transform .15s, color .15s; }}
+.sp:hover .sp-go {{ color: var(--go); transform: translate(2px, -2px); }}
 h2 {{ margin: 0 0 12px; font: 600 1.15rem/1.3 var(--serif); }}
 section {{ padding: 28px 0 0; }}
 form {{ display: grid; gap: 14px; }}
@@ -230,14 +244,16 @@ td.when {{ font-family: var(--mono); font-size: .85rem; color: var(--soft); whit
 progress {{ display: block; width: 100%; max-width: 200px; height: 6px; margin-top: 8px; accent-color: var(--go); }}
 .note {{ margin-top: 4px; color: var(--soft); font-size: .85rem; }}
 .row {{ display: flex; flex-wrap: wrap; gap: 6px; }} .scroll {{ overflow-x: auto; }} [hidden] {{ display: none !important; }}
-@media (max-width: 560px) {{ h1 {{ font-size: 1.35rem; }} button.primary {{ width: 100%; }} .sponsors .join {{ margin-left: 0; }}
+@media (max-width: 560px) {{ h1 {{ font-size: 1.35rem; }} button.primary {{ width: 100%; }}
   thead {{ display: none; }} tr, td {{ display: block; }} tr {{ padding: 12px 0; border-bottom: 1px solid var(--rule); }}
   td {{ padding: 2px 0; border: 0; }} td.when {{ font-size: .8rem; }} td .row {{ margin-top: 8px; }} }}
 @media (prefers-reduced-motion: reduce) {{ * {{ transition: none !important; }} }}
 </style></head><body><main>
 <header class="top"><h1>Google Maps Scraper Kit</h1>
-<nav><span class="mono">v{version}</span><a href="/api/docs">API</a><a href="{repo}" rel="noopener">GitHub</a></nav></header>
-<div class="sponsors" id="sponsors"><a class="join" href="https://github.com/sponsors/Mahanaicoach" rel="noopener">Become a sponsor</a></div>
+<nav><span class="mono">v{version}</span><a href="/api/docs">API</a><a href="{repo}" rel="noopener">GitHub</a>
+<a href="https://github.com/sponsors/Mahanaicoach" rel="noopener">Sponsor</a></nav></header>
+<aside class="sponsors" id="sponsors" aria-labelledby="h-sp" hidden><div class="sp-head"><span class="tag" id="h-sp">Sponsored by</span>
+  <a href="https://github.com/sponsors/Mahanaicoach" rel="noopener">Become a sponsor</a></div><div class="sp-grid" id="sp-grid"></div></aside>
 <section aria-labelledby="h-new"><h2 id="h-new">New search</h2>
 <form id="f">
   <label class="sr" for="keywords">What to search, one per line</label>
@@ -387,23 +403,35 @@ $('kwpick').addEventListener('change', () => {{  // a picked business type becom
     try {{ localStorage.setItem(key, JSON.stringify({{t: Date.now(), names}})); }} catch (e) {{}}
   }}).catch(() => {{}});
 }})();
-(function () {{  // sponsor strip: only the entries Mahan marks "ui": true in sponsors.json, as text, https links only
-  const box = $('sponsors'), key = 'gmskit-sponsors', day = 86400000;
+(function () {{  // sponsor tiles: only the entries Mahan marks "ui": true in sponsors.json, as text, https links only
+  const box = $('sponsors'), grid = $('sp-grid'), key = 'gmskit-sponsors', day = 86400000;
+  const svg = (tag, attrs) => {{ const e = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]); return e; }};
   function render(list) {{
-    const shown = Array.isArray(list) ? list.filter(s => s && s.ui === true && typeof s.name === 'string'
+    const shown = Array.isArray(list) ? list.filter(s => s && s.ui === true && typeof s.name === 'string' && s.name.trim()
       && typeof s.url === 'string' && s.url.startsWith('https://')).slice(0, 4) : [];
     if (!shown.length) return;
-    const join = box.lastElementChild, tag = document.createElement('span');
-    tag.className = 'tag'; tag.textContent = 'Sponsored';
-    box.replaceChildren(tag);
+    grid.replaceChildren();
     for (const s of shown) {{
-      const a = document.createElement('a'), b = document.createElement('b');
-      a.href = s.url; a.target = '_blank'; a.rel = 'noopener noreferrer sponsored';
-      b.textContent = s.name.slice(0, 40); a.appendChild(b);
-      if (typeof s.tagline === 'string' && s.tagline) a.append(' ' + s.tagline.slice(0, 120));
-      box.appendChild(a);
+      const a = document.createElement('a'), mark = document.createElement('span'), body = document.createElement('span');
+      a.className = 'sp'; a.href = s.url; a.target = '_blank'; a.rel = 'noopener noreferrer sponsored';
+      mark.className = 'sp-mark'; mark.setAttribute('aria-hidden', 'true'); mark.textContent = s.name.trim()[0].toUpperCase();
+      if (/^#[0-9a-f]{{6}}$/i.test(s.color || '')) {{  // the sponsor's own colour, with ink or white for contrast
+        const n = parseInt(s.color.slice(1), 16), lum = (0.299 * (n >> 16) + 0.587 * (n >> 8 & 255) + 0.114 * (n & 255)) / 255;
+        mark.style.setProperty('--brand', s.color); mark.style.color = lum > .6 ? '#17191c' : '#fff';
+      }}
+      const b = document.createElement('b'); b.textContent = s.name.slice(0, 40);
+      body.className = 'sp-body'; body.appendChild(b);
+      if (typeof s.tagline === 'string' && s.tagline.trim()) {{
+        const t = s.tagline.trim().slice(0, 120), line = document.createElement('span');
+        line.className = 'sp-line'; line.textContent = t[0].toUpperCase() + t.slice(1); body.appendChild(line);
+      }}
+      const go = svg('svg', {{width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
+        'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', class: 'sp-go', 'aria-hidden': 'true'}});
+      go.appendChild(svg('path', {{d: 'M7 17L17 7M8 7h9v9'}}));
+      a.append(mark, body, go); grid.appendChild(a);
     }}
-    box.appendChild(join);
+    box.hidden = false;
   }}
   try {{
     const c = JSON.parse(localStorage.getItem(key) || 'null');
