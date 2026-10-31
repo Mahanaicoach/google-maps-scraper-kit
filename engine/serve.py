@@ -323,6 +323,16 @@ class Server(ThreadingHTTPServer):
         self.server_name, self.server_port = "localhost", self.server_address[1]
 
 
+def port_taken(port):
+    """True if something answers on 127.0.0.1:port. With SO_REUSEADDR, macOS lets a new server bind
+    127.0.0.1:port while another listens on *:port (the Docker engine), and takes its traffic."""
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=1).close()
+        return True
+    except OSError:
+        return False
+
+
 class Server6(Server):
     address_family = socket.AF_INET6
 
@@ -330,6 +340,8 @@ class Server6(Server):
 def make_servers(port, store, worker, api_key=""):
     """The server on 127.0.0.1:port, plus one on [::1]:port when this machine has IPv6 loopback
     (Windows tries ::1 first for "localhost" and waits ~2 s before falling back to 127.0.0.1)."""
+    if port and port_taken(port):
+        raise OSError(f"something already listens on port {port}")
     servers = [Server(("127.0.0.1", port), Handler)]
     try:
         servers.append(Server6(("::1", servers[0].server_address[1]), Handler))
@@ -351,6 +363,7 @@ def main():
     except ValueError:
         sys.exit(f"✗ SCRAPER_PORT is not a number: {env['SCRAPER_PORT']!r}")
     browser.make_home()
+    browser.sweep_profiles()
     store = jobs.Store(a.data)
     if n := store.recover():
         log(f"{n} job(s) were still working when the engine last stopped: marked failed, rows kept")

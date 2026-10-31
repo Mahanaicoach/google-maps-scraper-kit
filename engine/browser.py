@@ -83,11 +83,43 @@ def find_chrome():
         return os.environ["CHROME"]
     for c in CANDIDATES.get(platform.system(), []):
         c = os.path.expandvars(c)
+        if os.sep not in c:
+            c = shutil.which(c) or ""
+            if is_snap(c):  # Ubuntu's chromium: the snap's private /tmp hides DevToolsActivePort
+                continue
         if os.path.isfile(c):
             return c
-        if os.sep not in c and shutil.which(c):
-            return shutil.which(c)
     return shell_path() if os.path.isfile(shell_path()) else None
+
+
+def is_snap(path):
+    """True for a snap browser: /snap/bin/chromium, or Ubuntu's /usr/bin/chromium-browser script
+    that runs it."""
+    if path.startswith("/snap/") or os.path.realpath(path).startswith("/snap/"):
+        return True
+    try:
+        with open(path, "rb") as f:
+            head = f.read(4096)
+    except OSError:
+        return False
+    return head.startswith(b"#!") and b"/snap/" in head
+
+
+def sweep_profiles(days=2):
+    """Remove temporary Chrome profiles older than `days` left by an engine that was killed
+    (taskkill /F on Windows skips the cleanup). No job runs that long."""
+    root, cutoff = tempfile.gettempdir(), time.time() - days * 86400
+    try:
+        names = [n for n in os.listdir(root) if n.startswith("gmskit-chrome-")]
+    except OSError:
+        return
+    for n in names:
+        path = os.path.join(root, n)
+        try:
+            if os.path.getmtime(path) < cutoff:
+                shutil.rmtree(path, ignore_errors=True)
+        except OSError:
+            pass
 
 
 def download(log=print, plat=None, opener=urllib.request.urlopen):
@@ -174,8 +206,8 @@ class Browser:
                 f"--lang={lang}", "--disable-dev-shm-usage"]
         if headless and "headless-shell" not in os.path.basename(self.path):  # the shell is always headless
             args.append("--headless=new")
-        if proxy:
-            args.append(f"--proxy-server={proxy}")
+        if proxy:  # Chrome knows socks5:// only; it resolves names through a SOCKS5 proxy anyway
+            args.append("--proxy-server=" + ("socks5://" + proxy[10:] if proxy.startswith("socks5h://") else proxy))
         if platform.system() == "Linux" and hasattr(os, "geteuid") and os.geteuid() == 0:
             args.append("--no-sandbox")  # Chrome refuses to run as root with its sandbox (containers)
         self.proc, self.cdp = None, None
@@ -191,10 +223,13 @@ class Browser:
                 if b"No usable sandbox" not in self._err.read() or "--no-sandbox" in args:
                     raise
                 port, path = self._launch(args + ["--no-sandbox"], timeout)
+            self.cdp = CDP(f"ws://127.0.0.1:{port}{path}", timeout=timeout)
         except BrowserError:
             self.close()
             raise
-        self.cdp = CDP(f"ws://127.0.0.1:{port}{path}", timeout=timeout)
+        except Exception as e:  # the DevTools websocket refused or broke: never leave Chrome running
+            self.close()
+            raise BrowserError(f"Could not connect to Chrome's DevTools port: {e}") from e
 
     def _launch(self, args, timeout):
         """Start Chrome; (DevTools port, path) once it listens, else BrowserError (Chrome stopped)."""

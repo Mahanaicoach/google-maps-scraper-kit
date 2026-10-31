@@ -59,6 +59,13 @@ def probe(port, timeout=2):
 
 
 def port_free(port):
+    """Nothing listens on the port and it can be bound. The connect test matters on macOS, where
+    SO_REUSEADDR lets 127.0.0.1:port bind while another server listens on *:port."""
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=1).close()
+        return False
+    except OSError:
+        pass
     with socket.socket() as s:
         if os.name != "nt":  # like the engine's own server: connections in TIME_WAIT do not block
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

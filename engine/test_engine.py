@@ -6,7 +6,8 @@ No network, no Chrome, no Docker.
 
     python3 engine/test_engine.py
 """
-import csv, hashlib, http.client, io, json, os, re, shutil, sys, tempfile, threading, time, unittest, zipfile
+import csv, hashlib, http.client, importlib.util, io, json, os, re, shutil, socket, subprocess, sys, tempfile
+import threading, time, unittest, zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -131,6 +132,7 @@ class Validate(unittest.TestCase):
         name, d = jobs.validate(dict(GOOD, lat=30.5, lon=-97, proxies=["socks5://127.0.0.1:1080"]))
         self.assertEqual((name, d["lat"], d["lon"], d["depth"], d["zoom"], d["email"]), ("t", "30.5", "-97", 1, 15, False))
         self.assertEqual(d["proxies"], ["socks5://127.0.0.1:1080"])
+        self.assertEqual(jobs.validate(dict(GOOD, radius=5_000_000))[1]["radius"], 5_000_000)
 
 
 class Rows(unittest.TestCase):
@@ -202,6 +204,45 @@ class Worker(Fakes):
         self.assertEqual(job["Status"], "failed")
         self.assertIn("unusual-traffic", job["Error"])
 
+    def test_block_stops_the_job(self):
+        RESULTS["cafes"] = ([place(1)], "end-of-list")
+        RESULTS["bakeries"] = ([], "blocked")
+        RESULTS["florists"] = ([place(9)], "end-of-list")
+        jid, job = self.run_one(keywords=["cafes", "bakeries", "florists"])
+        self.assertEqual(job["Status"], "ok")  # the rows from before the block are kept
+        self.assertIn("unusual-traffic", job["Error"])
+        self.assertEqual([r["title"] for r in self.rows(jid)], ["Biz 1"])  # florists never searched
+
+    def test_deleted_before_it_starts(self):
+        name, data = jobs.validate(GOOD)
+        jid = self.store.create(name, data)
+        job = self.store.claim()
+        self.store.delete(jid)
+        self.worker.run_job(job)
+        self.assertEqual(FakeBrowser.made, [])  # no Chrome for a job that is gone
+
+    def test_worker_survives_a_store_error(self):
+        calls = []
+        def claim():
+            calls.append(1)
+            if len(calls) == 1:
+                raise OSError("disk full")
+            return None
+        self.store.claim = claim
+        self.worker.wake.set()
+        self.worker.start()
+        deadline = time.time() + 5
+        while len(calls) < 2 and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertGreaterEqual(len(calls), 2)
+        self.assertTrue(self.worker.is_alive())
+
+    def test_email_pass_stops_when_asked(self):
+        rows = [{"website": f"https://s{i}.com", "emails": ""} for i in range(3)]
+        t = time.monotonic()
+        jobs.add_emails(rows, 30, get=lambda url: time.sleep(5) or "", stop=lambda: time.monotonic() - t > 0.3)
+        self.assertLess(time.monotonic() - t, 3)
+
     def test_watchdog_kills_a_hung_chrome(self):
         RESULTS["cafes in Austin"] = ([], "hang")
         saved, jobs.WATCHDOG_GRACE = jobs.WATCHDOG_GRACE, 0.2
@@ -256,6 +297,18 @@ class Emails(unittest.TestCase):
         self.assertFalse(jobs._public_host("localhost"))
         self.assertEqual(jobs.fetch("http://127.0.0.1:9/"), "")
         self.assertEqual(jobs.site_host("https://www.Shop.com/x"), "shop.com")
+
+    def test_private_peer_and_redirect_refused(self):
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        with self.assertRaisesRegex(OSError, "non-public"):
+            jobs._public_connection(srv.getsockname())
+        srv.close()
+        import urllib.request
+        req = urllib.request.Request("https://example.com/")
+        self.assertIsNone(jobs._Redirects().redirect_request(req, None, 302, "Found", {}, "http://127.0.0.1:8080/api/v1/jobs"))
+        self.assertIsNone(jobs._Redirects().redirect_request(req, None, 302, "Found", {}, "http://169.254.169.254/"))
 
 
 class Server(Fakes):
@@ -437,6 +490,116 @@ class Download(unittest.TestCase):
         self.assertIn("code 3", browser.start_error("/x/chrome", 3, ""))
         trace = "[1:2:FATAL:zygote_host_impl_linux.cc(130)] No usable sandbox!\n#0 0x1 base::debug\n#1 0x2 x\n#2 0x3 y\n"
         self.assertIn("No usable sandbox", browser.start_error("/x/chrome", -5, trace))
+
+
+FAKE_CHROME = """#!{py}
+import os, sys, time
+args = sys.argv[1:]
+with open(os.environ["FAKE_LOG"], "a") as f:
+    f.write(" ".join(args) + "\\n")
+if os.environ.get("FAKE_SANDBOX") and "--no-sandbox" not in args:
+    sys.stderr.write("[1:2:FATAL:zygote_host_impl_linux.cc(130)] No usable sandbox!\\n#0 0x1 trace\\n")
+    sys.exit(1)
+profile = [a.split("=", 1)[1] for a in args if a.startswith("--user-data-dir=")][0]
+with open(os.path.join(profile, "DevToolsActivePort"), "w") as f:
+    f.write("{port}\\n/devtools/browser/x\\n")  # nothing listens there
+time.sleep(60)
+"""
+
+
+@unittest.skipIf(os.name == "nt", "the fake Chrome is a script with a shebang")
+class LaunchChrome(unittest.TestCase):
+    """browser.Browser against a fake Chrome: cleanup on a dead DevTools port, the sandbox relaunch."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+        self.exe = os.path.join(self.dir, "fake-chrome")
+        with open(self.exe, "w") as f:
+            f.write(FAKE_CHROME.format(py=sys.executable, port=port))
+        os.chmod(self.exe, 0o755)
+        os.environ["FAKE_LOG"] = os.path.join(self.dir, "argv.log")
+
+    def tearDown(self):
+        os.environ.pop("FAKE_LOG", None)
+        os.environ.pop("FAKE_SANDBOX", None)
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def launches(self):
+        with open(os.environ["FAKE_LOG"]) as f:
+            return f.read().splitlines()
+
+    def test_dead_devtools_port_leaves_nothing(self):
+        profile = os.path.join(self.dir, "profile")
+        os.mkdir(profile)
+        b = None
+        with self.assertRaisesRegex(browser.BrowserError, "DevTools"):
+            b = browser.Browser(path=self.exe, profile=profile, proxy="socks5h://10.0.0.1:1080", timeout=5)
+        self.assertIsNone(b)
+        self.assertIn("--proxy-server=socks5://10.0.0.1:1080", self.launches()[0])
+        out = subprocess.run(["ps", "-axo", "command"], capture_output=True, text=True).stdout
+        self.assertNotIn(self.exe, out)  # the fake Chrome was stopped
+
+    def test_temp_profile_removed(self):
+        before = {n for n in os.listdir(tempfile.gettempdir()) if n.startswith("gmskit-chrome-")}
+        with self.assertRaises(browser.BrowserError):
+            browser.Browser(path=self.exe, timeout=5)
+        after = {n for n in os.listdir(tempfile.gettempdir()) if n.startswith("gmskit-chrome-")}
+        self.assertEqual(after - before, set())
+
+    def test_no_usable_sandbox_relaunches_once_without_it(self):
+        os.environ["FAKE_SANDBOX"] = "1"
+        with self.assertRaisesRegex(browser.BrowserError, "DevTools"):  # second launch got past the sandbox
+            browser.Browser(path=self.exe, timeout=5)
+        runs = self.launches()
+        self.assertEqual(len(runs), 2)
+        self.assertNotIn("--no-sandbox", runs[0])
+        self.assertIn("--no-sandbox", runs[1])
+
+    def test_snap_wrapper_skipped(self):
+        wrapper = os.path.join(self.dir, "chromium-browser")
+        with open(wrapper, "w") as f:
+            f.write("#!/bin/sh\nexec /snap/bin/chromium \"$@\"\n")
+        self.assertTrue(browser.is_snap(wrapper))
+        self.assertTrue(browser.is_snap("/snap/bin/chromium"))
+        self.assertFalse(browser.is_snap(self.exe))
+
+
+def load_engine_cli():
+    path = os.path.join(os.path.dirname(HERE), "scripts", "engine.py")
+    spec = importlib.util.spec_from_file_location("engine_cli", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class EngineCli(unittest.TestCase):
+    def test_port_with_a_wildcard_listener_is_not_free(self):
+        cli = load_engine_cli()
+        s = socket.socket()
+        s.bind(("0.0.0.0", 0))
+        s.listen(8)  # both checks connect; a full backlog would refuse the second
+        port = s.getsockname()[1]
+        try:
+            self.assertFalse(cli.port_free(port))
+            self.assertTrue(serve.port_taken(port))
+        finally:
+            s.close()
+        self.assertFalse(serve.port_taken(port))
+
+    def test_stop_never_kills_a_stranger(self):
+        cli = load_engine_cli()
+        p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        try:
+            self.assertTrue(cli.kill(p.pid))  # "nothing of ours to stop"
+            time.sleep(0.3)
+            self.assertIsNone(p.poll())
+        finally:
+            p.kill()
+            p.wait()
 
 
 if __name__ == "__main__":

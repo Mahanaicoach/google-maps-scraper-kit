@@ -24,7 +24,10 @@ COLUMNS = ["input_id", "link", "title", "category", "address", "open_hours", "po
 EXTRA = ["categories"]
 RENAME = {"open_state": "status", "description": "descriptions"}  # details.FIELDS name -> CSV column
 
-WATCHDOG_GRACE = 30   # seconds past max_time before the watchdog kills Chrome
+# Seconds past max_time before the watchdog kills Chrome. maps.collect's page load and first waits
+# (navigate 45 s, consent 15 s, feed 15 s, first batch 10 s) sit outside its max_seconds, so a
+# shorter grace could kill a keyword that was about to return its rows.
+WATCHDOG_GRACE = 90
 SITE_WORKERS = 8      # business websites fetched at once by the email pass
 SITE_TIMEOUT = 10     # seconds per website request
 EMAIL_MIN_SECONDS = 60  # the email pass gets at least this long, even after a job used its max_time
@@ -84,7 +87,7 @@ def validate(body):
     data = {"keywords": [k.strip() for k in kws], "lang": lang.lower(), "lat": str(lat).strip(),
             "lon": str(lon).strip(),
             "zoom": _int(body, "zoom", 15, 1, 21, "zoom"),
-            "radius": _int(body, "radius", 10000, 0, 1_000_000, "radius"),
+            "radius": _int(body, "radius", 10000, 0, 10**9, "radius"),  # accepted, not used
             "depth": _int(body, "depth", 1, 1, 1000, "depth"),
             "max_time": _int(body, "max_time", 600, 1, 86400, "max time"),
             "fast_mode": bool(body.get("fast_mode")), "email": bool(body.get("email")),
@@ -240,16 +243,22 @@ class Worker(threading.Thread):
 
     def run(self):
         while not self.stopped.is_set():
-            job = self.store.claim()
-            if not job:
-                self.wake.wait(5)
-                self.wake.clear()
-                continue
+            job = None
             try:
+                job = self.store.claim()
+                if not job:
+                    self.wake.wait(5)
+                    self.wake.clear()
+                    continue
                 self.run_job(job)
-            except Exception as e:  # noqa: BLE001 - one bad job must never stop the worker
-                self.log(f"job {job['ID']} failed: {type(e).__name__}: {e}")
-                self.store.update(job["ID"], "failed", f"{type(e).__name__}: {e}")
+            except Exception as e:  # noqa: BLE001 - one bad job (or a full disk) must never stop the worker
+                self.log(f"job {job['ID'] if job else '-'} failed: {type(e).__name__}: {e}")
+                try:
+                    if job:
+                        self.store.update(job["ID"], "failed", f"{type(e).__name__}: {e}")
+                except Exception:  # noqa: BLE001
+                    pass
+                self.stopped.wait(2)
 
     def cancel(self, jid):
         """Stop `jid` if it is the job in progress (it is being deleted)."""
@@ -273,6 +282,9 @@ class Worker(threading.Thread):
         deadline = time.monotonic() + d["max_time"]
         stop = threading.Event()
         self._running = (jid, stop)
+        if not self.store.get(jid):  # deleted between claim() and now, before cancel() could see it
+            self._running = (None, None)
+            return
         rows, seen, errors, blocked = [], set(), [], False
         kws = d["keywords"]
         self.log(f"job {jid} started: {len(kws)} keyword(s), depth {d['depth']}, max_time {d['max_time']} s")
@@ -308,7 +320,10 @@ class Worker(threading.Thread):
                 finally:
                     if page and not self._browser.cdp.closed:
                         page.close()
-                blocked |= reason == "blocked"
+                if reason == "blocked":  # more searches from a rate-limited IP only extend the block
+                    blocked = True
+                    self.log(f"job {jid} keyword {i}/{len(kws)}: Google's unusual-traffic page; stopping")
+                    break
                 new = 0
                 for p in places:
                     key = p.get("data_id") or p.get("place_id") or p.get("link") or p.get("title")
@@ -329,22 +344,25 @@ class Worker(threading.Thread):
                 self._browser.close()
                 self._browser = None
         if d["email"] and rows and not stop.is_set():
-            n = add_emails(rows, max(deadline - time.monotonic(), EMAIL_MIN_SECONDS))
+            n = add_emails(rows, max(deadline - time.monotonic(), EMAIL_MIN_SECONDS), stop=stop.is_set)
             self.log(f"job {jid}: emails found for {n}/{sum(1 for r in rows if r['website'])} websites")
         self._running = (None, None)
         if not self.store.write_csv(jid, rows):
             self.log(f"job {jid} deleted while it ran")
             return
+        block = ("Google answered with its unusual-traffic page: this IP is rate-limited for now. "
+                 "Wait, or add proxies")
         if rows or not (errors or blocked):
             note = "stopped at max_time; the rows found so far are kept" \
                 if time.monotonic() >= deadline or (stop.is_set() and not errors) else ""
             if errors:
                 note = f"{len(errors)} keyword(s) failed: {errors[-1]}"
+            if blocked:
+                note = f"{block}. The rows found before that are kept"
             self.store.update(jid, "ok", note)
             self.log(f"job {jid} ok: {len(rows)} places")
         else:
-            reason = ("Google answered with its unusual-traffic page: this IP is rate-limited for now. "
-                      "Wait, or add proxies") if blocked else errors[-1]
+            reason = block if blocked else errors[-1]
             self.store.update(jid, "failed", reason)
             self.log(f"job {jid} failed: {reason}")
 
@@ -450,14 +468,17 @@ def find_emails(text, site=""):
     return sorted(found, key=lambda e: not own(e))[:3]
 
 
-def add_emails(rows, seconds, get=None):
+def add_emails(rows, seconds, get=None, stop=lambda: False):
     """Fill `emails` (joined by ", ", like the old engine) from each row's website homepage, for at
-    most `seconds`; the number of rows that got one."""
+    most `seconds` or until stop() is true; the number of rows that got one."""
     get = get or fetch
     todo = [r for r in rows if r.get("website") and not r.get("emails")]
     pool = concurrent.futures.ThreadPoolExecutor(SITE_WORKERS)
     futs = {pool.submit(lambda r=r: find_emails(get(r["website"]), site_host(r["website"]))): r for r in todo}
-    done, _ = concurrent.futures.wait(futs, timeout=seconds)
+    end, pending = time.monotonic() + seconds, set(futs)
+    while pending and not stop() and time.monotonic() < end:
+        _, pending = concurrent.futures.wait(pending, timeout=min(1, max(0, end - time.monotonic())))
+    done = set(futs) - pending
     pool.shutdown(wait=False, cancel_futures=True)
     n = 0
     for f in done:
