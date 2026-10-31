@@ -17,3 +17,6 @@ __pycache__/
 # OS / editor noise
 .DS_Store
 Thumbs.db
+
+# The engine's jobs, results, logs and downloaded Chrome
+.engine/

@@ -10,7 +10,7 @@ Emails are on by default. Google Maps listings carry no email field, so once the
 1. It fetches the homepage and reads any email there.
 2. If the homepage shows none, it fetches up to 3 contact and about pages on the same site.
 
-The engine's own email option is left off: it visits every site in a browser, took most of each job's time, and found fewer emails than this crawl on the same listings.
+The engine's own email option is left off: it reads homepages only, so this crawl, which also reads contact and about pages, finds more.
 
 The crawl reads `mailto:` links and plain text on those pages. It drops junk such as image file names, placeholder addresses and website-builder domains. It sorts addresses on the business's own domain first and keeps at most 3 per row. It runs in plain Python code, so it costs zero AI tokens.
 
@@ -21,9 +21,11 @@ When the crawl ends, the script prints one found-rate line: how many businesses 
 Start the engine once, then run a search with `--city` so you can skip coordinates:
 
 ```bash
-docker compose up -d
+python3 scripts/engine.py start
 python3 scripts/scrape.py "dentists in Denver CO" --city "Denver, CO" --depth 5
 ```
+
+With Docker, `docker compose up -d` starts the same engine instead of the first line. On Windows, use `py` in place of `python3`.
 
 Check homepages only for a quicker run, or skip emails entirely for the fastest run:
 

@@ -1,16 +1,18 @@
 # Scrape dentists from Google Maps: a lead list recipe
 
 This recipe shows how to scrape dentists from Google Maps for one city with the Google Maps Scraper Kit, from a quick test to the whole city.
-You get a CSV of dental practices with phone, email, website, address, rating and review count, free and local, with no API key.
+You get a CSV of dental practices with phone, email, website, address and rating, free and local, with no API key.
 
 ## Step 1: Run one search
 
 Start the engine, then test with one search at the default depth:
 
 ```bash
-docker compose up -d
+python3 scripts/engine.py start
 python3 scripts/scrape.py "dentists in Denver CO" --city "Denver, CO" --depth 5
 ```
+
+With Docker, `docker compose up -d` starts the same engine instead of the first line.
 
 Check the preview and the found-rate line for emails. If the rows look right, widen the run.
 
@@ -42,11 +44,11 @@ python3 scripts/scrape.py --keywords-file examples/queries.example.txt --city "D
 
 Illustrative rows only:
 
-| title | phone | emails | website | review_rating | review_count | instagram |
-|---|---|---|---|---|---|---|
-| Example Dental Studio | +1 303-555-0101 | hello@example.com | example.com | 4.9 | 312 | instagram.com/exampledental |
-| Sample Family Dentistry | +1 303-555-0102 | front@example.org | example.org | 4.6 | 128 | |
-| Demo Orthodontics | +1 303-555-0103 |  | example.net | 4.8 | 64 | instagram.com/demoortho |
+| title | phone | emails | website | review_rating | instagram |
+|---|---|---|---|---|---|
+| Example Dental Studio | +1 303-555-0101 | hello@example.com | example.com | 4.9 | instagram.com/exampledental |
+| Sample Family Dentistry | +1 303-555-0102 | front@example.org | example.org | 4.6 | |
+| Demo Orthodontics | +1 303-555-0103 |  | example.net | 4.8 | instagram.com/demoortho |
 
 ## Columns that matter for dental outreach
 
@@ -54,7 +56,7 @@ Illustrative rows only:
 - `emails`: the published practice inbox. The email crawl reads the homepage, then contact and about pages.
 - `website`: the site you will review before you reach out.
 - `category`: separates general dentists from orthodontists and other specialists.
-- `review_rating` and `review_count`: a quick read on how established the practice is.
+- `review_rating`: a quick read on the practice's reputation. `review_count` works [headless](../../SETUP.md#review-counts-hours-and-reviews) and supports `--min-reviews` filtering.
 - `instagram`, `facebook`, `linkedin`: added by `--socials` when the site links them.
 
 ## What to expect

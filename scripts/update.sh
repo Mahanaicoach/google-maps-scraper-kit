@@ -54,8 +54,12 @@ else
   fi
 fi
 
-# A new kit version can pin a new engine image. Restart a running engine so it takes effect.
+# A new kit version can change the engine. Rebuild and restart a running one so it takes effect.
+# --remove-orphans drops the containers of services the kit no longer has.
 if [ "$BEFORE" != "$(git rev-parse HEAD)" ] && command -v docker >/dev/null 2>&1 \
   && [ -n "$(docker compose ps -q 2>/dev/null)" ]; then
-  docker compose up -d
+  docker compose up -d --build --remove-orphans
+fi
+if [ "$BEFORE" != "$(git rev-parse HEAD)" ] && [ -f .engine/state.json ]; then
+  echo "Restart the engine so the update takes effect: python3 scripts/engine.py restart"
 fi

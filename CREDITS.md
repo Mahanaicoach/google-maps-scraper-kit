@@ -1,35 +1,51 @@
 # Credits and attribution
 
-This page lists who built what in the Google Maps Scraper Kit, and the license that covers the engine.
+This page lists who built what in the Google Maps Scraper Kit, and the licenses of the parts it uses.
 
-The kit is designed and built by Mahan ([@Mahanaicoach](https://github.com/Mahanaicoach)).
-One component, the Google Maps scraping engine, is open-source work by Georgios Komninos, credited below.
+The kit, its Google Maps engine (`engine/`), the scripts, the skill and the slash commands are designed
+and built by Mahan ([@Mahanaicoach](https://github.com/Mahanaicoach)), MIT licensed (see [LICENSE](LICENSE)).
 
-## Scraping engine
+## History: gosom/google-maps-scraper
 
-- **Project:** google-maps-scraper
-- **Author:** **Georgios Komninos** ([@gosom](https://github.com/gosom))
-- **Repository:** https://github.com/gosom/google-maps-scraper
-- **License:** MIT License, Copyright (c) 2023 Georgios Komninos
-- **Docker image used:** `gosom/google-maps-scraper`
+Kit versions 1.x ran [gosom/google-maps-scraper](https://github.com/gosom/google-maps-scraper) by
+Georgios Komninos ([@gosom](https://github.com/gosom)), an MIT-licensed Go scraper, as its official
+Docker image, unmodified. That engine shaped this kit: the job API (`/api/v1/jobs`, the job body, the
+`Status` values) and the 36 CSV column names are its design, kept so that scripts and files made for
+kit 1.x keep working. Kit 2.0's own engine contains none of its code, so this repository no longer
+carries its license notice. To support its author, star the repository:
+https://github.com/gosom/google-maps-scraper
 
-The kit runs the engine's official Docker image, unmodified. Everything else in this repository is
-original to the kit: local deployment, lead-field cleaning, CSV output, auto-geocoding, batch jobs,
-social profile enrichment, and the Claude Code skill and slash commands.
+## Chrome for Testing
+
+On a machine with no Chrome, Chromium, Edge or Brave, `scripts/engine.py start` downloads Google's
+[Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/) headless shell, pinned by
+version and SHA-256 in `engine/browser.py`. It is Google's build of Chrome, made from the open-source
+Chromium project. This repository does not contain or redistribute it: it comes from Google's servers
+straight into `.engine/` on your machine, under Google's terms for Chrome (its `ABOUT` file) and the
+open-source licenses listed in its `LICENSE.headless_shell` file. The Docker image installs Debian's
+`chromium` package instead, under Chromium's BSD-style license and the notices Debian ships with it.
+
+## Business category names: lobstrio/google-business-categories
+
+The web UI's "Add a business type" box suggests Google's business category names (4,053, US
+English) from [lobstrio/google-business-categories](https://github.com/lobstrio/google-business-categories)
+by lobstr.io. Your browser loads the list from GitHub at runtime, pinned to one commit in
+`engine/serve.py`, and caches it for 30 days. This repository does not contain or redistribute it,
+because that repository has no license file.
 
 ## Website signals adapted from OpenLeadFinder
 
 The `--tech` detection patterns, the intent score and the obfuscated-email patterns in
 `scripts/scrape.py`, and its private-address guard, are adapted from OpenLeadFinder, Mahan's
-self-hosted lead finder. It is released under the same MIT License, Copyright (c) 2026
-OpenLeadFinder contributors; the license text is the one reproduced below.
+self-hosted lead finder. It is released under the MIT License, Copyright (c) 2026 OpenLeadFinder
+contributors, with the license text below.
 
-## Engine license (reproduced as required by MIT)
+## MIT License text (OpenLeadFinder)
 
 ```
 MIT License
 
-Copyright (c) 2023 Georgios Komninos
+Copyright (c) 2026 OpenLeadFinder contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -49,5 +65,3 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
-
-To support the engine's author, star the repository: https://github.com/gosom/google-maps-scraper

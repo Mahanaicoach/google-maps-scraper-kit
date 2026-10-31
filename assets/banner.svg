@@ -47,7 +47,7 @@
     <g>
       <rect x="0" y="0" rx="22" ry="22" width="170" height="42" fill="#0f213b" stroke="#1f3a5f"/>
       <circle cx="24" cy="21" r="6" fill="#38bdf8"/>
-      <text x="40" y="28" class="t" font-weight="600" font-size="19" fill="#cbd5e1">Local Docker</text>
+      <text x="40" y="28" class="t" font-weight="600" font-size="19" fill="#cbd5e1">Runs locally</text>
     </g>
     <g transform="translate(186,0)">
       <rect x="0" y="0" rx="22" ry="22" width="158" height="42" fill="#0f213b" stroke="#1f3a5f"/>
