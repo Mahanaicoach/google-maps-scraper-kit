@@ -35,7 +35,7 @@ Google's search results carry no price range at the moment, so `price_range` com
 python3 scripts/scrape.py "restaurants in Austin TX" --city "Austin, TX" --full
 ```
 
-To keep the file lean, pick your own columns with `--fields`:
+To keep the file lean, pick your own columns with `--fields` (the six social columns still follow unless you add `--no-socials`):
 
 ```bash
 python3 scripts/scrape.py "restaurants in Austin TX" --city "Austin, TX" \

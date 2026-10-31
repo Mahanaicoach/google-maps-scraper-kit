@@ -39,11 +39,9 @@ Or use a slash command in Claude Code:
 ## What the agent does
 
 1. Runs `python3 scripts/engine.py status`, which prints the engine's URL (`localhost:8080` unless you changed `SCRAPER_PORT`) only when the kit's own engine answers, and starts it with `python3 scripts/engine.py start` (or `docker compose up -d` if you run Docker) if it is down.
-2. Builds the job with the required `max_time`, plus `lat` and `lon` to centre the map (they are optional: with neither, Google places the search by the city in the keyword), with emails and social profiles on by default. It skips the social profiles only if you say you do not want them.
-3. Polls the job in the background until it finishes.
-4. Downloads the CSV.
-5. Keeps the 8 lead fields (name, phone, email, website, category, address, rating and review count), then the six social columns: Instagram, Facebook, LinkedIn, TikTok, YouTube and X.
-6. Saves the file, then presents a short table and the CSV path instead of dumping every row into chat.
+2. Runs `python3 scripts/scrape.py "<business type> in <City, ST>" --city "<City, ST>"` as a background command. The script geocodes the city, creates the job, waits for it and collects its rows, with emails and social profiles on by default. It skips the social profiles only if you say you do not want them.
+3. Keeps the 8 lead fields (name, phone, email, website, category, address, rating and review count), then the six social columns: Instagram, Facebook, LinkedIn, TikTok, YouTube and X.
+4. Saves the file, then presents a short table and the CSV path instead of dumping every row into chat.
 
 The kit's own scripts, the exact `docker compose` forms SETUP.md uses and the engine's health check are pre-approved in `.claude/settings.json`; everything else asks as usual.
 

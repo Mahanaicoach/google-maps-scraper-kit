@@ -1593,6 +1593,47 @@ class AuditGuards(unittest.TestCase):
         self.assertIsNone(jobs._FETCH.timer)
         self.assertIsNone(jobs._FETCH.deadline)
 
+    def test_coordinates_stored_in_plain_decimal_form(self):
+        ok = {"name": "x", "keywords": ["a"], "lang": "en", "max_time": 5}
+        for lat, lon, want in (("30.2672", "-97.7431", ("30.2672", "-97.7431")), ("1e1", "+2.50", ("10", "2.5")),
+                               (0.00001, 5.0, ("0.00001", "5")), ("\u0663\u0660.\u0662", "1", ("30.2", "1"))):
+            d = jobs.validate(dict(ok, lat=lat, lon=lon))[1]
+            self.assertEqual((d["lat"], d["lon"]), want, lat)
+
+    def test_public_tolerates_odd_proxies_from_a_1x_job(self):
+        job = {"ID": "i", "Name": "n", "Date": "d", "Status": "ok", "Error": "", "Progress": {}}
+        self.assertEqual(jobs.public(dict(job, Data={"proxies": 5, "keywords": []}))["Data"]["proxies"], [])
+        self.assertEqual(jobs.public(dict(job, Data={"proxies": ["http://u:p@h:1", {"a": 1}], "keywords": []}))
+                         ["Data"]["proxies"], ["http://u:***@h:1"])
+
+    def test_second_engine_on_the_same_data_is_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            held = serve.lock_data(d)
+            with self.assertRaises(OSError):
+                serve.lock_data(d)
+            held.close()
+            serve.lock_data(d).close()  # released with the file
+
+    def test_worker_survives_a_log_that_cannot_be_written(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = jobs.Store(d)
+            jid = store.create("n", jobs.validate({"name": "n", "keywords": ["a"], "lang": "en", "max_time": 5})[1])
+            calls = []
+
+            def bad_log(msg):
+                calls.append(msg)
+                raise BrokenPipeError
+            w = jobs.Worker(store, bad_log, headless=True)
+            w.run_job = lambda job: (_ for _ in ()).throw(RuntimeError("boom"))
+            w.stopped = threading.Event()
+            w.start()
+            time.sleep(0.5)
+            w.stopped.set()
+            w.wake.set()
+            w.join(5)
+            self.assertFalse(w.is_alive())
+            self.assertEqual(store.get(jid)["Status"], "failed")  # the second try wrote it after the pause
+
     def test_env_value_keeps_a_hash_inside_quotes(self):
         self.assertEqual(serve.env_value('"ab #c"'), "ab #c")
         self.assertEqual(serve.env_value("plain # note"), "plain")

@@ -2,7 +2,7 @@
 
 This guide takes you from a fresh machine to a finished Google Maps lead list in about 10 minutes.
 The engine starts in seconds; most of the time is the first download of Python, Chrome or Docker if
-you have none. A person or an agent can follow it step by step.
+you have none. It is written for a person; an agent follows the skill instead.
 
 ---
 
@@ -210,18 +210,18 @@ starts.
 
 ## 4. Run it from Claude Code or another agent
 
-The kit ships a Claude Code skill that teaches the agent the job API, the required fields, polling
-and the guardrails. It works with Claude Code, Codex, Cursor and any other
+The kit ships a Claude Code skill that teaches the agent to run `scripts/scrape.py` for every scrape,
+what the output holds, and the guardrails. It works with Claude Code, Codex, Cursor and any other
 [Agent Skills](https://agentskills.io)-compatible tool. In this folder (Option A) two files do the work;
 `npx skills add` (Option B) installs only the second:
 
 1. **[CLAUDE.md](CLAUDE.md)** loads automatically when you open this folder in Claude Code. It tells
    the agent what the kit is and its key rules.
 2. **[.claude/skills/google-maps-scraper/SKILL.md](.claude/skills/google-maps-scraper/SKILL.md)** is
-   the skill. The agent loads it on demand for the exact API flow and best practices.
+   the skill. The agent loads it on demand for the script's flags and the best practices.
 
 There is nothing to connect. The engine is a local HTTP API at `http://localhost:8080`, and the agent
-calls it with `curl` and its normal shell access.
+drives it through the kit's own scripts with its normal shell access.
 
 **Option A: open the folder in Claude Code.** The skill and four slash commands load automatically.
 
@@ -242,8 +242,8 @@ The engine ships with the kit, so with Option B install the kit too (step 1) and
 Then ask in plain language:
 > "Make sure the scraper is running, then scrape **dentists in Denver CO**, depth 5, and give me a table of name, phone, website."
 
-The agent checks the engine is up and starts it if not. It then builds the job with `name`,
-`keywords`, `lang`, `max_time` and `lat`/`lon`, polls in the background, downloads the CSV and hands you clean rows. It
+The agent checks the engine is up and starts it if not. It then runs `scripts/scrape.py` in the
+background, which creates the job, waits for it and saves the file, and hands you clean rows. It
 follows the skill's safety rules on every run.
 
 > **MCP is optional.** You can wrap the API as a Model Context Protocol server, but a local,
@@ -370,7 +370,7 @@ What changed inside the columns (their names and order are the same):
 ## 7. Best practices
 
 The skill holds the full rules. These are the essentials:
-- Always send `max_time` (seconds) and `lat`/`lon` (strings).
+- Run every scrape through `scripts/scrape.py` (`--city` or `<lat> <lon>`, `--max-time` in seconds).
 - Start at `depth 5` and run one job at a time. Raise depth only when needed.
 - Keep email extraction on, the default, because emails are the key lead field. Use `--no-email` for a
   faster run without them.

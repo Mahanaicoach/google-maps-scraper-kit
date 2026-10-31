@@ -123,7 +123,7 @@ def validate(body):
     if lat in (None, ""):  # neither, as the old engine allowed: Google places the search by the keyword's words
         lat = lon = ""
     else:
-        _coords(lat, lon)
+        lat, lon = _coords(lat, lon)  # canonical text: "1e1", "+30.5" or "٣٠" would go into the URL as typed
     if body.get("max_time") in (None, 0):
         raise ValueError("missing max time")
     data = {"keywords": [k.strip() for k in kws], "lang": lang.lower(), "country": country.lower(),
@@ -149,6 +149,12 @@ def _coords(lat, lon):
         raise ValueError("invalid geo coordinates") from None
     if not (math.isfinite(flat) and math.isfinite(flon) and -90 <= flat <= 90 and -180 <= flon <= 180):
         raise ValueError("invalid geo coordinates")
+    return _plain(flat), _plain(flon)
+
+
+def _plain(v):
+    """A float as plain decimal text (no exponent), 7 decimals at most: what the Maps URL takes."""
+    return f"{v:.7f}".rstrip("0").rstrip(".") or "0"
 
 
 def _proxies(v):
@@ -380,6 +386,8 @@ class Store:
                     d = {}
                 if not isinstance(d.get("keywords"), list):
                     d["keywords"] = []
+                d["proxies"] = [p for p in d.get("proxies") or [] if isinstance(p, str)] \
+                    if isinstance(d.get("proxies"), list) else []
                 if isinstance(d.get("max_time"), int):
                     d["max_time"] //= 10 ** 9  # nanoseconds in 1.x, seconds here
                 with open(src, newline="", encoding="utf-8", errors="replace") as f:
@@ -421,8 +429,13 @@ class Store:
             path = self.csv_path(jid)
             size = os.path.getsize(path) if os.path.exists(path) else 0
             if rows or not size:
-                with open(path, "ab") as f:
-                    f.write(to_csv(rows, cols, header=not size))
+                try:
+                    with open(path, "ab") as f:
+                        f.write(to_csv(rows, cols, header=not size))
+                except OSError:  # full disk: cut the torn row, or the next append follows it
+                    with open(path, "r+b") as f:
+                        f.truncate(size)
+                    raise
             return os.path.getsize(path)
 
     def cut(self, jid, size):
@@ -482,7 +495,8 @@ def public(job):
     stage = p.get("stage") or ("queued" if job["Status"] == "pending" else "")
     if job["Status"] == "ok":
         stage = "done"
-    return dict(job, Data=dict(d, proxies=[mask(x) for x in d.get("proxies") or []]),
+    proxies = d.get("proxies") if isinstance(d.get("proxies"), list) else []  # a 1.x job may hold anything
+    return dict(job, Data=dict(d, proxies=[mask(x) for x in proxies if isinstance(x, str)]),
                 Progress={"keywords_done": p.get("done", 0), "keywords_total": total, "places": p.get("places", 0),
                           "percent": 100 if job["Status"] == "ok" else p.get("percent", 0), "stage": stage,
                           **({"reviews_done": p.get("reviews_done", 0), "reviews_total": p["reviews_total"]}
@@ -514,11 +528,17 @@ class Worker(threading.Thread):
                     continue
                 self.run_job(job)
             except Exception as e:  # noqa: BLE001 - one bad job (or a full disk) must never stop the worker
-                self.log(f"job {job['ID'] if job else '-'} failed: {type(e).__name__}: {e}")
+                reason = f"{type(e).__name__}: {e}"
+                for attempt in (1, 2):  # the second try after a pause: a full disk may have room again
+                    try:
+                        if job:
+                            self.store.update(job["ID"], "failed", reason)
+                        break
+                    except Exception:  # noqa: BLE001
+                        self.stopped.wait(2)
                 try:
-                    if job:
-                        self.store.update(job["ID"], "failed", f"{type(e).__name__}: {e}")
-                except Exception:  # noqa: BLE001
+                    self.log(f"job {job['ID'] if job else '-'} failed: {reason}")
+                except Exception:  # noqa: BLE001 - a log that cannot be written must not kill the worker
                     pass
                 self.stopped.wait(2)
 

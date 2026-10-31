@@ -15,7 +15,7 @@ Google Maps, for email or socials jobs to the businesses' own websites, and for 
 to Google's public DNS (dns.google), nothing else.
 Standard library only.
 """
-import argparse, csv, hmac, html, io, json, os, re, secrets, signal, socket, socketserver, sys, threading, unicodedata
+import argparse, csv, hmac, html, io, json, os, re, secrets, signal, socket, socketserver, sqlite3, sys, threading, unicodedata
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -60,9 +60,13 @@ def file_name(job, jid):
 
 
 def log(msg):
-    """One line on stderr with a UTC timestamp and its offset. Counts only, never scraped values."""
+    """One line on stderr with a UTC timestamp and its offset. Counts only, never scraped values.
+    A log that cannot be written (full disk, closed stderr) is dropped, never raised."""
     with _log_lock:
-        print(f"{jobs.utc_now()} {msg}", file=sys.stderr, flush=True)
+        try:
+            print(f"{jobs.utc_now()} {msg}", file=sys.stderr, flush=True)
+        except (OSError, ValueError):
+            pass
 
 
 def env_value(v):
@@ -521,7 +525,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.close_connection:  # tell the client too, so it never reuses the socket
             self.send_header("Connection", "close")
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
         if code >= 400:
             log(f"{self.command} {self.path.split('?')[0]!r} -> {code}")  # repr: no control characters in the log
 
@@ -615,6 +620,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, page, "text/html; charset=utf-8", [("Content-Security-Policy", csp)])
         self.fail(404, "not found")
 
+    do_HEAD = do_GET  # the same headers (X-Engine included), no body
+
     def do_POST(self):
         if not self.guard():
             return
@@ -631,6 +638,8 @@ class Handler(BaseHTTPRequestHandler):
             jid = self.server.store.create(name, data)
         except (UnicodeEncodeError, ValueError) as e:  # validate() keeps these out; a belt for the braces
             return self.fail(422, f"invalid body: {e}")
+        except sqlite3.Error as e:  # a full disk or a locked database: answer, do not drop the connection
+            return self.fail(500, f"could not store the job: {e}")
         self.server.worker.wake.set()
         log(f"job {jid} created: {len(data['keywords'])} keyword(s)")
         self.reply(201, {"id": jid})
@@ -671,6 +680,24 @@ def port_taken(port):
 
 class Server6(Server):
     address_family = socket.AF_INET6
+
+
+def lock_data(folder):
+    """An exclusive lock on <folder>/engine.lock, held for the engine's life: a second engine on the same
+    data (serve.py --port N by hand) would flip the first one's job to pending and cut its CSV."""
+    os.makedirs(folder, exist_ok=True)
+    f = open(os.path.join(folder, "engine.lock"), "a+")
+    try:
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        raise OSError("its engine.lock is held")
+    return f
 
 
 def in_container():
@@ -714,6 +741,11 @@ def main():
         sys.exit(f"✗ SCRAPER_PORT is not a number: {env['SCRAPER_PORT']!r}")
     browser.make_home()
     browser.sweep_profiles()
+    try:
+        hold = lock_data(a.data)  # noqa: F841 - held for the engine's life
+    except OSError as e:
+        sys.exit(f"✗ Another engine already uses {a.data}: {e}. Stop it first (python3 scripts/engine.py stop, "
+                 "or docker compose stop).")
     store = jobs.Store(a.data)
     headless = env["SCRAPER_HEADLESS"].strip().lower() not in ("0", "false", "no", "off")
     worker = jobs.Worker(store, log, headless=headless)
@@ -745,15 +777,24 @@ def main():
         log("SCRAPER_HEADLESS=0 is set, but the only browser is the downloaded headless shell, which cannot "
             "open a window: install Google Chrome (or Chromium, Edge, Brave) for window mode")
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    if hasattr(signal, "SIGBREAK"):  # Windows: scripts/engine.py stop sends Ctrl-Break to the engine's group
+        signal.signal(signal.SIGBREAK, lambda *_: sys.exit(0))
     for s in servers[1:]:
         threading.Thread(target=s.serve_forever, daemon=True).start()
+    code = 0
     try:
         servers[0].serve_forever()
     except KeyboardInterrupt:
         pass
+    except Exception as e:  # noqa: BLE001
+        log(f"engine crashed: {type(e).__name__}: {e}")
+        code = 1
     finally:
         worker.shutdown(wait=8)  # the job in progress saves its place and resumes on the next start
         log("engine stopped")
+        # Website-pass threads may still be inside a fetch (up to SITE_HARD s each); the interpreter
+        # would wait for them before closing the socket. The job is already saved: leave now.
+        os._exit(code)
 
 
 if __name__ == "__main__":

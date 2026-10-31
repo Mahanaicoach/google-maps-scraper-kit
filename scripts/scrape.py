@@ -913,6 +913,7 @@ def scrape_place(a, body, city, keywords):
             continue
         job_id = job_id or jid
         rows = dedupe(rows + cell_rows)
+        SALVAGE["rows"], SALVAGE["job"] = dedupe(SALVAGE["rows"] + rows), SALVAGE["job"] or job_id  # Ctrl-C keeps these
         print(f"  cell {i}/{len(cells)}: {len(cell_rows)} rows, {len(rows)} unique so far")
     # the engine does not clip results to the tile, so tiles leak outside the city
     kept = [r for r in rows if in_bbox(r, bbox)]

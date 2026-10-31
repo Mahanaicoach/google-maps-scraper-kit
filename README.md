@@ -134,7 +134,8 @@ Maps API, delivered as clean, structured JSON and Markdown.
 ## Use it with Claude Code or any agent
 
 The kit ships a [Claude Code skill](.claude/skills/google-maps-scraper/SKILL.md) that teaches the
-agent the exact job API, the required fields, polling, CSV cleanup and the rate-limit guardrails.
+agent to run `scripts/scrape.py` for every scrape, what the output holds, and the rate-limit and
+data-handling guardrails.
 It also works with Codex, Cursor and any other [Agent Skills](https://agentskills.io)-compatible tool.
 
 **Option A: open the folder in Claude Code.** The skill and four slash commands load automatically.
@@ -150,17 +151,16 @@ claude
 npx skills add mahanaicoach/google-maps-scraper-kit
 ```
 
-This installs the skill file only. The engine ships with the kit, so the agent first asks you to
-install it (the [Quick start](#quick-start)) and then calls its API directly. The scripts' extras
-(the social profile columns, `--tech`, `--grid`, geocoding, the email crawl and the lead-field cleanup) and the slash
-commands come with Option A.
+This installs the skill file only. The engine and `scripts/scrape.py` ship with the kit, so the
+agent first asks you to install it (the [Quick start](#quick-start)) and then works from its folder.
+The slash commands come with Option A.
 
 Then ask in plain language:
 
 > Scrape gyms in Miami and give me phones, emails and websites.
 
-The agent checks the engine is up and starts it if not, builds the job, polls in the background,
-downloads the CSV, keeps the 8 lead fields, and hands you a clean table plus the file.
+The agent checks the engine is up and starts it if not, runs `scripts/scrape.py` in the background
+(it creates, waits for and saves the job), and hands you a clean table of the 8 lead fields plus the file.
 
 | Slash command (Claude Code) | Action |
 |---|---|
@@ -188,7 +188,7 @@ scrapes Google Maps business listings only. It does not scrape social platforms 
 | **Auto-geocoding** | Type a city name. Coordinates are resolved for you via OpenStreetMap. Repeat `--city` to run several cities into one file. |
 | **Batch jobs** | Many keywords, one job, one CSV. The engine lists a place found by several keywords once. |
 | **Proxies** | For large or repeated runs: `--proxy URL` with `http`, `https`, `socks5` or `socks5h`, and `user:pass@` on `http` and `https`. Repeat it and the keywords take turns; a keyword Google refuses is retried through the next proxy. |
-| **Agent-native** | A skill plus four slash commands. The agent handles create, poll, download, clean and present. |
+| **Agent-native** | A skill plus four slash commands. The agent runs the script and presents the lead fields; it never hand-builds API calls. |
 | **Safe defaults** | API bound to `127.0.0.1`, and the engine refuses requests from other websites in your browser (DNS rebinding, cross-site posts); an optional API key. No telemetry: the engine talks to Google Maps, and to the businesses' websites and `dns.google` only for jobs that ask. Proxy passwords show as `***`. A cell that a spreadsheet would run as a formula gets a leading `'` in the engine's CSV download and in the script's file. Results git-ignored; website fetches skip private addresses; rate-limit and data-law guardrails built into the skill. |
 
 ### Batch jobs and the Python CLI
@@ -208,7 +208,7 @@ One keyword per line. One job. One CSV.
 
 - **About 120 listings per search.** Google Maps stops scrolling at roughly 120 results per search.
   That is Google's cap, not the kit's. `--grid` is the fix: it splits the city into N x N map tiles,
-  runs one search per tile in a single batch, and dedupes the results on `place_id`. Tiles run one at a
+  runs one job per tile, and dedupes the results on `place_id`. Tiles run one at a
   time, so a grid is slower and more likely to trip rate limits than a single search. Each depth step
   adds a batch of about 20 places.
 - **Review counts come with a changed user agent.** Google gives a browser whose user agent says

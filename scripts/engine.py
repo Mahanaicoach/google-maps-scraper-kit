@@ -12,7 +12,7 @@ installed Chrome, Chromium, Edge or Brave; on a machine with none, `start` downl
 Testing's headless shell, pinned by version and SHA-256. Everything lives in .engine/ in the kit
 folder; delete it to remove the engine and its results.
 """
-import json, os, signal, socket, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
+import json, os, re, signal, socket, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
 
 for _stream in (sys.stdout, sys.stderr):  # ▶ ✓ ✗ on a Windows cp1252 console
     try:
@@ -101,9 +101,10 @@ def command_line(pid):
     blocked or too slow), which stop must not mistake for "gone"."""
     try:
         if os.name == "nt":
-            ps = ["powershell", "-NoProfile", "-Command",
+            ps = ["powershell", "-NoProfile", "-Command",  # UTF-8 out: a kit path with é would not match SERVE
+                  "[Console]::OutputEncoding=[Text.Encoding]::UTF8; "
                   f"(Get-CimInstance Win32_Process -Filter 'ProcessId={int(pid)}').CommandLine"]
-            out = subprocess.run(ps, capture_output=True, text=True, errors="replace", timeout=20)
+            out = subprocess.run(ps, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20)
             return None if out.returncode else out.stdout
         if os.path.exists(f"/proc/{int(pid)}/cmdline"):
             with open(f"/proc/{int(pid)}/cmdline", "rb") as f:
@@ -114,6 +115,20 @@ def command_line(pid):
         return None
 
 
+def alive_nt(pid):
+    """Windows: True while `pid` runs (OpenProcess + GetExitCodeProcess; 259 is STILL_ACTIVE)."""
+    import ctypes
+    k32 = ctypes.windll.kernel32
+    h = k32.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return False
+    try:
+        code = ctypes.c_ulong()
+        return bool(k32.GetExitCodeProcess(h, ctypes.byref(code))) and code.value == 259
+    finally:
+        k32.CloseHandle(h)
+
+
 def kill(pid):
     """Stop the engine and its Chrome. False if it could not be told whether `pid` is the engine:
     after a reboot or crash the pid in state.json may belong to an unrelated process."""
@@ -121,8 +136,21 @@ def kill(pid):
     if cmd is None:
         return False
     if os.path.normcase(SERVE) not in os.path.normcase(cmd):  # Windows: c:\ and C:\ are one path
+        if not cmd and os.name != "nt":  # the engine is gone (crash, OOM) but its Chrome may live on in its group
+            try:
+                os.killpg(pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pass
         return True  # gone, or someone else's process now: nothing of ours to stop
     if os.name == "nt":
+        try:  # Ctrl-Break to the engine's own group: it pauses its job, so the next start resumes it
+            os.kill(pid, signal.CTRL_BREAK_EVENT)
+            for _ in range(100):
+                if not alive_nt(pid):
+                    return True
+                time.sleep(0.1)
+        except OSError:
+            pass
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
         return True
     try:
@@ -300,13 +328,50 @@ def status():
         sys.exit(1)
 
 
+JOB_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def api(method, path):
+    """One call to the running engine through scrape.py's opener (its port, key and no-proxy rule)."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import scrape
+    try:
+        return scrape.req(method, path)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "replace")[:200]
+        sys.exit(f"✗ The engine answered HTTP {e.code}: {body}")
+    except Exception as e:  # noqa: BLE001 - not running, wrong port
+        sys.exit(f"✗ The engine is not reachable at {scrape.BASE} ({e}). Check: {PY} scripts/engine.py status")
+
+
+def jobs():
+    """The engine's job list, newest first: id, status, when, name. Names are scraped data."""
+    _, raw = api("GET", "/api/v1/jobs")
+    rows = json.loads(raw) or []
+    if not rows:
+        print("No jobs yet.")
+        return
+    print(f"{'ID':36}  {'STATUS':8}  {'CREATED (UTC)':16}  NAME")
+    for j in rows:
+        name = "".join(c if c.isprintable() else "?" for c in str(j.get("Name", "")))[:60]
+        print(f"{j['ID']:36}  {j.get('Status', ''):8}  {str(j.get('Date', ''))[:16]:16}  {name}")
+
+
+def delete(jid):
+    if not JOB_ID.match(jid):
+        sys.exit(f"✗ That is not a job id (8-4-4-4-12 hex). List them with: {PY} scripts/engine.py jobs")
+    api("DELETE", f"/api/v1/jobs/{jid}")
+    print(f"✓ Deleted job {jid} and its results.")
+
+
 def main():
-    cmds = {"start": start, "stop": stop, "status": status,
-            "restart": restart}
-    if len(sys.argv) != 2 or sys.argv[1] not in cmds:
-        sys.exit(f"usage: {PY} scripts/engine.py start|stop|status|restart")
+    cmds = {"start": start, "stop": stop, "status": status, "restart": restart, "jobs": jobs}
     if sys.version_info < (3, 9):
         sys.exit(f"✗ The engine needs Python 3.9 or newer; this is {sys.version.split()[0]}.")
+    if len(sys.argv) == 3 and sys.argv[1] == "delete":
+        return delete(sys.argv[2])
+    if len(sys.argv) != 2 or sys.argv[1] not in cmds:
+        sys.exit(f"usage: {PY} scripts/engine.py start|stop|status|restart|jobs|delete <job-id>")
     cmds[sys.argv[1]]()
 
 

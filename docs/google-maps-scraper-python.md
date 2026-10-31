@@ -14,7 +14,7 @@ python3 scripts/scrape.py "cafes in Austin TX" --city "Austin, TX" --depth 5
 python3 scripts/scrape.py --keywords-file examples/queries.example.txt --city "Denver, CO"
 ```
 
-On Windows, run the same commands with `py` or `python3`. The engine needs Python 3.9 or newer and an installed Chrome, Chromium, Edge or Brave; with none, `engine.py start` downloads Chrome for Testing once (about 100 MB, pinned by SHA-256). With Docker, `docker compose up -d` runs the same engine in a container instead of the `engine.py` line.
+On Windows, run the same commands with `py` in place of `python3`. The engine needs Python 3.9 or newer and an installed Chrome, Chromium, Edge or Brave; with none, `engine.py start` downloads Chrome for Testing once (about 100 MB, pinned by SHA-256). With Docker, `docker compose up -d` runs the same engine in a container instead of the `engine.py` line.
 
 ## Every flag
 
