@@ -169,6 +169,8 @@ def to_row(place, keyword):
         if k in row:
             row[k] = str(v)
     row["input_id"] = keyword
+    if not row["plus_code"]:
+        row["plus_code"] = details.plus_code(row["latitude"], row["longitude"])
     if place.get("place_id"):  # Google's documented Maps URL for one place
         row["link"] = ("https://www.google.com/maps/search/?api=1&query="
                        + urllib.parse.quote(place.get("title", ""), safe="")
@@ -179,6 +181,28 @@ def to_row(place, keyword):
 def place_key(p):
     """What makes two places (or rows) the same place."""
     return p.get("data_id") or p.get("place_id") or p.get("link") or p.get("title")
+
+
+# What Excel or Sheets would run as a formula (a phone number is not), also behind quotes the guard
+# added, so "'=x" scraped as is gets one more and unguarding stays exact. scripts/scrape.py has the same.
+FORMULA = re.compile(r"'*(?:[=@\t\r]|[+-](?![\d\s().-]*$))")
+
+
+def csv_safe(v):
+    """A cell with a leading ' when a spreadsheet would run it as a formula ("=HYPERLINK(...)" in a
+    business name or review); "+1 512-555-0100" is left alone. Same rule as scripts/scrape.py."""
+    s = "" if v is None else str(v)
+    return "'" + s if FORMULA.match(s) else s
+
+
+def guard_csv(data):
+    """A stored CSV with csv_safe on every cell: what /download serves. The file on disk stays as
+    scraped, because the engine reads it back (resume, JSON download)."""
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    for row in csv.reader(io.StringIO(data.decode("utf-8", "replace"), newline="")):
+        w.writerow([csv_safe(v) for v in row])
+    return buf.getvalue().encode("utf-8")
 
 
 def to_csv(rows, cols=None, header=True):

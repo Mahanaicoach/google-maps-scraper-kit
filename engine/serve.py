@@ -384,7 +384,7 @@ class Handler(BaseHTTPRequestHandler):
                               [("Content-Disposition", f'attachment; filename="{jid}.json"')])
         if fmt != "csv":
             return self.fail(400, "format must be csv or json")
-        self.reply(200, data, "text/csv; charset=utf-8",
+        self.reply(200, jobs.guard_csv(data), "text/csv; charset=utf-8",  # a spreadsheet opens it: no formulas
                    [("Content-Disposition", f'attachment; filename="{jid}.csv"')])
 
     def do_GET(self):

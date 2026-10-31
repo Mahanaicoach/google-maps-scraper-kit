@@ -115,15 +115,20 @@ plus_code, review_count, review_rating, reviews_per_rating, latitude, longitude,
 descriptions, reviews_link, thumbnail, timezone, price_range, data_id, street_view_url, place_id,
 images, reservations, order_online, menu, owner, complete_address, credit_cards_accepted, about,
 user_reviews, user_reviews_extended, emails`, then `categories` (every category of the place). Multiple
-emails arrive in one cell, joined by `, `. The engine fills the name, categories, address, phone,
-website, rating, coordinates, IDs, open state, timezone, price range and description. A job with
+emails arrive in one cell, joined by `, `. The engine fills the name, categories, address and its
+parts (`complete_address`), phone, website, rating, coordinates, `plus_code` (computed from them),
+IDs, open state, timezone, price range, description, `reservations`, `order_online` and the
+accessibility group of `about`. A job with
 `socials` adds the six social columns, and one with `verify_emails` adds `email_host`; otherwise the
 columns are exactly these.
 
 `review_count`, `open_hours` (the week) and `reviews_link` are filled when Google sends them: the
 engine's headless Chrome sends its own user agent with `HeadlessChrome` replaced by `Chrome`, which
-gets Google's full view. Google can still leave a field out. Review texts come only through the raw
-API's `reviews_max`. `images` holds business photo URLs from the search results.
+gets Google's full view. Google can still leave a field out. Review texts come only with the API's
+`reviews_max` (`scripts/scrape.py --reviews N`), which also fills `reviews_per_rating`. `images`
+holds business photo URLs from the search results. `owner`, `popular_times`, `street_view_url` and
+`user_reviews_extended` stay empty, and `credit_cards_accepted` usually does. In the CSV a
+cell that a spreadsheet would run as a formula starts with `'`; `?format=json` has the text as scraped.
 
 ### Return only the 8 lead fields (default)
 The raw CSV has 36 columns and most are noise for outreach. **By default, return only the 8 lead

@@ -661,6 +661,67 @@ class Filters(unittest.TestCase):
         self.assertEqual(scrape.load_rows(c), [{"title": "B", "phone": "1"}])  # BOM stripped, key is clean
 
 
+class FormulaGuard(unittest.TestCase):
+    """A formula in scraped text reaches a spreadsheet quoted, and the script still sees the text."""
+
+    def test_guard_and_unguard(self):
+        for s, want in (('=HYPERLINK("http://x")', '\'=HYPERLINK("http://x")'), ("@SUM(1)", "'@SUM(1)"),
+                        ("-2+3", "'-2+3"), ("+1 (512) 555-0101", "+1 (512) 555-0101"), ("Joe's", "Joe's"), (None, "")):
+            self.assertEqual(scrape.csv_safe(s), want)
+        rows = [{"title": "'=x", "a": "'plain", "b": "'", "c": None}]
+        self.assertEqual(scrape.unguard(rows), [{"title": "=x", "a": "'plain", "b": "'", "c": None}])
+        for v in ("=x", "'=x", "''-x", "-x", "'@a", "+1 512", "'plain", "'", "", "\t", "-"):  # exact both ways
+            self.assertEqual(scrape.unguard([{"a": scrape.csv_safe(v)}])[0]["a"], v)
+
+    def test_file_quotes_and_exclude_still_matches(self):
+        out = os.path.join(tempfile.mkdtemp(), "leads.csv")
+        row = dict(_row("A"), title="=cmd()", phone="+1 512-555-0100")
+        with mock.patch.object(scrape, "req", return_value=(200, b"null")), \
+             mock.patch.object(scrape, "run_job", return_value=("job-1", [row])), \
+             mock.patch.object(sys, "argv", ["scrape.py", "x", "1", "2", "--no-email", "--out", out]), \
+             redirect_stdout(io.StringIO()):
+            scrape.main()
+        with open(out, newline="", encoding="utf-8-sig") as f:
+            got = next(csv.DictReader(f))
+        self.assertEqual((got["title"], got["phone"]), ("'=cmd()", "+1 512-555-0100"))
+        self.assertEqual(scrape.load_rows(out)[0]["title"], "=cmd()")  # so --exclude out matches the next run
+
+    def test_engine_download_is_read_back_unguarded(self):
+        raw = 'title,descriptions\r\n"\'=x","two\r\nlines"\r\n'.encode()
+        with mock.patch.object(scrape, "_get", return_value=(200, raw)):
+            self.assertEqual(scrape.download_rows("job-1"), [{"title": "=x", "descriptions": "two\r\nlines"}])
+
+
+class Reviews(unittest.TestCase):
+    def test_reviews_flag_asks_the_engine_and_keeps_the_columns(self):
+        out = os.path.join(tempfile.mkdtemp(), "leads.csv")
+        row = dict(_row("A"), user_reviews='[{"Rating": 5}]', reviews_per_rating='{"5": 1}')
+        with mock.patch.object(scrape, "req", return_value=(200, b"null")), \
+             mock.patch.object(scrape, "run_job", return_value=("job-1", [row])) as run, \
+             mock.patch.object(sys, "argv", ["scrape.py", "x", "1", "2", "--no-email", "--reviews", "3", "--out", out]), \
+             redirect_stdout(io.StringIO()):
+            scrape.main()
+        self.assertEqual(run.call_args[0][0]["reviews_max"], 3)
+        with open(out, newline="", encoding="utf-8-sig") as f:
+            got = next(csv.DictReader(f))
+        self.assertEqual(list(got)[-2:], ["reviews_per_rating", "user_reviews"])
+        self.assertEqual(got["user_reviews"], '[{"Rating": 5}]')
+        with mock.patch.object(scrape, "req", return_value=(200, b"null")), \
+             mock.patch.object(scrape, "run_job", return_value=("job-1", [row])) as run, \
+             mock.patch.object(sys, "argv", ["scrape.py", "x", "1", "2", "--no-email", "--out", out]), \
+             redirect_stdout(io.StringIO()):
+            scrape.main()
+        self.assertNotIn("reviews_max", run.call_args[0][0])
+        with mock.patch.object(scrape, "req", return_value=(200, b"null")), \
+             mock.patch.object(scrape, "run_job", return_value=("job-1", [row])), \
+             mock.patch.object(sys, "argv", ["scrape.py", "x", "1", "2", "--no-email", "--reviews", "1",
+                                             "--fields", "title,user_reviews", "--out", out]), \
+             redirect_stdout(io.StringIO()):
+            scrape.main()
+        with open(out, newline="", encoding="utf-8-sig") as f:
+            self.assertEqual(next(csv.reader(f)), ["title", "user_reviews", "reviews_per_rating"])
+
+
 class RegexSpeed(unittest.TestCase):
     def test_long_runs_are_linear(self):
         import time as _t
@@ -791,6 +852,7 @@ class ArgumentBounds(unittest.TestCase):
         self.assertIn("--depth", self.run_main("--depth", "0"))
         self.assertIn("--max-time", self.run_main("--max-time", "0"))  # the engine says "missing max time"
         self.assertIn("--limit", self.run_main("--limit", "-1"))
+        self.assertIn("--reviews", self.run_main("--reviews", "6"))
         bad_dir = os.path.join(tempfile.mkdtemp(), "a-file")
         pathlib.Path(bad_dir).write_text("")  # a file where the folder should be
         self.assertIn("--out", self.run_main("--out", os.path.join(bad_dir, "x", "leads.csv")))

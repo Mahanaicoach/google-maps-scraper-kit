@@ -18,6 +18,9 @@ Whole city past Google's ~120 results per search (3 x 3 map tiles, run one at a 
 Check homepages only for emails, not contact and about pages:
     python3 scripts/scrape.py "gyms in Miami FL" --city "Miami, FL" --no-deep-emails
 
+Up to 5 reviews per place and its star histogram (one more page load per place):
+    python3 scripts/scrape.py "dentists in Austin TX" --city "Austin, TX" --reviews 3
+
 Notes:
 - Required by the API: keywords, lat/lon (strings), max_time (SECONDS). This script fills them in.
 - Geocoding uses OpenStreetMap Nominatim (free, no key). It allows ~1 request/sec and requires a
@@ -186,10 +189,32 @@ def dedupe(rows, exclude=()):
     return out
 
 
+# What Excel or Sheets would run as a formula (a phone number is not), also behind quotes the guard
+# added, so "'=x" scraped as is gets one more and unguard() stays exact. engine/jobs.py has the same.
+FORMULA = re.compile(r"'*(?:[=@\t\r]|[+-](?![\d\s().-]*$))")
+
+
+def csv_safe(v):
+    """A cell with a leading ' when a spreadsheet would run it as a formula ("=HYPERLINK(...)" in a
+    business name or review); "+1 512-555-0100" is left alone. The engine's CSV download does the same."""
+    s = "" if v is None else str(v)
+    return "'" + s if FORMULA.match(s) else s
+
+
+def unguard(rows):
+    """Undo csv_safe on rows read from a CSV (the engine's download, an earlier file), so filters,
+    --exclude and --json see the scraped text."""
+    for r in rows:
+        for k, v in r.items():
+            if isinstance(v, str) and len(v) > 1 and v[0] == "'" and FORMULA.match(v[1:]):
+                r[k] = v[1:]
+    return rows
+
+
 def load_rows(path):
     """Rows from an earlier results file, .csv or .json."""
     with open(path, encoding="utf-8-sig", newline="") as f:  # -sig: also reads the kit's own CSVs
-        rows = json.load(f) if path.lower().endswith(".json") else list(csv.DictReader(f))
+        rows = json.load(f) if path.lower().endswith(".json") else unguard(list(csv.DictReader(f)))
     if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
         raise ValueError(f"{path} is not a results file (expected a list of rows)")
     return rows
@@ -357,7 +382,7 @@ def download_rows_or_none(job_id):
 
 def download_rows(job_id):
     _, raw = _get(f"/api/v1/jobs/{job_id}/download")
-    return list(csv.DictReader(io.StringIO(raw.decode("utf-8", "replace"))))
+    return unguard(list(csv.DictReader(io.StringIO(raw.decode("utf-8", "replace"), newline=""))))
 
 
 def collect_keywords(a):
@@ -823,6 +848,10 @@ def main():
     ap.add_argument("--max-time", type=int, default=600,
                     help="job time limit in SECONDS; the script waits that long for the "
                          "engine, plus a short grace (default: 600)")
+    ap.add_argument("--reviews", type=int, default=0, metavar="N",
+                    help="also read up to N reviews per place (1-5, no reviewer names) and its star "
+                         "histogram, from each place's panel: one more page load per place, about 2 s "
+                         "(raise --max-time for many places); adds user_reviews and reviews_per_rating")
     ap.add_argument("--out", default=None, help="output file path (default: results-<id>.csv). "
                     "The extension picks the format: .csv (default) or .json")
     ap.add_argument("--json", action="store_true", help="write JSON instead of the default CSV")
@@ -863,6 +892,8 @@ def main():
         sys.exit("✗ --depth must be 1 or more.")
     if a.max_time < 1:
         sys.exit("✗ --max-time must be 1 or more seconds.")
+    if not 0 <= a.reviews <= 5:
+        sys.exit("✗ --reviews must be from 0 to 5 (the reviews a place's panel shows first).")
     if a.limit is not None and a.limit < 1:
         sys.exit("✗ --limit must be 1 or more.")
     if a.has_email and not a.email:
@@ -926,6 +957,8 @@ def main():
             # The engine's own email pass reads homepages only; the crawl below also reads contact and
             # about pages and decodes obfuscated addresses, so the engine only reads Google Maps.
             "depth": a.depth, "email": False, "max_time": a.max_time}
+    if a.reviews:
+        body["reviews_max"] = a.reviews
     if a.proxy:
         body["proxies"] = a.proxy
     if a.country:
@@ -964,6 +997,8 @@ def main():
         fields = [c.strip() for c in a.fields.split(",") if c.strip()]
     else:
         fields = LEAD
+    if a.reviews and not a.full:  # the page loads were paid for: keep what they read
+        fields = fields + [c for c in ("reviews_per_rating", "user_reviews") if c not in fields]
     if a.has_email and "emails" not in fields:
         sys.exit("✗ --has-email needs the emails column: add emails to --fields.")
     if before and not rows:
@@ -1023,7 +1058,7 @@ def main():
             with open(path, "w", newline="", encoding="utf-8-sig") as f:
                 w = csv.DictWriter(f, fieldnames=fields)
                 w.writeheader()
-                w.writerows(results)
+                w.writerows([{k: csv_safe(v) for k, v in r.items()} for r in results])
     try:
         write(out)
     except OSError as e:  # the target is locked (open in Excel) or unwritable: never lose a finished scrape

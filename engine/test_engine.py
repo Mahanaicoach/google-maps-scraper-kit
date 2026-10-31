@@ -1000,6 +1000,90 @@ class ExtraDetailsParser(unittest.TestCase):
         e[37] = [many]
         self.assertEqual(len(json.loads(details.parse_entity(e)["images"])), details.IMAGES_MAX)
 
+def batch_details():
+    """A made-up entity with the old engine's place-page fields, in the layouts search batches use."""
+    e = [None] * 210
+    e[9] = [None, None, 47.0000625, 8.0000625]
+    e[183] = [None, ["Downtown", "1 Main St", None, "Austin", "78701", "Texas", "US"]]
+    opt = lambda name, on, values=(): [None, name, [None, [[on]], None, None,
+                                                   [None, [[[[None, None, v] for v in values]]]]]]
+    e[100] = [None, [["accessibility", "Accessibility", [opt("Ramp", 1), opt("Ramp", 0), opt("Lift", 0)]],
+                     ["payments", "Payments", [opt("Credit cards", 1, ("Visa", "Amex")), opt("Credit cards", 1, ("Visa",))]]]]
+    book = [None, None, ["https://www.opentable.com/r/1"]]
+    e[46] = [["https://www.opentable.com/r/1", "opentable.com"], ["javascript:alert(1)", "x"],
+             ["https://www.opentable.com/r/1", "opentable.com"]]
+    e[75] = [[[1, None, [[["opentable.com"], book]]],  # reserve a table: not an order link
+              [3, None, [[["doordash.com"], [None, None, ["https://www.doordash.com/store/1"]]],
+                         [["bad.com"], [None, None, ["ftp://bad.com/x"]]]]],
+              [4, None, None]]]  # Google's own order flow
+    e[38] = ["https://example.com/menu", "example.com"]
+    return e
+
+
+class BatchDetails(Fakes):
+    def test_old_engine_columns_from_the_batch(self):
+        out = details.parse_entity(batch_details())
+        self.assertEqual(json.loads(out["complete_address"]), {"borough": "Downtown", "street": "1 Main St", "city": "Austin",
+                                                               "postal_code": "78701", "state": "Texas", "country": "US"})
+        self.assertEqual(json.loads(out["about"]), [
+            {"id": "accessibility", "name": "Accessibility", "options": [{"name": "Ramp", "enabled": True},
+                                                                         {"name": "Lift", "enabled": False}]},
+            {"id": "payments", "name": "Payments", "options": [{"name": "Credit cards", "enabled": True,
+                                                                "values": ["Visa", "Amex"]}]}])
+        self.assertEqual(out["credit_cards_accepted"], "Visa, Amex")
+        self.assertEqual(json.loads(out["reservations"]), [{"link": "https://www.opentable.com/r/1", "source": "opentable.com"}])
+        self.assertEqual(json.loads(out["order_online"]), [{"link": "https://www.doordash.com/store/1", "source": "doordash.com"}])
+        self.assertEqual(json.loads(out["menu"]), {"link": "https://example.com/menu", "source": "example.com"})
+        row = jobs.to_row(out, "k")
+        self.assertEqual(row["plus_code"], "8FVC2222+22")  # Open Location Code's own example point
+        for k in ("complete_address", "about", "credit_cards_accepted", "reservations", "order_online", "menu"):
+            self.assertEqual(row[k], out[k])
+        odd = [None] * 210  # Google changed a layout: wrong types read as nothing, never an exception
+        odd[37], odd[100], odd[75], odd[183], odd[46], odd[38] = [[[None] * 6 + [[["x"]]]]], "s", ["x"], [None, "a"], "y", [["l"], "s"]
+        self.assertEqual(details.parse_entity(odd), {})
+        for x in (5, True, 1.5):  # a number where a list was: still nothing, never "not iterable"
+            odd = [None] * 210
+            odd[75], odd[100], odd[203] = x, [None, x], [[["Monday", 1, None, x]]]
+            self.assertEqual(details.parse_entity(odd), {})
+            odd[100] = [None, [["payments", "Payments", x], ["g", "G", [[None, "Opt", [None, [[1]], None, None, [None, [[x]]]]]]]]]
+            self.assertEqual(json.loads(details.parse_entity(odd)["about"])[1]["options"], [{"name": "Opt", "enabled": True}])
+        panel = ")]}'\n" + json.dumps([None] * 6 + [[None] * 175 + [[None] * 9 + [[[5]]]]])  # reviews: a number
+        self.assertEqual(details.parse_place(panel), {})
+        bare = details.parse_entity(entity())
+        for k in ("complete_address", "about", "credit_cards_accepted", "reservations", "order_online", "menu", "plus_code"):
+            self.assertNotIn(k, bare)
+
+    def test_plus_code(self):
+        self.assertEqual(details.plus_code("47.0000625", "8.0000625"), "8FVC2222+22")
+        self.assertEqual(details.plus_code(20.3700625, 2.7821875), "7FG49QCJ+2V")  # the spec's example, 10 digits
+        self.assertEqual(details.plus_code(-90, -180), "22222222+22")
+        self.assertEqual(details.plus_code(90, 180), "C2X2X2X2+X2")  # latitude 90 stays in the top row
+        self.assertEqual(details.plus_code(0, 180), details.plus_code(0, -180))
+        self.assertEqual(details.plus_code(30.2, -97.7), details.plus_code(30.2, 262.3))  # same meridian
+        for bad in ("", None, "x", float("nan"), float("inf")):
+            self.assertEqual(details.plus_code(bad, 1), "")
+        self.assertEqual(jobs.to_row({"title": "A"}, "k")["plus_code"], "")
+        self.assertEqual(jobs.to_row({"title": "A", "plus_code": "6PX4+2V Austin"}, "k")["plus_code"], "6PX4+2V Austin")
+
+    def test_the_panel_fills_only_what_the_batch_lacked(self):
+        RESULTS["cafes in Austin"] = ([place(1, about='[{"id": "accessibility"}]', complete_address='{"city": "A"}')],
+                                      "end-of-list")
+        self.worker.headless = False
+        saved = (maps.place_panel, details.parse_place)
+        maps.place_panel = lambda page, url: "body"
+        details.parse_place = lambda body, limit=5: {"user_reviews": "[]", "about": '[{"id": "payments"}]',
+                                                     "credit_cards_accepted": "Visa", "complete_address": '{"city": "B"}'}
+        try:
+            jid, job = self.run_one(reviews_max=1)
+        finally:
+            maps.place_panel, details.parse_place = saved
+        r = self.rows(jid)[0]
+        self.assertEqual((r["about"], r["credit_cards_accepted"], r["complete_address"], r["user_reviews"]),
+                         ('[{"id": "accessibility"}]', "Visa", '{"city": "A"}', "[]"))
+        body = ")]}'\n" + json.dumps([None] * 6 + [batch_details()])
+        self.assertEqual(details.parse_place(body)["credit_cards_accepted"], "Visa, Amex")
+
+
 class FullView(unittest.TestCase):
     """details.py fields that only Google's full view carries (a Chrome window), from made-up data."""
 
@@ -1087,6 +1171,7 @@ class Websites(unittest.TestCase):
         self.assertEqual({k: r.pattern for k, r in jobs.SOCIAL_RE.items()}, {k: r.pattern for k, r in scrape.SOCIAL_RE.items()})
         self.assertEqual(jobs.SOCIALS, scrape.SOCIAL_FIELDS)
         self.assertEqual(jobs.SKIP_HANDLE, scrape._SKIP_HANDLE)
+        self.assertEqual(jobs.FORMULA.pattern, scrape.FORMULA.pattern)  # the download and the file quote alike
 
 
 class ApiP3(Server):
@@ -1106,6 +1191,18 @@ class ApiP3(Server):
         self.assertEqual((len(rows), rows[0]["title"], rows[0]["review_count"]), (1, "Café", "11"))
         self.assertEqual(self.call("GET", f"/api/v1/jobs/{jid}/download?format=xml")[0], 400)
         self.assertEqual(self.call("GET", f"/download?id={jid}&format=json")[1], body)
+        # A formula in scraped text reaches a spreadsheet quoted; the JSON and the stored file keep it as is.
+        self.store.append(jid, [jobs.to_row(place(2, title='=HYPERLINK("http://x")', phone="+1 512-555-0100",
+                                                  descriptions="line 1\nline 2"), "k")], jobs.fields({}))
+        got = list(csv.DictReader(io.StringIO(self.call("GET", f"/api/v1/jobs/{jid}/download")[1].decode())))
+        self.assertEqual((got[1]["title"], got[1]["phone"], got[1]["descriptions"], len(got)),
+                         ('\'=HYPERLINK("http://x")', "+1 512-555-0100", "line 1\nline 2", 2))
+        self.assertEqual(json.loads(self.call("GET", f"/api/v1/jobs/{jid}/download?format=json")[1])[1]["title"],
+                         '=HYPERLINK("http://x")')
+        self.assertEqual(self.store.read_rows(jid)[1]["title"], '=HYPERLINK("http://x")')
+        for s, want in (("@SUM(1)", "'@SUM(1)"), ("-2+3", "'-2+3"), ("\tx", "'\tx"), ("+44 20 7946 0958", "+44 20 7946 0958"),
+                        ("Joe's", "Joe's"), ("-", "-"), (None, ""), ("'-x", "''-x"), ("'plain", "'plain")):
+            self.assertEqual(jobs.csv_safe(s), want)
         code, body, r = self.call("GET", "/api/docs")
         page, csp = body.decode(), r.getheader("Content-Security-Policy")
         self.assertEqual((code, r.getheader("Content-Type")), (200, "text/html; charset=utf-8"))

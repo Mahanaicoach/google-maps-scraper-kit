@@ -30,7 +30,8 @@ On Windows, run the same commands with `py` or `python3`. The engine needs Pytho
 | `--max-time` | Job time limit in seconds. Default `600`. |
 | `--out` | Output path. Default `results-<short job id>.csv`. A `.json` extension writes JSON. |
 | `--json` | Writes JSON instead of CSV. |
-| `--full` | Keeps all raw columns (the 36 classic ones plus `categories`) instead of the 8 lead fields. Review counts and weekly opening hours work headless ([SETUP §3](../SETUP.md#review-counts-hours-and-reviews)). Review texts stay empty: the script does not ask for them. |
+| `--full` | Keeps all raw columns (the 36 classic ones plus `categories`) instead of the 8 lead fields. Review counts and weekly opening hours work headless ([SETUP §3](../SETUP.md#review-counts-hours-and-reviews)). Review texts come only with `--reviews`. |
+| `--reviews N` | Adds up to N reviews per place (1-5, no reviewer names) and its star histogram (`user_reviews`, `reviews_per_rating`), one more page load per place, about 2 s. Raise `--max-time` for many places. |
 | `--fields` | Comma-separated columns to keep, overriding the lead fields. |
 | `--socials` | Adds Instagram, Facebook, LinkedIn, TikTok, YouTube and X from each website. Slower. Zero AI tokens. |
 | `--tech` | Adds `fb_pixel`, `google_ads_tag`, `analytics`, `bing_ads`, `linkedin_insight`, `tiktok_pixel` (yes/no, blank if the site did not load), `cms`, `mobile_friendly` and a 0-100 `intent_score`, and sorts by that score. Shares the homepage fetch with `--socials`. Zero AI tokens. |

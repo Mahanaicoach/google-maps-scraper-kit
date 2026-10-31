@@ -179,7 +179,7 @@ scrapes Google Maps business listings only. It does not scrape social platforms 
 | **Batch jobs** | Many keywords, one job, one CSV. The engine lists a place found by several keywords once. |
 | **Proxies** | For large or repeated runs: `--proxy URL` with `http`, `https`, `socks5` or `socks5h`, and `user:pass@` on `http` and `https`. Repeat it and the keywords take turns; a keyword Google refuses is retried through the next proxy. |
 | **Agent-native** | A skill plus four slash commands. The agent handles create, poll, download, clean and present. |
-| **Safe defaults** | API bound to `127.0.0.1`, and the engine refuses requests from other websites in your browser (DNS rebinding, cross-site posts); an optional API key. No telemetry: the engine talks to Google Maps, and to the businesses' websites and `dns.google` only for jobs that ask. Proxy passwords show as `***`. Results git-ignored; website fetches skip private addresses; rate-limit and data-law guardrails built into the skill. |
+| **Safe defaults** | API bound to `127.0.0.1`, and the engine refuses requests from other websites in your browser (DNS rebinding, cross-site posts); an optional API key. No telemetry: the engine talks to Google Maps, and to the businesses' websites and `dns.google` only for jobs that ask. Proxy passwords show as `***`. A cell that a spreadsheet would run as a formula gets a leading `'` in the engine's CSV download and in the script's file. Results git-ignored; website fetches skip private addresses; rate-limit and data-law guardrails built into the skill. |
 
 ### Batch jobs and the Python CLI
 
@@ -206,8 +206,8 @@ One keyword per line. One job. One CSV.
   engine's headless Chrome sends its own user agent with `HeadlessChrome` replaced by `Chrome` (same
   OS, same version, nothing else changed), and Google returns `review_count`, the week's
   `open_hours` and `reviews_link`. Google can still leave a field out; if every count is missing,
-  `--min-reviews` warns and skips that filter. Review texts come through the raw API's
-  `reviews_max` (up to 5 per place, one page load each). Business photo URLs come in `images`
+  `--min-reviews` warns and skips that filter. Review texts and the star histogram come with
+  `--reviews N` (up to 5 per place, one page load each). Business photo URLs come in `images`
   (`--full`), with no extra page loads. Rather run a real window, with the agent unchanged? [SETUP §3](SETUP.md#review-counts-hours-and-reviews).
 - **Emails only when a business publishes one.** The script reads the business homepage, then its
   contact and about pages. Listings with no site, or a site with no visible
@@ -272,7 +272,8 @@ Kit 1.x ran another open-source scraper's engine in Docker. Kit 2.0 has its own 
 from scratch in standard-library Python around a headless Chrome. It runs without Docker, works on
 Windows and on arm64 Linux, needs no workarounds for jobs that never finish, and sends no telemetry.
 It keeps the same job API and column names, so scripts and files made for 1.x still work, and an
-update from 1.x brings the old jobs along. On top sits the lead-focused layer: a dependency-free
+update from 1.x brings the old jobs along. A few columns hold their data differently (reviews come
+on request, without reviewer names): [SETUP, Upgrading from kit 1.x](SETUP.md#upgrading-from-kit-1x). On top sits the lead-focused layer: a dependency-free
 Python CLI with geocoding and batching, email and social enrichment to a clean 8-column CSV, and a
 Claude Code skill with slash commands and safety guardrails. See [CREDITS.md](CREDITS.md).
 

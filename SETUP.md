@@ -173,7 +173,8 @@ every count is missing, the script warns and skips that filter rather than dropp
 Review texts come through the raw API: set `"reviews_max"` (0 to 5) in the job body. The engine opens
 each place's panel, one page load per place. It fills `user_reviews` (a JSON list of
 `{"Rating", "When", "Description"}`; reviewer names and photos are left out) and
-`reviews_per_rating` (`{"1": n, ... "5": n}`). `scripts/scrape.py` has no flag for reviews.
+`reviews_per_rating` (`{"1": n, ... "5": n}`). From the terminal: `scripts/scrape.py --reviews 3`
+adds both columns to the 8 lead fields.
 
 Business photo URLs from search results are included in the `images` column without additional
 page loads. Use `--full` to keep that column in CLI output. Photos are linked, not downloaded.
@@ -313,6 +314,29 @@ Nothing is lost:
 
 Moving to the engine without Docker (§2 A) as well? Download the old jobs' CSVs from the web UI
 first: that engine keeps its own jobs in `.engine/` and never sees Docker's volumes.
+
+What changed inside the columns (their names and order are the same):
+
+- `user_reviews` and `reviews_per_rating` are filled only on request (`--reviews N`, or `reviews_max`
+  in the job body), and a review holds `Rating`, `When` and `Description`: no reviewer name, photo
+  or profile link.
+- `about` holds the accessibility group Google sends with each listing. Its other groups (payments,
+  service options) load only on a place's About tab, which the engine does not open, so
+  `credit_cards_accepted` is usually empty.
+- `plus_code` is the 10-digit global code computed from the coordinates (for example `8FVC2222+22`);
+  1.x had Google's short code and the town's name. Both point to the same spot.
+- `link` is Google's documented place URL (`https://www.google.com/maps/search/?api=1&query=…&query_place_id=…`)
+  instead of a `/maps/place/…` URL.
+- `status` is the open state (`Open · Closes 9 PM`); 1.x often held a short editorial line there.
+- `order_online` lists ordering sites only; table-booking links are in `reservations`, where 1.x
+  sometimes listed them twice.
+- `owner` stays empty: it named the Google account behind a listing, often a person.
+  `popular_times`, `street_view_url` and `user_reviews_extended` stay empty too; Google sends no
+  popular times to either engine at the moment.
+- In the CSV download and the script's CSV file, a cell that a spreadsheet would run as a formula (it
+  starts with `=`, `+`, `-`, `@` or a tab and is not a phone number) starts with `'`. `?format=json`
+  has the text as scraped, and `scripts/scrape.py` removes the `'` when it reads a CSV back
+  (`--exclude`).
 
 ---
 
