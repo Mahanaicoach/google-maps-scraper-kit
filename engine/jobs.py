@@ -38,7 +38,7 @@ def utc_now():
 
 
 # ── Job body ──
-LANG = re.compile(r"^[A-Za-z]{2}$")
+LANG = re.compile(r"[A-Za-z]{2}")  # fullmatch: "$" would let "en\n" through
 PROXY_SCHEMES = ("http", "https", "socks5", "socks5h")
 
 
@@ -69,7 +69,7 @@ def validate(body):
     lang = body.get("lang")
     if lang in (None, ""):
         raise ValueError("missing lang")
-    if not isinstance(lang, str) or not LANG.match(lang):
+    if not isinstance(lang, str) or not LANG.fullmatch(lang):
         raise ValueError("invalid lang")
     lat, lon = body.get("lat"), body.get("lon")
     if lat in (None, "") or lon in (None, ""):
@@ -335,6 +335,10 @@ class Worker(threading.Thread):
                     break  # deleted
                 self.log(f"job {jid} keyword {i}/{len(kws)}: {len(places)} places, {new} new, "
                          f"{stats['batches']} batches, {time.monotonic() - started:.1f} s ({reason})")
+                if reason.startswith("error: "):  # Chrome failed mid-scroll; the places before it are kept
+                    errors.append(reason[7:])
+                    if self._browser.cdp.closed:
+                        break
         except browser.BrowserError as e:
             errors.append(str(e))
             self.log(f"job {jid}: {e}")

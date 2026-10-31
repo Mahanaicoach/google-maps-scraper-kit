@@ -10,6 +10,8 @@ on:
       - "engine/**"
       - "scripts/engine.py"
       - ".github/workflows/engine-live.yml"
+permissions:
+  contents: read
 jobs:
   live:
     strategy:

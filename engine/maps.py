@@ -63,7 +63,7 @@ class Batches:
     def __init__(self, page):
         self.page = page
         self.q = page.cdp.subscribe("Network.responseReceived", page.sid)
-        self.pending = []   # requestIds seen but not yet readable
+        self.pending = {}   # requestId -> tries, for batches seen but not yet readable
         self.count = 0
 
     def drain(self):
@@ -73,19 +73,25 @@ class Batches:
                 p = self.q.get_nowait()
             except queue.Empty:
                 break
+            if not isinstance(p, dict):  # the connection died (cdp puts a marker on every queue)
+                raise CDPError(f"connection lost: {self.page.cdp.closed}")
             r = p.get("response", {})
             if BATCH_URL.match(r.get("url", "")) and "json" in (r.get("mimeType") or ""):
-                self.pending.append(p["requestId"])
-        rows, still = [], []
-        for rid in self.pending:
+                self.pending[p["requestId"]] = 0
+        rows = []
+        for rid in list(self.pending):
             try:
                 body = self.page.send("Network.getResponseBody", {"requestId": rid})["body"]
             except CDPError:
-                still.append(rid)  # not finished yet; try again next time
+                if self.page.cdp.closed:
+                    raise
+                self.pending[rid] += 1  # not finished yet; try again next time, for about 10 s
+                if self.pending[rid] > 25:  # failed or evicted: it never will be
+                    del self.pending[rid]
                 continue
+            del self.pending[rid]
             self.count += 1
             rows += details.parse_batch(body)
-        self.pending = still
         return rows
 
     def close(self):
@@ -123,38 +129,43 @@ def collect(page, url, depth=1, max_seconds=180, log=print, stop=lambda: False):
                     new += 1
             return new
 
-        end = time.time() + 10  # the first batch arrives with the page
-        while time.time() < end and batches.count == 0:
-            take()
-            time.sleep(0.4)
-        log(f"  batch {batches.count}: {len(seen)} places")
-        while batches.count < depth and time.time() - started < max_seconds and not stop():
-            if any(m in (page.eval(JS_END) or "") for m in END_MARKERS):
-                reason = "end-of-list"
-                break
-            before = batches.count
-            page.eval(JS_SCROLL)
-            end = time.time() + 10
-            while time.time() < end and batches.count == before:
-                time.sleep(0.4)
+        try:  # a Chrome error mid-scroll keeps the places already read
+            end = time.time() + 10  # the first batch arrives with the page
+            while time.time() < end and batches.count == 0:
                 take()
-                if batches.count == before:
-                    page.eval(JS_SCROLL)  # the feed renders in small steps; keep nudging
-            if batches.count == before:
-                stale += 1
-                if stale >= 2:
-                    reason = "no-growth"
+                time.sleep(0.4)
+            log(f"  batch {batches.count}: {len(seen)} places")
+            while batches.count < depth and time.time() - started < max_seconds and not stop():
+                if any(m in (page.eval(JS_END) or "") for m in END_MARKERS):
+                    reason = "end-of-list"
                     break
+                before = batches.count
+                page.eval(JS_SCROLL)
+                end = time.time() + 10
+                while time.time() < end and batches.count == before:
+                    time.sleep(0.4)
+                    take()
+                    if batches.count == before:
+                        page.eval(JS_SCROLL)  # the feed renders in small steps; keep nudging
+                if batches.count == before:
+                    stale += 1
+                    if stale >= 2:
+                        reason = "no-growth"
+                        break
+                else:
+                    stale = 0
+                    log(f"  batch {batches.count}: {len(seen)} places")
             else:
-                stale = 0
-                log(f"  batch {batches.count}: {len(seen)} places")
-        else:
-            if stop():
-                reason = "stopped"
-            elif time.time() - started >= max_seconds:
-                reason = "timeout"
-        take()
-        links = page.eval(JS_LINKS) or []
+                if stop():
+                    reason = "stopped"
+                elif time.time() - started >= max_seconds:
+                    reason = "timeout"
+            take()
+            links = page.eval(JS_LINKS) or []
+        except CDPError as e:
+            if not seen:
+                raise
+            return list(seen.values()), f"error: {e}", {"batches": batches.count, "dom_links": 0}
         if not seen:  # the batch format changed under us: fall back to what the page shows
             for a in links:
                 p = parse_link(a["href"], a["label"])

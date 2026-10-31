@@ -204,12 +204,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         for k, v in headers:
             self.send_header(k, v)
+        if self.close_connection:  # tell the client too, so it never reuses the socket
+            self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(body)
         if code >= 400:
             log(f"{self.command} {self.path.split('?')[0]} -> {code}")
 
     def fail(self, code, message):
+        if self.command != "GET":  # a refused POST or DELETE may leave its body unread on the socket
+            self.close_connection = True
         self.reply(code, {"code": code, "message": message})
 
     def guard(self):

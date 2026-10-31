@@ -4,7 +4,7 @@ place-link parsing and the APP_INITIALIZATION_STATE parser on a synthetic page. 
 
     python3 engine/test_cdp.py
 """
-import base64, hashlib, json, os, socket, struct, sys, threading, unittest
+import base64, hashlib, json, os, queue, socket, struct, sys, threading, time, unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cdp, details, maps  # noqa: E402
@@ -83,6 +83,8 @@ class FakeDevTools(threading.Thread):
                 _send_frame(conn, 0x1, json.dumps({"method": "Page.loadEventFired", "sessionId": "S1",
                                                    "params": {"timestamp": 1}}).encode())
                 _send_frame(conn, 0x1, json.dumps({"id": msg["id"], "result": {}}).encode())
+            elif msg["method"] == "Test.die":  # Chrome crashed: the socket closes without a reply
+                return
             elif msg["method"] == "Test.error":
                 _send_frame(conn, 0x1, json.dumps({"id": msg["id"], "error": {"message": "nope"}}).encode())
             else:
@@ -113,6 +115,24 @@ class WebSocketAndCDP(unittest.TestCase):
         q = self.c.subscribe("Page.loadEventFired", "S1")
         self.c.send("Test.event")
         self.assertEqual(self.c.wait_event("Page.loadEventFired", "S1", timeout=5, q=q), {"timestamp": 1})
+
+    def test_dead_connection_wakes_every_waiter(self):
+        q = self.c.subscribe("Page.loadEventFired", "S1")
+        with self.assertRaises(cdp.CDPError):
+            self.c.send("Test.die")
+        t = time.time()
+        with self.assertRaisesRegex(cdp.CDPError, "connection lost"):
+            self.c.wait_event("Page.loadEventFired", "S1", timeout=5, q=q)
+        with self.assertRaisesRegex(cdp.CDPError, "connection lost"):
+            self.c.wait_event("Page.frameNavigated", "S1", timeout=5)  # subscribed after the death
+        self.assertLess(time.time() - t, 2)
+
+    def test_quiet_browser_keeps_the_reader(self):
+        c = cdp.CDP(f"ws://127.0.0.1:{FakeDevTools().port}/devtools/browser/y", timeout=0.5)
+        time.sleep(1)  # longer than the command timeout with no frame at all
+        self.assertIsNone(c.closed)
+        self.assertEqual(c.send("X.y")["echo"]["method"], "X.y")
+        c.close()
 
     def test_error_reply_raises(self):
         with self.assertRaises(cdp.CDPError):
@@ -199,6 +219,76 @@ class Parser(unittest.TestCase):
         self.assertTrue(maps.BATCH_URL.match("https://www.google.co.uk/search?q=x&tbm=map"))
         self.assertFalse(maps.BATCH_URL.match("https://www.google.com/maps/vt/pb=!1m4"))
         self.assertFalse(maps.BATCH_URL.match("https://www.google.com/search?q=plain"))
+
+
+class FakeCDP:
+    def __init__(self):
+        self.closed, self.q = None, queue.Queue()
+
+    def subscribe(self, method, session_id=None):
+        return self.q
+
+    def unsubscribe(self, *a):
+        pass
+
+
+class FakeMapsPage:
+    """Just enough of cdp.Page for maps.collect: batches arrive as responseReceived events and
+    getResponseBody replies; `fail_eval` makes Runtime.evaluate of that script raise."""
+
+    def __init__(self, bodies, fail_eval=None):
+        self.cdp, self.sid, self.bodies, self.fail_eval, self.body_calls = FakeCDP(), "S", bodies, fail_eval, {}
+        for rid in bodies:
+            self.cdp.q.put({"requestId": rid, "response": {
+                "url": "https://www.google.com/search?tbm=map&pb=x", "mimeType": "application/json"}})
+
+    def set_cookie(self, *a):
+        pass
+
+    def navigate(self, url):
+        pass
+
+    def url(self):
+        return "https://www.google.com/maps/search/x"
+
+    def eval(self, expr):
+        if expr == self.fail_eval:
+            raise cdp.CDPError("Runtime.evaluate: no reply within 30 s")
+        return [] if expr == maps.JS_LINKS else 1
+
+    def wait_for(self, expr, timeout=15):
+        return True
+
+    def send(self, method, params=None):
+        rid = params["requestId"]
+        self.body_calls[rid] = self.body_calls.get(rid, 0) + 1
+        if self.bodies[rid] is None:
+            raise cdp.CDPError("No resource with given identifier found")
+        return {"body": self.bodies[rid]}
+
+
+def batch(*titles):
+    return ")]}'\n" + json.dumps([None] * 64 + [[[None, entity(i11=t, i10=f"0x1:0x{i:x}")] for i, t in enumerate(titles, 1)]])
+
+
+class Collect(unittest.TestCase):
+    def test_error_mid_scroll_keeps_places(self):
+        page = FakeMapsPage({"r1": batch("A", "B")}, fail_eval=maps.JS_END)
+        places, reason, _ = maps.collect(page, "u", depth=3, log=lambda m: None)
+        self.assertEqual([p["title"] for p in places], ["A", "B"])
+        self.assertTrue(reason.startswith("error: "))
+
+    def test_error_before_any_place_raises(self):
+        page = FakeMapsPage({"r1": None}, fail_eval=maps.JS_END)
+        with self.assertRaises(cdp.CDPError):
+            maps.collect(page, "u", depth=3, log=lambda m: None, max_seconds=20)
+
+    def test_unreadable_batch_is_dropped(self):
+        b = maps.Batches(FakeMapsPage({"good": batch("A"), "gone": None}))
+        rows = [r for _ in range(40) for r in b.drain()]
+        self.assertEqual([r["title"] for r in rows], ["A"])
+        self.assertEqual(b.pending, {})
+        self.assertLessEqual(b.page.body_calls["gone"], 27)
 
 
 if __name__ == "__main__":

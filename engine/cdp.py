@@ -48,6 +48,9 @@ class WebSocket:
                   if k.strip().lower() == "sec-websocket-accept"]
         if accept != [want]:
             raise WebSocketError("websocket handshake: bad Sec-WebSocket-Accept")
+        # The reader blocks on recv() for as long as the browser is quiet (a slow page, a proxy that
+        # takes its time); each command has its own timeout in CDP.send instead.
+        self.sock.settimeout(None)
 
     def _read(self, n):
         while len(self._buf) < n:
@@ -122,8 +125,12 @@ class CDPError(Exception):
     pass
 
 
+_DEAD = object()  # put on every event queue when the connection dies
+
+
 class CDP:
-    """One DevTools connection. send() blocks for the reply; events queue up per (session, name)."""
+    """One DevTools connection. send() blocks for the reply; events reach the queues subscribed to
+    (session, name) and are dropped otherwise, so a long job holds no unread events."""
 
     def __init__(self, ws_url, timeout=30):
         self.ws = WebSocket(ws_url, timeout=timeout)
@@ -131,7 +138,6 @@ class CDP:
         self._id = 0
         self._lock = threading.Lock()
         self._pending = {}      # id -> queue of one reply
-        self.events = queue.Queue()  # (session_id or None, method, params), for callers who want all
         self._subs = {}         # (session_id, method) -> list of queues
         self.closed = None
         self._reader = threading.Thread(target=self._loop, daemon=True)
@@ -149,11 +155,13 @@ class CDP:
                     key = (msg.get("sessionId"), msg.get("method"))
                     for q in self._subs.get(key, ()):
                         q.put(msg.get("params", {}))
-                    self.events.put((msg.get("sessionId"), msg.get("method"), msg.get("params", {})))
         except Exception as e:  # noqa: BLE001 - a dead connection ends every waiter with the cause
             self.closed = e
             for q in list(self._pending.values()):
                 q.put({"error": {"message": f"connection lost: {e}"}})
+            for qs in list(self._subs.values()):
+                for q in list(qs):
+                    q.put(_DEAD)
 
     def send(self, method, params=None, session_id=None, timeout=None):
         if self.closed:
@@ -163,6 +171,9 @@ class CDP:
             mid = self._id
         q = queue.Queue(1)
         self._pending[mid] = q
+        if self.closed:  # the reader died after the check above and will never answer
+            self._pending.pop(mid, None)
+            raise CDPError(f"connection lost: {self.closed}")
         msg = {"id": mid, "method": method, "params": params or {}}
         if session_id:
             msg["sessionId"] = session_id
@@ -191,13 +202,18 @@ class CDP:
         """Block until `method` fires on `session_id` (subscribe first with q= to not miss a fast one)."""
         own = q is None
         q = q or self.subscribe(method, session_id)
+        if self.closed and q.empty():
+            q.put(_DEAD)
         try:
-            return q.get(timeout=timeout or self.timeout)
+            got = q.get(timeout=timeout or self.timeout)
         except queue.Empty:
-            raise CDPError(f"no {method} event within {timeout or self.timeout} s")
+            raise CDPError(f"no {method} event within {timeout or self.timeout} s") from None
         finally:
             if own:
                 self.unsubscribe(method, q, session_id)
+        if got is _DEAD:
+            raise CDPError(f"connection lost: {self.closed}")
+        return got
 
     def close(self):
         self.ws.close()
@@ -243,10 +259,16 @@ class Page:
         return self.eval("location.href")
 
     def wait_for(self, expression, timeout=15, every=0.25):
-        """Poll a JavaScript expression until it is truthy; None if it never is."""
+        """Poll a JavaScript expression until it is truthy; None if it never is. An error while the
+        page navigates ("Execution context was destroyed") is retried; a dead connection is not."""
         end = time.time() + timeout
         while time.time() < end:
-            v = self.eval(expression)
+            try:
+                v = self.eval(expression)
+            except CDPError:
+                if self.cdp.closed:
+                    raise
+                v = None
             if v:
                 return v
             time.sleep(every)
@@ -255,5 +277,5 @@ class Page:
     def close(self):
         try:
             self.cdp.send("Target.closeTarget", {"targetId": self.target})
-        except CDPError:
+        except (CDPError, OSError):  # a dead socket fails in send() before the reader notices
             pass

@@ -1,5 +1,5 @@
 {
-  "$comment": "Pre-approves the safe, local commands this kit uses so Claude can scrape on autopilot without a permission prompt each time. All entries are local-only (localhost / this folder's scripts / docker). Nothing here can reach the public internet except the scraper's own outbound calls.",
+  "$comment": "Pre-approves the safe, local commands this kit uses so Claude can scrape on autopilot without a permission prompt each time. All entries are local-only (localhost / this folder's scripts / docker). Nothing here can reach the public internet except the scraper's own outbound calls, and `scripts/engine.py start` on a machine with no Chrome, which downloads Chrome for Testing once, pinned by SHA-256.",
   "permissions": {
     "allow": [
       "Bash(docker compose up:*)",

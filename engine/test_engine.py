@@ -110,6 +110,7 @@ class Validate(unittest.TestCase):
         self.assertEqual(self.err(name="x"), "missing keywords")
         self.assertEqual(self.err(name="x", keywords=["a"]), "missing lang")
         self.assertEqual(self.err(name="x", keywords=["a"], lang="eng"), "invalid lang")
+        self.assertEqual(self.err(name="x", keywords=["a"], lang="en\n"), "invalid lang")
         self.assertEqual(self.err(name="x", keywords=["a"], lang="en"), "missing geo coordinates")
         self.assertEqual(self.err(name="x", keywords=["a"], lang="en", lat="1", lon="2"), "missing max time")
 
@@ -377,6 +378,14 @@ class Api(Server):
         self.assertEqual(self.call("POST", "/api/v1/jobs", raw=b"0\r\n\r\n", headers={"Transfer-Encoding": "chunked"})[0], 411)
         self.assertEqual(self.call("POST", "/elsewhere", GOOD)[0], 404)
 
+    def test_refused_post_closes_the_connection(self):
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        c.request("POST", "/elsewhere", json.dumps(GOOD), {"Host": "localhost"})
+        r = c.getresponse()
+        r.read()
+        self.assertEqual((r.status, r.getheader("Connection")), (404, "close"))
+        c.close()
+
     def test_page_and_docs(self):
         code, body, r = self.call("GET", "/")
         csp = r.getheader("Content-Security-Policy")
@@ -544,11 +553,15 @@ class LaunchChrome(unittest.TestCase):
         self.assertNotIn(self.exe, out)  # the fake Chrome was stopped
 
     def test_temp_profile_removed(self):
-        before = {n for n in os.listdir(tempfile.gettempdir()) if n.startswith("gmskit-chrome-")}
-        with self.assertRaises(browser.BrowserError):
-            browser.Browser(path=self.exe, timeout=5)
-        after = {n for n in os.listdir(tempfile.gettempdir()) if n.startswith("gmskit-chrome-")}
-        self.assertEqual(after - before, set())
+        tmp = os.path.join(self.dir, "tmp")
+        os.mkdir(tmp)
+        saved, tempfile.tempdir = tempfile.tempdir, tmp  # Browser's mkdtemp lands here, not in the shared temp
+        try:
+            with self.assertRaises(browser.BrowserError):
+                browser.Browser(path=self.exe, timeout=5)
+        finally:
+            tempfile.tempdir = saved
+        self.assertEqual(os.listdir(tmp), [])
 
     def test_no_usable_sandbox_relaunches_once_without_it(self):
         os.environ["FAKE_SANDBOX"] = "1"

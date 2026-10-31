@@ -115,7 +115,7 @@ def kill(pid):
     cmd = command_line(pid)
     if cmd is None:
         return False
-    if SERVE not in cmd:
+    if os.path.normcase(SERVE) not in os.path.normcase(cmd):  # Windows: c:\ and C:\ are one path
         return True  # gone, or someone else's process now: nothing of ours to stop
     if os.name == "nt":
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)

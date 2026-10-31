@@ -6,6 +6,8 @@ on:
   push:
     branches: [master]
   pull_request:
+permissions:
+  contents: read
 jobs:
   offline:
     strategy:
