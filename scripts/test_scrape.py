@@ -109,15 +109,28 @@ class Saturation(unittest.TestCase):
         def fake_run_job(body):
             sent.append(body)
             return "j", []
-        ns = dict(lat=None, lon=None, city="Denver, CO", grid=2, depth=1, split=True, limit=None)
+        ns = dict(lat=None, lon=None, city="Denver, CO", grid=3, depth=1, split=True, limit=None)
         with mock.patch.object(scrape, "run_job", fake_run_job), \
              mock.patch.object(scrape, "geocode", return_value=("30.25", "-97.75", BBOX)), \
              redirect_stdout(io.StringIO()) as log:
             _, rows, skipped, total = scrape.scrape_place(argparse.Namespace(**ns), {"keywords": ["dentists"]},
                                                           "Denver, CO", ["dentists"])
         self.assertEqual(sent[0]["keywords"], ["dentists"])  # the keyword reaches the engine unchanged
-        self.assertEqual((len(sent), rows, skipped, total), (3, [], 1, 4))  # the fourth tile is skipped
+        self.assertEqual((len(sent), rows, skipped, total), (5, [], 4, 9))  # five empty tiles, four skipped
         self.assertIn("returned 0 places: Google is most likely rate-limiting", log.getvalue())
+        self.assertNotIn("0 places from Google", log.getvalue())  # the breaker message is enough
+
+    def test_rows_clipped_by_the_city_box_are_not_a_block(self):
+        def fake_run_job(body):
+            return "j", [_row("far", lat="50.0")]  # answered, but outside the bbox
+        ns = dict(lat=None, lon=None, city="Austin, TX", grid=1, depth=1, split=True, limit=None)
+        with mock.patch.object(scrape, "run_job", fake_run_job), \
+             mock.patch.object(scrape, "geocode", return_value=("30.25", "-97.75", BBOX)), \
+             redirect_stdout(io.StringIO()) as log:
+            _, rows, *_ = scrape.scrape_place(argparse.Namespace(**ns), {"keywords": ["x"]}, "Austin, TX", ["x"])
+        self.assertEqual(rows, [])
+        self.assertIn("dropped 1 rows outside the city box", log.getvalue())
+        self.assertNotIn("0 places from Google", log.getvalue())
 
     def test_empty_single_search_prints_the_block_hint(self):
         sent, rows, _, _, log = self.run_place({15: 0})
@@ -181,10 +194,34 @@ class CloudflareEmails(unittest.TestCase):
 
     def test_more_junk(self):
         for e in ("noreply@acme.com", "do-not-reply@acme.com", "a1b2c3d4e5f6a7b8c9d0@acme.com",
-                  "info@cdc.gov", "news@mailchimp.com", "x@sentry.wixpress.com"):
+                  "info@cdc.gov", "news@mailchimp.com", "x@sentry.wixpress.com", "x@sentry-next.wixpress.com"):
             self.assertFalse(scrape.is_real_email(e), e)
-        for e in ("info@sentrysecurity.com", "hi@examplecafe.com", "abc123@acme.com", "info@mygovernor.com"):
+        for e in ("info@sentrysecurity.com", "hi@examplecafe.com", "abc123@acme.com", "info@mygovernor.com",
+                  "mail@gov-tech.io", "a@podium-fitness.com", "a@example-dental.com"):
             self.assertTrue(scrape.is_real_email(e), e)
+
+    def test_own_domain_email_on_homepage_stops_the_crawl(self):
+        fetched = []
+        def fake_html(url, timeout=8):
+            fetched.append(url)
+            return ""
+        rows = [{"website": "https://www.acme.com/", "emails": ""}, {"website": "https://beta.org", "emails": ""}]
+        homes = {"https://www.acme.com/": 'mail <a href="mailto:hello@acme.com">x</a>',
+                 "https://beta.org": 'only <a href="mailto:owner@gmail.com">g</a>'}
+        with mock.patch.object(scrape, "_fetch_cached", lambda u: homes[u]), \
+             mock.patch.object(scrape, "_fetch_html", fake_html), redirect_stdout(io.StringIO()):
+            scrape.enrich_emails(rows, deep=True)
+        self.assertEqual(rows[0]["emails"], "hello@acme.com")
+        self.assertEqual(rows[1]["emails"], "owner@gmail.com")  # kept, but the contact pages were tried
+        self.assertTrue(all(u.startswith("https://beta.org") for u in fetched) and len(fetched) == 3, fetched)
+
+    def test_exclude_file_matches_despite_the_formula_guard(self):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "earlier.csv")
+        with open(p, "w", newline="", encoding="utf-8-sig") as f:
+            w = csv.DictWriter(f, fieldnames=["title", "address"]); w.writeheader()
+            w.writerow({"title": scrape.csv_safe("@Home Cafe"), "address": "1 Main"})
+        self.assertEqual(scrape.load_rows(p)[0]["title"], "@Home Cafe")
 
 
 class SocialWebsite(unittest.TestCase):
@@ -775,7 +812,8 @@ class Resilience(unittest.TestCase):
         # HTTPError owns a temp file; close both at the end or Python warns about it at exit.
         e502 = scrape.urllib.error.HTTPError("u", 502, "bad gateway", {}, None)
         e404 = scrape.urllib.error.HTTPError("u", 404, "nf", {}, None)
-        self.addCleanup(e502.close); self.addCleanup(e404.close)
+        for e in (e502, e404):  # HTTPError.close() raises on 3.9 when there is no fp; close the fp itself
+            self.addCleanup(lambda e=e: e.fp and e.fp.close())
         answers = iter([e502, OSError("timed out"), (200, b"null")])
         def fake_req(method, path, body=None):
             a = next(answers)

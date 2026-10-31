@@ -26,7 +26,7 @@ English.
 
 | Goal | Start here |
 |---|---|
-| Get a lead list in the next 5 minutes | [Quick start](#quick-start) |
+| Get a lead list in the next 10 minutes | [Quick start](#quick-start) |
 | Let an AI coding agent run the scrape | [Use it with Claude Code or any agent](#use-it-with-claude-code-or-any-agent) |
 | Scrape many keywords or cities in one job | [Batch jobs](#batch-jobs-and-the-python-cli) |
 | Know what you get and where it stops | [What you get](#what-you-get) and [Honest limits](#honest-limits) |
@@ -74,6 +74,8 @@ docker compose up -d
 bash scripts/scrape.sh "coffee shops in Austin TX" 30.2672 -97.7431 5
 ```
 
+The first scrape takes about 4 minutes: one search, 4 closer searches when the first comes back full
+(`--no-split` keeps it to one), then the email check on every website found.
 On Windows, skip the `bash` line and use the Python CLI below with `py` in place of `python3`.
 Prefer clicking? http://localhost:8080 has a form; it returns the engine's raw 36-column CSV.
 Already running another copy of the kit on this machine? Set the port and names in `.env` first

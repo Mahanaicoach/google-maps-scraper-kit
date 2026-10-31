@@ -12,7 +12,7 @@ Auto-geocode (no coordinates needed):
 Batch (one job, many keywords) from a file (one keyword per line):
     python3 scripts/scrape.py --keywords-file examples/queries.example.txt --city "Denver, CO"
 
-Whole city past Google's ~120 results per search (3 x 3 map tiles, run one at a time, deduped on place_id):
+Whole city (3 x 3 map tiles, run one at a time, deduped on place_id; one search returns about 20 places):
     python3 scripts/scrape.py "plumbers in Phoenix AZ" --city "Phoenix, AZ" --grid 3
 
 Check homepages only for emails, not contact and about pages:
@@ -240,6 +240,10 @@ def load_rows(path):
         rows = json.load(f) if path.lower().endswith(".json") else list(csv.DictReader(f))
     if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
         raise ValueError(f"{path} is not a results file (expected a list of rows)")
+    for r in rows:  # undo csv_safe()'s formula guard, so "'@Home Cafe" matches the engine's "@Home Cafe"
+        for k, v in r.items():
+            if isinstance(v, str) and len(v) > 1 and v[0] == "'" and v[1] in "=+-@\t\r":
+                r[k] = v[1:]
     return rows
 
 
@@ -596,16 +600,18 @@ def _fetch_cached(url):
     host = p.hostname or ""
     if not host:
         return ""
+    port = f":{p.port}" if p.port else ""
+    tail = p.path + ("?" + p.query if p.query else "")
     other = host[4:] if host.startswith("www.") else "www." + host
     scheme2 = "https" if p.scheme == "http" else "http"
-    for variant in (f"{scheme2}://{host}{p.path}", f"{p.scheme}://{other}{p.path}", f"{scheme2}://{other}{p.path}"):
+    for variant in (f"{scheme2}://{host}{port}{tail}", f"{p.scheme}://{other}{port}{tail}", f"{scheme2}://{other}{port}{tail}"):
         html = _fetch_html(variant, timeout=8)
         if html:
             return html
     return ""
 
-_SOCIAL_HOSTS = ("facebook.com", "instagram.com", "linkedin.com", "x.com", "twitter.com", "tiktok.com",
-                 "youtube.com", "yelp.com")
+_SOCIAL_HOSTS = ("facebook.com", "fb.com", "fb.me", "instagram.com", "instagr.am", "linkedin.com", "lnkd.in",
+                 "x.com", "twitter.com", "tiktok.com", "youtube.com", "yelp.com")
 
 def is_social(url):
     """True when the "website" is a social or review profile, not the business's own site: nothing
@@ -769,7 +775,7 @@ def is_real_email(e):
     local, _, dom = e.rpartition("@")
     if not EMAIL_RE.fullmatch(e) or e.endswith(_JUNK_EXT) or re.fullmatch(r"[0-9a-f]{16,}", local):
         return False  # a 16+ hex local part is a tracking token, not an inbox
-    labels = re.split(r"[.-]", dom)  # whole labels: sentry.wixpress.com is junk, sentrysecurity.com is not
+    labels = dom.split(".")  # whole labels: sentry.wixpress.com is junk, sentrysecurity.com and gov-tech.io are not
     junk = any((dom == j or dom.endswith("." + j)) if "." in j else j in labels for j in _JUNK_DOMAIN)
     return local not in _JUNK_LOCAL and not junk
 
@@ -840,7 +846,7 @@ def enrich_emails(results, deep=True, workers=None):
         site = r["website"]
         home = _fetch_cached(site)
         found = extract_emails(home, site)
-        if deep and home and not any(_on_site(e, site) for e in found):  # a gmail on the homepage is not the end
+        if deep and home and not any(_on_site(e, _host(site)) for e in found):  # a gmail on the homepage is not the end
             pages = "\n".join(_fetch_html(u, timeout=8) for u in contact_links(home, site))
             found = extract_emails(home + "\n" + pages, site)
         r["emails"] = ", ".join(found)
@@ -949,9 +955,10 @@ def scrape_place(a, body, city, keywords):
         if tiled:
             print(f"  cell {i}/{total}: {len(cell_rows)} rows, {len(rows)} unique so far")
         ok_cells, empty_cells = ok_cells + bool(cell_rows), empty_cells + (not cell_rows)
-        if not ok_cells and empty_cells >= 3 and queue:  # three empty areas in a row: a block, not a market
-            print(f"  ⚠ {empty_cells} areas in a row returned 0 places: Google is most likely rate-limiting this IP, "
-                  f"so the remaining {len(queue)} job(s) are skipped. Wait 15-30 minutes or add a proxy, then rerun.")
+        if not ok_cells and empty_cells >= min(5, total) and queue:  # nothing but empty areas: a block, not a market
+            print(f"  ⚠ {empty_cells} areas in a row returned 0 places: Google is most likely rate-limiting this IP "
+                  f"(or the area has none), so the remaining {len(queue)} job(s) are skipped. Check the keyword on "
+                  f"the Google Maps website; if places show there, wait 15-30 minutes or add a proxy, then rerun.")
             skipped += len(queue)
             queue.clear()
             break
@@ -973,11 +980,12 @@ def scrape_place(a, body, city, keywords):
                 warned = True
             queue[0:0] = split_cell(cell)  # look closer right away, then carry on with the grid
             total += 4
+    answered = len(rows)
     if bbox:  # radius does not clip results in normal mode, so tiles leak outside the city
         kept = [r for r in rows if in_bbox(r, bbox)]
         print(f"  dropped {len(rows) - len(kept)} rows outside the city box")
         rows = kept
-    if job_id and not rows and not skipped:
+    if job_id and not answered and not skipped:
         print(BAN_HINT)
     return job_id, rows, skipped, total
 
@@ -1010,7 +1018,7 @@ def main():
                     help="check homepages only, not contact and about pages")
     ap.add_argument("--grid", type=int, metavar="N",
                     help="split the --city area into N x N map tiles, one job each, deduped "
-                         "(covers a whole city past Google's ~120 per search cap; max 10)")
+                         "(covers a whole city; one search returns about 20 places; max 10)")
     ap.add_argument("--no-split", dest="split", action="store_false", default=True,
                     help=f"do not re-run a search that comes back full ({SATURATION_ROWS}+ rows) as 4 "
                          f"closer searches; by default every full search or tile splits, up to "

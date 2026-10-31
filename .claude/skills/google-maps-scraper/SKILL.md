@@ -46,7 +46,7 @@ could reach it. Tell the user once, and offer `docker stop gmaps-scraper` when t
 - `lang`: the 2-letter interface language, `"en"` (`422 missing lang` without it; `"eng"` is `invalid lang`).
 
 **Recommended fields:**
-- `depth` (default 10): how far to scroll, so roughly how many listings per keyword. Start at `5`.
+- `depth` (default 10): how far to scroll. Signed-out Google Maps stops at about 20 places per search whatever the depth, so `5` is plenty; more places come from more map points (`scripts/scrape.py` re-runs a full search as 4 closer ones, and `--grid` tiles a city).
 - `zoom` `15` (city level), `radius` `10000` (meters), `fast_mode` `false`.
 - **`email` `true`** only in this raw curl flow, where it is the only way to get emails. The engine
   then visits every website in a browser, which is slow and misses many. `scripts/scrape.py` keeps it
@@ -145,6 +145,8 @@ the curl flow above):
 - **Proxies:** `--proxy socks5://user:pass@host:port` (repeatable; `socks5h`, `http`, `https` too).
 Use the manual curl flow only for custom job bodies.
 
+**Every scripted run:** a plain `scripts/scrape.py` search re-runs itself as 4 closer searches when the first comes back full (about 20 rows), so expect up to 5 engine jobs and about 4 minutes; say so once. `--no-split` keeps one quick job.
+
 **Whole-city runs:** when the user says all, every or entire city, or a run returns about 100 rows (5 searches of 20 after the automatic split)
 (Google's per-search cap), use `python3 scripts/scrape.py "<keyword>" --city "<City, ST>" --grid 3`.
 It splits the city into 3 x 3 tiles (9 jobs) and dedupes on `place_id`. Tiles run one at a time, so a
@@ -179,8 +181,8 @@ loopback or link-local address (this machine, the engine on localhost, the user'
   use the API or the scripts there.
 
 ## Best practices (from the upstream docs)
-- **Depth:** higher `depth` returns more results but is slower and more likely to be blocked. Start at 5
-  and raise it as needed.
+- **Depth:** `5` is enough: signed-out Google Maps returns about 20 places per search whatever the depth.
+  For more places use more map points (the script's automatic split, or `--grid`), not a higher depth.
 - **One job at a time** locally. Many concurrent jobs without proxies lead to throttling by Google.
 - **Emails** stay **on by default** because they are the key lead field. The script's crawl adds
   seconds, not minutes; the engine's `email:true` adds minutes. Pass `--no-email` (script) or
