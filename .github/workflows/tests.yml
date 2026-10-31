@@ -1,6 +1,7 @@
-# Two jobs, no Google traffic. "offline" is the Python client on the three desktop platforms a new
+# Three jobs, no Google traffic. "offline" is the Python client on the three desktop platforms a new
 # user installs on. "fresh-install" is a new user's first ten minutes on Linux minus the scrape:
 # clone, docker compose up, the health check, the patched web UI and API docs, the proxy's checks.
+# "native" is the same first run without Docker (scripts/engine.py) on all three platforms.
 name: tests
 on:
   push:
@@ -19,6 +20,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: python scripts/test_scrape.py
+      - run: python scripts/test_engine.py
       - run: bash -n scripts/scrape.sh
       - run: python -c "import json; json.load(open('.claude/settings.json'))"
   fresh-install:
@@ -46,3 +48,31 @@ jobs:
           curl -s -X POST -H 'Content-Type: application/json' -d '{}' http://localhost:8080/api/v1/jobs | grep -q 'missing name'
       - if: always()
         run: docker compose down -v
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - if: runner.os == 'macOS'
+        run: sudo softwareupdate --install-rosetta --agree-to-license || true
+      - run: python scripts/engine.py start
+      - name: same first run as Docker (null jobs, patched UI, pinned Redoc, proxy checks)
+        shell: bash
+        run: |
+          test "$(curl -s http://localhost:8080/api/v1/jobs)" = null
+          curl -s http://localhost:8080/ | grep -q 'id="email" name="email" checked'
+          curl -s http://localhost:8080/api/docs | grep -q 'redoc/v2.5.0/'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.com' http://localhost:8080/api/v1/jobs)" = 421
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Origin: https://evil.com' http://localhost:8080/api/v1/jobs)" = 403
+          curl -s -X POST -H 'Content-Type: application/json' -d '{}' http://localhost:8080/api/v1/jobs | grep -q 'missing name'
+      - run: python scripts/engine.py status
+      - run: python scripts/engine.py restart
+      - run: python scripts/engine.py status
+      - if: always()
+        run: python scripts/engine.py stop

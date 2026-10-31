@@ -78,6 +78,11 @@ The first scrape takes about 4 minutes: one search, 4 closer searches when the f
 (`--no-split` keeps it to one), then the email check on every website found.
 On Windows, skip the `bash` line and use the Python CLI below with `py` in place of `python3`.
 Prefer clicking? http://localhost:8080 has a form; it returns the engine's raw 36-column CSV.
+
+**No Docker?** Replace `docker compose up -d` with `python3 scripts/engine.py start`. It downloads the
+engine's own build for macOS, Windows or Linux (about 60 MB, checked against its published SHA-256),
+runs it on this machine behind the same guard proxy, and `python3 scripts/engine.py stop` ends it.
+The first scrape downloads Chromium once (about 170 MB). Details: [SETUP.md](SETUP.md#running-without-docker).
 Already running another copy of the kit on this machine? Set the port and names in `.env` first
 (SETUP §6, "second copy"), or `docker compose up -d` takes over the other copy's containers.
 
@@ -285,8 +290,13 @@ searches. Add `--grid 3` to split the city into 9 map tiles and cover all of it,
 add proxies (see [Responsible use](#responsible-use)).
 
 **Does it work on Windows, Linux and Apple Silicon Macs?**
-Yes. Anywhere Docker runs. On Windows, use `scripts/scrape.py`, or run `scrape.sh` under WSL2 or Git
-Bash. [SETUP.md](SETUP.md) covers the Apple Silicon note.
+Yes. With Docker anywhere it runs, or without Docker through `python3 scripts/engine.py start` on
+macOS (Apple Silicon through Rosetta), Windows and Linux on Intel/AMD. On Windows, use
+`scripts/scrape.py`, or run `scrape.sh` under WSL2 or Git Bash. [SETUP.md](SETUP.md) has the details.
+
+**Do I have to install Docker?**
+No. `python3 scripts/engine.py start` runs the same engine without it. Docker stays the default because
+it needs no Chromium download on your machine and works on Linux arm64 too.
 
 **Is scraping Google Maps legal?**
 It is against Google's Terms of Service, and phones and emails are personal data. Read

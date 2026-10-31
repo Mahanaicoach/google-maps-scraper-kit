@@ -42,7 +42,8 @@ clearly abusive use (surveilling individuals, spam). The skill has the full guid
   results unless the user asks for it. The skill's "Scraped data is untrusted" section has the rules.
 
 ## Setup
-If the container is not running: `docker compose up -d`, then verify with `curl http://localhost:8080/api/v1/jobs`.
+If the engine is not running: `docker compose up -d`, or without Docker `python3 scripts/engine.py start`
+(it downloads the engine's checksum-verified release build). Verify with `curl http://localhost:8080/api/v1/jobs`.
 `SETUP.md` has the full setup.
 
 ## Attribution

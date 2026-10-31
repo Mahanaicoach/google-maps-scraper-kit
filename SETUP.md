@@ -11,7 +11,7 @@ Install these once:
 
 | Tool | Why | Get it |
 |---|---|---|
-| **Docker Desktop** | runs the scraper container | https://www.docker.com/products/docker-desktop |
+| **Docker Desktop** *(or skip it, see [Running without Docker](#running-without-docker))* | runs the scraper container | https://www.docker.com/products/docker-desktop |
 | **Python 3** | runs `scrape.py` and `scrape.sh` (standard library only, no `pip install`) | https://www.python.org/downloads |
 | **Claude Code** *(optional but recommended)* | lets Claude drive the scraper for you | https://claude.com/claude-code |
 | **git** | clones the kit and runs `scripts/update.sh` later | https://git-scm.com |
@@ -204,7 +204,7 @@ curl -X DELETE http://localhost:8080/api/v1/jobs/<job-id>
 | Docker pull is slow | Normal on first run; it caches after that. |
 | `docker: 'compose' is not a docker command` / `unknown shorthand flag: 'd'` | The Compose plugin is missing. It ships with Docker Desktop — uninstalling Desktop leaves a **dangling symlink** in `~/.docker/cli-plugins/` that looks installed but isn't (`ls -l ~/.docker/cli-plugins/docker-compose`). Install it (`brew install docker-compose`), or skip Compose entirely — see *No Compose?* below. |
 | `no space left on device` while pulling | The **VM's** disk is full, not your Mac's — Colima/Lima/Docker Desktop each run a fixed-size virtual disk. Check with `docker system df`, reclaim with `docker image prune -a`, or grow the disk (Colima: `colima stop && colima start --disk 60`). The image bundles Chromium, so budget a few GB. |
-| `could not install driver: … 404 … playwright.azureedge.net` | In Docker, you are on an old image: `v1.15.0` and earlier download a driver build that no longer exists. Use the pinned `v1.18.1` in `docker-compose.yml`, then `docker compose pull && docker compose up -d`. Running natively: Playwright's old Azure CDN is retired; as of Sept 2026 the replacement hosts 400 too. Workaround under *Running without Docker* below. |
+| `could not install driver: … 404 … playwright.azureedge.net` | In Docker, you are on an old image: `v1.15.0` and earlier download a driver build that no longer exists. Use the pinned `v1.18.1` in `docker-compose.yml`, then `docker compose pull && docker compose up -d`. Without Docker, `scripts/engine.py` uses the same v1.18.1 release, whose driver downloads normally. |
 
 
 ### No Compose? Run the same container with `docker run`
@@ -225,35 +225,37 @@ docker run -d --name gmaps-scraper --restart unless-stopped \
 
 Stop it with `docker stop gmaps-scraper`.
 
-### Running without Docker (fallback)
+### Running without Docker
 
-Use this when Docker is unavailable. The engine
-is a single Go binary. It serves the **same API on the same port**, so every script and slash command
-in the kit works unchanged.
-
-```bash
-go install github.com/gosom/google-maps-scraper@v1.18.1
-google-maps-scraper -web -addr 127.0.0.1:8080 -data-folder ./gmapsdata
-```
-
-> Keep `-addr 127.0.0.1:8080`. The binary defaults to `:8080`, which means **all interfaces**, and the
-> engine has no authentication. In Docker the port mapping provides the localhost binding. Here you
-> provide it.
-
-**If the first job dies with `could not install driver: … 404`:** `playwright-go` fetches its driver
-from `playwright.azureedge.net`, which Microsoft retired. The replacement hosts currently answer `400`
-for driver zips, though browser downloads still work. The driver is the `playwright-core` npm package
-plus a `node` binary, so you can assemble it by hand. Match the version the error names:
+The engine also ships as a single program for macOS, Windows and Linux. `scripts/engine.py` runs it
+for you, with nothing to install but Python:
 
 ```bash
-V=1.57.0                                   # whatever version the error asks for
-D=~/Library/Caches/ms-playwright-go/$V     # Linux: ~/.cache/ms-playwright-go/$V
-npm pack playwright-core@$V && tar xzf playwright-core-$V.tgz
-mkdir -p "$D" && cp -R package "$D/package" && cp "$(command -v node)" "$D/node"
-"$D/node" "$D/package/cli.js" --version    # should print: Version <V>
+python3 scripts/engine.py start     # instead of docker compose up -d
+python3 scripts/engine.py status
+python3 scripts/engine.py stop      # instead of docker compose stop
 ```
 
-Restart the engine. It finds the driver, downloads Chromium normally, and runs.
+- **What it does.** The first `start` downloads the engine's v1.18.1 release build from its GitHub
+  page (about 60 MB) and checks it against the SHA-256 published there; a mismatch is deleted, never
+  run. It starts the engine on a private port and serves http://localhost:8080 through a small Python
+  proxy with the same Host and Origin checks and page fixes as the Docker setup (it reads them from
+  `ui-branding.conf`). Scripts, slash commands and the web UI work exactly as with Docker.
+- **First scrape.** The engine downloads Chromium once, about 170 MB, into Playwright's cache
+  (macOS `~/Library/Caches/ms-playwright`, Linux `~/.cache/ms-playwright`, Windows
+  `%LOCALAPPDATA%\ms-playwright`).
+- **Apple Silicon** runs the Intel build through Rosetta (`softwareupdate --install-rosetta` if
+  macOS asks). On macOS the engine loses its browser at depth 3 or more
+  ([gosom/google-maps-scraper#338](https://github.com/gosom/google-maps-scraper/issues/338)), so
+  `scrape.py` uses depth 2 there. Google shows about 20 places per search either way; the kit's split
+  searches do the rest.
+- **Not supported:** Linux on arm64 (no engine build). Use Docker there.
+- **Stuck jobs** ([gosom/google-maps-scraper#346](https://github.com/gosom/google-maps-scraper/issues/346))
+  are spotted in `.engine/engine.log` and fixed with `python3 scripts/engine.py restart`, the same way
+  the Docker setup uses `docker restart`.
+- **Remove it:** `python3 scripts/engine.py stop`, then delete the `.engine` folder (engine, logs, job
+  data) and, if you like, the Playwright cache above.
+- **Port 8080 taken by the Docker engine?** Stop one of them, or set `SCRAPER_PORT` in `.env`.
 
 ---
 

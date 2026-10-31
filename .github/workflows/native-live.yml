@@ -1,0 +1,34 @@
+# One real search through the engine run without Docker (scripts/engine.py) on the three desktop
+# platforms. It talks to Google, so it runs only when the engine or scraper changes, or by hand.
+name: native-live
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/engine.py
+      - scripts/scrape.py
+      - .github/workflows/native-live.yml
+jobs:
+  scrape:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - if: runner.os == 'macOS'
+        run: sudo softwareupdate --install-rosetta --agree-to-license || true
+      - run: python scripts/engine.py start
+      - name: one search, depth 1, no emails
+        run: python scripts/scrape.py "coffee shops in Austin TX" 30.2672 -97.7431 --depth 1 --no-email --no-split --out leads.csv
+      - name: places came back
+        run: python -c "import csv; n = len(list(csv.DictReader(open('leads.csv', encoding='utf-8-sig')))); print(n, 'places'); assert n > 0"
+      - if: failure()
+        shell: bash
+        run: tail -60 .engine/engine.log || true
+      - if: always()
+        run: python scripts/engine.py stop

@@ -17,3 +17,6 @@ __pycache__/
 # OS / editor noise
 .DS_Store
 Thumbs.db
+
+# Engine run without Docker (scripts/engine.py): binary, logs and job data
+.engine/

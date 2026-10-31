@@ -247,47 +247,80 @@ def load_rows(path):
     return rows
 
 
-def _local_docker():
-    return urllib.parse.urlparse(BASE).hostname in ("localhost", "127.0.0.1", "::1") \
-        and shutil.which("docker") is not None
+LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
+ENGINE_STATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, ".engine", "state.json")
+_LOG_TIME = re.compile(r'"time":"([^"]+)"')
 
-def engine_run_ended(since):
-    """True if the local engine's log shows a scraper run ending after `since` (UTC, ISO 8601).
-    The scripts run one job at a time, so that is this job's run."""
+
+def native_engine():
+    """scripts/engine.py's state when it runs the engine without Docker on BASE's port, else None."""
+    try:
+        with open(ENGINE_STATE, encoding="utf-8") as f:
+            st = json.load(f)
+    except (OSError, ValueError):
+        return None
+    u = urllib.parse.urlparse(BASE)
+    return st if u.hostname in LOCAL_HOSTS and (u.port or 80) == st.get("port") else None
+
+def _local_docker():
+    return urllib.parse.urlparse(BASE).hostname in LOCAL_HOSTS and shutil.which("docker") is not None
+
+def _iso(seconds_ago=0):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - seconds_ago))
+
+def engine_log(since):
+    """(ok, text): the local engine's log from `since` (UTC, ISO 8601) on, read from
+    scripts/engine.py's log file or from `docker logs`. ok is False when there is no log to read
+    (remote engine, wrong container name, daemon down): never read that as idle or finished."""
+    st = native_engine()
+    if st:
+        try:
+            with open(st["log"], "rb") as f:
+                f.seek(max(0, os.path.getsize(st["log"]) - 2_000_000))
+                lines = f.read().decode("utf-8", "replace").splitlines()
+        except (OSError, KeyError):
+            return False, ""
+        return True, "\n".join(l for l in lines
+                               if (m := _LOG_TIME.search(l)) and m.group(1)[:19] >= since[:19])
     if not _local_docker():
-        return False
+        return False, ""
     try:
         out = subprocess.run(["docker", "logs", "--since", since, ENGINE_CONTAINER],
                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
     except (OSError, subprocess.SubprocessError):
-        return False
-    return out.returncode == 0 and "scrapemate exited" in out.stdout + out.stderr
+        return False, ""
+    return out.returncode == 0, out.stdout + out.stderr
+
+def restart_hint():
+    return "python3 scripts/engine.py restart" if native_engine() else f"docker restart {ENGINE_CONTAINER}"
+
+def engine_run_ended(since):
+    """True if the local engine's log shows a scraper run ending after `since` (UTC, ISO 8601).
+    The scripts run one job at a time, so that is this job's run."""
+    ok, text = engine_log(since)
+    return ok and "scrapemate exited" in text
 
 def engine_error(job_id):
     """The engine's own reason for a failed job, from the local log: "error scraping job <id>: ...".
     A proxy typo, for example, otherwise surfaces only as a generic "failed"."""
-    if not _local_docker():
-        return ""
-    try:
-        out = subprocess.run(["docker", "logs", "--since", "15m", ENGINE_CONTAINER],
-                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
-    except (OSError, subprocess.SubprocessError):
-        return ""
-    if out.returncode != 0:
-        return ""
-    for line in reversed((out.stdout + out.stderr).splitlines()):
+    ok, text = engine_log(_iso(900))
+    for line in reversed(text.splitlines() if ok else []):
         if f"error scraping job {job_id}" in line:
             return line.split(f"job {job_id}:", 1)[-1].strip()[:200]
     return ""
 
 def restart_engine():
-    """Restart the local engine and wait until its API answers again. Without the wait, the next
-    grid tile hit the proxy while the engine was still starting and failed with HTTP 502."""
-    if not _local_docker():
+    """Restart the local engine (Docker or scripts/engine.py) and wait until its API answers again.
+    Without the wait, the next grid tile hit the proxy while the engine was still starting and
+    failed with HTTP 502."""
+    if native_engine():
+        cmd = [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "engine.py"), "restart"]
+    elif _local_docker():
+        cmd = ["docker", "restart", ENGINE_CONTAINER]
+    else:
         return False
     try:
-        if subprocess.run(["docker", "restart", ENGINE_CONTAINER],
-                          capture_output=True, timeout=90).returncode != 0:
+        if subprocess.run(cmd, capture_output=True, timeout=180).returncode != 0:
             return False
     except (OSError, subprocess.SubprocessError):
         return False
@@ -314,7 +347,7 @@ def recover_stuck_job(job_id):
     if restart_engine():
         print("  Restarted the engine, which would otherwise hold every later job on \"pending\".")
     else:
-        print("  If the next scrape stays \"pending\", run: docker restart " + ENGINE_CONTAINER)
+        print("  If the next scrape stays \"pending\", run: " + restart_hint())
     return rows
 
 PENDING_RESTART_AFTER = 6  # polls (~48 s) a new job may sit on "pending" before an idle engine is judged stuck
@@ -325,15 +358,8 @@ def engine_idle(seconds=45):
     """True if the local engine logged no scraper activity in the last `seconds`. A job that stays
     "pending" on an idle engine means an earlier job (web UI, raw API) left it wedged
     (gosom/google-maps-scraper#346); a busy engine is just finishing another job first."""
-    if not _local_docker():
-        return False
-    try:
-        out = subprocess.run(["docker", "logs", "--since", f"{seconds}s", ENGINE_CONTAINER],
-                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    # A failing `docker logs` (wrong container name, daemon down) must not read as "idle".
-    return out.returncode == 0 and "scrapemate" not in out.stdout + out.stderr
+    ok, text = engine_log(_iso(seconds))
+    return ok and "scrapemate" not in text  # no log to read must not count as "idle"
 
 
 class JobFailed(RuntimeError):
@@ -375,7 +401,7 @@ def _get(path):
 
 
 def _run_job_once(body, restarted=False):
-    since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    since = _iso()
     for attempt in (1, 2):  # one retry: the proxy answers 502 for a moment while the engine restarts
         try:
             _, raw = req("POST", "/api/v1/jobs", body)
@@ -442,7 +468,7 @@ def _run_job_once(body, restarted=False):
                     pass
                 if not restart_engine():
                     raise RuntimeError(f"\n✗ The engine never started this job and could not be restarted. "
-                                       f"Run: docker restart {ENGINE_CONTAINER}")
+                                       f"Run: {restart_hint()}")
                 return _run_job_once(body, restarted=True)
         time.sleep(POLL_EVERY)
     else:
@@ -458,7 +484,7 @@ def _run_job_once(body, restarted=False):
                 f"    curl -o results.csv {BASE}/api/v1/jobs/{job_id}/download")
         print(f"\n⚠ Job still \"{status}\" after ~{attempts * POLL_EVERY // 60} min; "
               f"keeping the {len(rows)} rows it has written. If the next scrape stays \"pending\", "
-              f"restart the engine: docker restart {ENGINE_CONTAINER}")
+              f"restart the engine: {restart_hint()}")
         return job_id, rows
 
     return job_id, download_rows(job_id)
@@ -1060,6 +1086,11 @@ def main():
         sys.exit(f"✗ --lang must be a 2-letter code (got {a.lang!r}); the engine rejects anything else.")
     if a.depth < 1:
         sys.exit("✗ --depth must be 1 or more.")
+    if a.depth > 2 and sys.platform == "darwin" and native_engine():
+        # The engine's macOS build loses its browser at depth 3+ and returns 0 places
+        # (gosom/google-maps-scraper#338). Google shows ~20 places a search either way.
+        print(f"ℹ Native engine on macOS: depth {a.depth} → 2 (depth 3+ returns nothing there, gosom#338).")
+        a.depth = 2
     if a.max_time < 1:
         sys.exit("✗ --max-time must be 1 or more seconds (the engine runs a job for at least 180).")
     if a.limit is not None and a.limit < 1:
@@ -1124,8 +1155,9 @@ def main():
         print("\r  waiting for the engine to start" + "." * (i + 1), end="", flush=True)
         time.sleep(2)
     if err is not None:
-        sys.exit(f"\n✗ Scraper not reachable at {BASE}. Is Docker Desktop open? Start the engine with "
-                 f"'docker compose up -d' in the kit folder, wait 10 seconds, then try again.\n  ({err})")
+        sys.exit(f"\n✗ Scraper not reachable at {BASE}. Is Docker Desktop open? Start the engine in the "
+                 f"kit folder with 'docker compose up -d', or without Docker with "
+                 f"'python3 scripts/engine.py start', wait 10 seconds, then try again.\n  ({err})")
     if i:
         print()
 
