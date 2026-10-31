@@ -124,6 +124,7 @@ class WebSocketAndCDP(unittest.TestCase):
         s.listen(1)
         def refuse():
             with s, s.accept()[0] as c:
+                c.recv(4096)  # closing with the request unread makes Windows reset the connection
                 c.sendall(b"HTTP/1.1 404 No\r\n\r\n")
         threading.Thread(target=refuse, daemon=True).start()
         with self.assertRaises(cdp.WebSocketError):

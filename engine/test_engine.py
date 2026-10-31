@@ -435,6 +435,8 @@ class Download(unittest.TestCase):
         self.assertIn("libnss3.so", msg)
         self.assertIn("sudo apt-get install -y libnss3", msg)
         self.assertIn("code 3", browser.start_error("/x/chrome", 3, ""))
+        trace = "[1:2:FATAL:zygote_host_impl_linux.cc(130)] No usable sandbox!\n#0 0x1 base::debug\n#1 0x2 x\n#2 0x3 y\n"
+        self.assertIn("No usable sandbox", browser.start_error("/x/chrome", -5, trace))
 
 
 if __name__ == "__main__":

@@ -149,7 +149,9 @@ def start_error(path, code, stderr):
     if missing:
         return (f"Chrome cannot start: {missing[0]}\n  Install the libraries it needs "
                 f"(Debian or Ubuntu):\n    {APT_LINE}")
-    last = "; ".join(l.strip() for l in stderr.strip().splitlines()[-3:])
+    lines = [l.strip() for l in stderr.strip().splitlines() if l.strip()]
+    fatal = [l for l in lines if "FATAL" in l]  # Chrome prints a stack trace after it
+    last = fatal[0] if fatal else "; ".join(lines[-3:])
     return f"Chrome exited at once (code {code}): {path}" + (f": {last}" if last else "")
 
 
@@ -176,35 +178,50 @@ class Browser:
             args.append(f"--proxy-server={proxy}")
         if platform.system() == "Linux" and hasattr(os, "geteuid") and os.geteuid() == 0:
             args.append("--no-sandbox")  # Chrome refuses to run as root with its sandbox (containers)
-        args.append("about:blank")
+        self.proc, self.cdp = None, None
         self._err = open(os.path.join(self.profile, "chrome-stderr.log"), "w+b")
+        try:
+            try:
+                port, path = self._launch(args, timeout)
+            except BrowserError:
+                # Ubuntu 23.10 and newer (AppArmor) block Chrome's sandbox for a browser that is not
+                # installed under /opt, such as the downloaded headless shell. Like Playwright, run it
+                # without; it only ever loads Google Maps.
+                self._err.seek(0)
+                if b"No usable sandbox" not in self._err.read() or "--no-sandbox" in args:
+                    raise
+                port, path = self._launch(args + ["--no-sandbox"], timeout)
+        except BrowserError:
+            self.close()
+            raise
+        self.cdp = CDP(f"ws://127.0.0.1:{port}{path}", timeout=timeout)
+
+    def _launch(self, args, timeout):
+        """Start Chrome; (DevTools port, path) once it listens, else BrowserError (Chrome stopped)."""
+        self._err.seek(0)
+        self._err.truncate()
+        _remove(os.path.join(self.profile, "DevToolsActivePort"))
         kw = {"stdout": subprocess.DEVNULL, "stderr": self._err, "stdin": subprocess.DEVNULL}
         if os.name == "nt":
             kw["creationflags"] = subprocess.CREATE_NO_WINDOW
         try:
-            self.proc = subprocess.Popen(args, **kw)
+            self.proc = subprocess.Popen(args + ["about:blank"], **kw)
         except OSError as e:
-            self._cleanup()
             raise BrowserError(f"Could not start Chrome ({self.path}): {e}") from e
-        self.cdp = None
         active = os.path.join(self.profile, "DevToolsActivePort")
         end = time.time() + timeout
         while time.time() < end:
             if self.proc.poll() is not None:
                 self._err.seek(0)
-                msg = start_error(self.path, self.proc.returncode, self._err.read().decode("utf-8", "replace"))
-                self.close()
-                raise BrowserError(msg)
+                raise BrowserError(start_error(self.path, self.proc.returncode,
+                                               self._err.read().decode("utf-8", "replace")))
             try:
                 with open(active, encoding="utf-8") as f:
                     port, path = f.read().split()
-                break
+                return port, path
             except (OSError, ValueError):
                 time.sleep(0.1)
-        else:
-            self.close()
-            raise BrowserError(f"Chrome did not open its DevTools port within {timeout} s: {self.path}")
-        self.cdp = CDP(f"ws://127.0.0.1:{port}{path}", timeout=timeout)
+        raise BrowserError(f"Chrome did not open its DevTools port within {timeout} s: {self.path}")
 
     def version(self):
         return self.cdp.send("Browser.getVersion").get("product", "")
@@ -213,7 +230,7 @@ class Browser:
         """Stop Chrome now (the job watchdog): every CDP call still waiting fails at once."""
         try:
             self.proc.kill()
-        except OSError:
+        except (OSError, AttributeError):
             pass
 
     def close(self):
@@ -222,7 +239,7 @@ class Browser:
                 self.cdp.close()
             except Exception:  # noqa: BLE001 - closing is best effort
                 pass
-        if self.proc.poll() is None:
+        if self.proc and self.proc.poll() is None:
             self.proc.terminate()
             try:
                 self.proc.wait(5)

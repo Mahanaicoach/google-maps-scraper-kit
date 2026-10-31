@@ -12,7 +12,7 @@ posts, 403); with SCRAPER_API_KEY set it also wants that X-API-Key (401). No tel
 Google Maps, and for email: true jobs to the businesses' own websites, nothing else.
 Standard library only.
 """
-import argparse, hmac, json, os, re, secrets, signal, socket, sys, threading, urllib.parse
+import argparse, hmac, json, os, re, secrets, signal, socket, socketserver, sys, threading, urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -315,6 +315,12 @@ class Handler(BaseHTTPRequestHandler):
 class Server(ThreadingHTTPServer):
     allow_reuse_address = os.name != "nt"  # on Windows SO_REUSEADDR would let a second server share the port
     daemon_threads = True
+
+    def server_bind(self):
+        # HTTPServer.server_bind also calls socket.getfqdn(), a reverse DNS lookup that took over
+        # 30 s on a macOS runner before the engine could answer. The name is never used here.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = "localhost", self.server_address[1]
 
 
 class Server6(Server):
