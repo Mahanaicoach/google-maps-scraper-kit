@@ -240,7 +240,7 @@ curl -X DELETE http://localhost:8080/api/v1/jobs/<job-id>
 | `Cannot connect to the Docker daemon` / `docker: command not found` | Docker Desktop is not running (or not installed). Open Docker Desktop, wait until its whale icon stops animating, then run `docker compose up -d` again. Or use the engine without Docker (§2 A). |
 | `Empty reply from server` or `Connection reset` right after `docker compose up -d` | The engine is still starting, a few seconds. The scripts wait for it; in the browser, reload the page. |
 | `Permission denied` running `./scripts/scrape.sh` | The file lost its execute bit (a ZIP download does that). Run `bash scripts/scrape.sh …` instead. |
-| `port is already allocated` / something else already uses 8080 | Set `SCRAPER_PORT=8081` in `.env`, then start the engine again (`python3 scripts/engine.py restart` or `docker compose up -d`). The engine, Compose and both scripts read the same file, so nothing else needs editing. With Docker the port inside the container stays 8080 (do not change the right-hand side of the mapping). If your `.env` still has a `SCRAPER_BASE_URL` line, delete it or update its port: it overrides `SCRAPER_PORT`. The slash commands and the skill show `localhost:8080` in their examples, so tell Claude the port you picked; its pre-approved `curl` rules are pinned to 8080 too, so add `Bash(curl http://localhost:8081/:*)` to `.claude/settings.json` if you want it to stop asking. **A second copy of the kit on the same machine** (a fork next to the original, a test clone): change `SCRAPER_PORT` in its `.env`. Without Docker that is all, because each copy keeps its own `.engine/` folder. With Docker, also set `COMPOSE_PROJECT_NAME` to a name nobody else uses (`docker compose ls` lists them), as `.env.example` shows; with the default name, `docker compose up -d` takes over the other copy's container. |
+| `port is already allocated` / something else already uses 8080 | Just updated from kit 1.x? Its `ui` container still holds the port: run `docker compose up -d --remove-orphans`. Otherwise set `SCRAPER_PORT=8081` in `.env`, then start the engine again (`python3 scripts/engine.py restart` or `docker compose up -d`). The engine, Compose and both scripts read the same file, so nothing else needs editing. With Docker the port inside the container stays 8080 (do not change the right-hand side of the mapping). If your `.env` still has a `SCRAPER_BASE_URL` line, delete it or update its port: it overrides `SCRAPER_PORT`. The slash commands and the skill show `localhost:8080` in their examples, so tell Claude the port you picked; its pre-approved `curl` rules are pinned to 8080 too, so add `Bash(curl http://localhost:8081/:*)` to `.claude/settings.json` if you want it to stop asking. **A second copy of the kit on the same machine** (a fork next to the original, a test clone): change `SCRAPER_PORT` in its `.env`. Without Docker that is all, because each copy keeps its own `.engine/` folder. With Docker, also set `COMPOSE_PROJECT_NAME` to a name nobody else uses (`docker compose ls` lists them), as `.env.example` shows; with the default name, `docker compose up -d` takes over the other copy's container. |
 | `422 missing max time` | Job body needs `max_time` (in **seconds**, e.g. `300`). |
 | `422 missing geo coordinates` | Job body needs `lat` and `lon` as **strings**, e.g. `"30.2672"`. |
 | `422 missing name` / `422 missing lang` | Job body needs `name` (any label) and `lang` (`"en"`). All six required fields: `name`, `keywords`, `lang`, `lat`, `lon`, `max_time`. |
@@ -256,12 +256,13 @@ curl -X DELETE http://localhost:8080/api/v1/jobs/<job-id>
 
 ### Upgrading from kit 1.x (the gosom engine)
 
-`bash scripts/update.sh` pulls the new kit and, if the old Docker engine is running, rebuilds and
-restarts it with `docker compose up -d --build --remove-orphans`. By hand, run that same command in the
-kit folder. `--remove-orphans` removes 1.x's `ui` container, which would otherwise keep port 8080.
-Jobs from 1.x are not moved over: they stay in the old `gmaps_data` volume, which `docker volume ls`
-lists with your project's name in front. Download what you need from it before you remove it with
-`docker volume rm`.
+The new engine cannot read 1.x jobs, so first download the CSVs you still need from the old web UI
+at http://localhost:8080. Then `bash scripts/update.sh` pulls the new kit and, if the old Docker
+engine is running, rebuilds and restarts it with `docker compose up -d --build --remove-orphans`. By
+hand, run that same command in the kit folder. `--remove-orphans` removes 1.x's `ui` container, which
+would otherwise keep port 8080. The old jobs stay in the old `gmaps_data` volume, which
+`docker volume ls` lists with your project's name in front; remove it with `docker volume rm` when
+you no longer need it.
 
 ---
 

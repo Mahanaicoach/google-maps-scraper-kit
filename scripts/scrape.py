@@ -84,6 +84,9 @@ RESTART = f"{PY} scripts/engine.py restart (Docker: docker compose restart)"
 CHROME_START = ("No Chrome", "Chrome cannot start", "Chrome exited at once", "Could not start Chrome",
                 "Chrome did not open its DevTools port", "Could not connect to Chrome's DevTools port")
 BLOCKED = "unusual-traffic page"  # the engine's Error when Google refused this IP
+# Chrome's network errors for a proxy that failed. Matched as written: the engine's message also
+# holds the search URL, so a keyword such as "tunnel car wash" must not read as a proxy error.
+PROXY_ERROR = re.compile(r"\bERR_(?:PROXY|SOCKS|TUNNEL)_")
 
 
 def poll_attempts(max_time):
@@ -197,6 +200,14 @@ class JobFailed(RuntimeError):
     pass
 
 
+class Blocked(RuntimeError):
+    """Google answered with its unusual-traffic page. More searches from this IP only extend the
+    block, so the grid and city loops stop. Carries the rows found before it (job_id, rows)."""
+    def __init__(self, message, job_id=None, rows=()):
+        super().__init__(message)
+        self.job_id, self.rows = job_id, list(rows)
+
+
 def run_job(body):
     """Create one engine job, poll it, download it -> (job_id, raw CSV rows). A job the engine marks
     "failed" is retried once after a pause, unless its Error says a retry cannot help (Chrome would
@@ -211,12 +222,12 @@ def run_job(body):
                 raise RuntimeError(f"\n✗ Job failed: the engine could not start Chrome.{said}\n"
                                    f"  Fix that and scrape again. If it fails the same way, restart the "
                                    f"engine: {RESTART}")
-            if any(k in reason.upper() for k in ("PROXY", "SOCKS", "TUNNEL")):
+            if PROXY_ERROR.search(reason):
                 raise RuntimeError(f"\n✗ Job failed: the proxy did not work.{said}\n"
                                    "  Check its host and port; this engine takes no user:pass yet, so the "
                                    "proxy must allow your IP address.")
-            if BLOCKED in reason:  # more searches from a rate-limited IP only extend the block
-                raise RuntimeError(f"\n✗ Job failed.{said}")
+            if BLOCKED in reason:
+                raise Blocked(f"\n✗ Job failed.{said}")
             if attempt == 2:
                 raise RuntimeError(f"\n✗ Job failed twice.{said}\n  The engine's log has more: "
                                    ".engine/engine.log (Docker: docker compose logs)")
@@ -265,6 +276,8 @@ def _run_job_once(body):
         print(f"\r  status: {str(status):<10} (attempt {i + 1}{progress})", end="", flush=True)
         if status == "ok":
             print()
+            if BLOCKED in error:  # the rows before the block are kept; searching on would extend it
+                raise Blocked(f"⚠ The engine says: {error}", job_id, download_rows(job_id))
             if error:
                 print(f"ℹ The engine says: {error}")
             return job_id, download_rows(job_id)
@@ -698,6 +711,8 @@ def scrape_place(a, body, city, keywords):
         print(f"▶ Creating job: {len(keywords)} keyword(s) @ {lat},{lon} depth={a.depth}")
         try:
             job_id, rows = run_job(body)
+        except Blocked:
+            raise
         except RuntimeError as e:
             print(str(e))
             return None, [], 0, 0
@@ -708,6 +723,11 @@ def scrape_place(a, body, city, keywords):
         print(f"▶ Cell {i}/{len(cells)} @ {cell['lat']},{cell['lon']} radius={cell['radius']}m")
         try:
             jid, cell_rows = run_job(dict(body, **cell))
+        except Blocked as e:  # keep what the tiles so far found, inside the city box, and stop
+            e.job_id = job_id or e.job_id
+            e.rows = [r for r in dedupe(rows + e.rows) if in_bbox(r, bbox)]
+            print(f"\n  ⚠ Stopped at cell {i}/{len(cells)}: the cells after it were not searched.")
+            raise
         except Exception as e:
             print(f"\n  ⚠ cell {i}/{len(cells)} skipped: {str(e).strip()}")
             skipped += 1
@@ -857,8 +877,16 @@ def main():
     if a.proxy:
         body["proxies"] = a.proxy
     job_id, rows, skipped, ncells, failed_places = None, [], 0, 0, 0
-    for city in cities:  # one place at a time, like the grid tiles
-        jid, place_rows, s, n = scrape_place(a, body, city, keywords)
+    for i, city in enumerate(cities):  # one place at a time, like the grid tiles
+        try:
+            jid, place_rows, s, n = scrape_place(a, body, city, keywords)
+        except Blocked as e:
+            print(str(e))
+            print("⚠ Google is rate-limiting this IP, so the scrape stopped here; the rows found so far "
+                  "are kept. Wait (minutes to hours), or add proxies, then rerun with --exclude on this file.")
+            job_id, rows = job_id or e.job_id, dedupe(rows + e.rows)
+            failed_places += len(cities) - i - (1 if e.rows else 0)
+            break
         job_id, skipped, ncells = job_id or jid, skipped + s, ncells + n
         failed_places += jid is None
         rows = dedupe(rows + place_rows)

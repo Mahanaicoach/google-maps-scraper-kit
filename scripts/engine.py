@@ -271,7 +271,9 @@ def status():
         print(f"ℹ Port {port} answers, but not as this kit's engine (the kit's older Docker engine, probably).")
         sys.exit(1)
     else:
-        print(f"✗ Not running. Start it with: {PY} scripts/engine.py start")
+        found = browser.find_chrome()
+        print(f"✗ Not running. Start it with: {PY} scripts/engine.py start\n  Browser: " + (found or
+              "none found, so start would download Chrome for Testing (about 100 MB, pinned by SHA-256)"))
         sys.exit(1)
 
 

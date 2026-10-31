@@ -3,8 +3,8 @@ description: Start the local Google Maps scraper engine and run a health check.
 ---
 Set up the kit's engine on this computer:
 
-1. Pick how the engine runs. By default, without Docker: from the kit root, `python3 scripts/engine.py start` (Windows: `py scripts/engine.py start`). It needs Python 3.9 or newer and an installed Chrome, Chromium, Edge or Brave. On a machine with none, it downloads Chrome for Testing once (about 100 MB, pinned by SHA-256): tell the user before you run it. If the user runs Docker instead, confirm it is up with `docker ps` (if it errors, point them to **Docker Desktop**, link in `SETUP.md` §0, and stop here), then run `docker compose up -d`; the first run builds the image, about a minute.
-2. `python3 scripts/engine.py status` prints the browser the engine uses (skip it for Docker).
+1. Pick how the engine runs. By default, without Docker: from the kit root, run `python3 scripts/engine.py status` (Windows: `py scripts/engine.py status`). It needs Python 3.9 or newer. If it says the engine is running, go to step 3. It names the browser the engine will use; if it finds none, `start` would download Chrome for Testing once (about 100 MB, pinned by SHA-256), so ask the user first, or suggest installing Google Chrome or using Docker. If the user runs Docker instead, confirm it is up with `docker ps` (if it errors, point them to **Docker Desktop**, link in `SETUP.md` §0, and stop here), then run `docker compose up -d`; the first run builds the image, about a minute.
+2. Without Docker, start the engine: `python3 scripts/engine.py start` (Windows: `py scripts/engine.py start`).
 3. Verify it is live: `curl http://localhost:8080/api/v1/jobs` should return `null` (no jobs yet) or a JSON array of jobs.
 4. Report success. Tell the user they can now run `/scrape <business> in <city>`, or ask in plain language (e.g. "scrape gyms in Miami").
 5. **Show this warning once setup succeeds:**

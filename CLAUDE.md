@@ -45,9 +45,10 @@ clearly abusive use (surveilling individuals, spam). The skill has the full guid
 
 ## Setup
 If the engine is not running: `python3 scripts/engine.py start` (or `docker compose up -d` when the user
-runs Docker), then verify with `curl http://localhost:8080/api/v1/jobs`. On a machine with no Chrome,
-Chromium, Edge or Brave, `engine.py start` downloads Chrome for Testing once (about 100 MB, pinned by
-SHA-256): tell the user before you run it. `SETUP.md` has the full setup.
+runs Docker), then verify with `curl http://localhost:8080/api/v1/jobs`. `python3 scripts/engine.py status`
+names the browser the engine will use. If it finds none, `start` would download Chrome for Testing
+(about 100 MB, pinned by SHA-256): ask the user first, or suggest installing Google Chrome or using
+Docker. `SETUP.md` has the full setup.
 
 ## Changing the kit
 `python3 scripts/test_scrape.py`, `python3 engine/test_engine.py` and `python3 engine/test_cdp.py` run the

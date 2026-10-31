@@ -20,9 +20,9 @@ curl -s http://localhost:8080/api/v1/jobs >/dev/null 2>&1 && echo UP || echo DOW
 ```
 If `DOWN` and the working folder has `scripts/engine.py` (the full kit), start the engine there:
 `python3 scripts/engine.py start` (`py` on Windows), or `docker compose up -d` if the user runs it in
-Docker. Then retry. `engine.py start` uses the installed Chrome, Chromium, Edge or Brave; on a machine
-with none it downloads Chrome for Testing once (about 100 MB, pinned by SHA-256), so tell the user
-before you run it there. Setup help:
+Docker. Then retry. The engine drives the installed Chrome, Chromium, Edge or Brave:
+`python3 scripts/engine.py status` names the one it will use. If it finds none, do not start it: ask
+the user to install Google Chrome, or to use Docker. Setup help:
 [SETUP.md](https://github.com/Mahanaicoach/google-maps-scraper-kit/blob/master/SETUP.md).
 
 **Skill installed on its own?** `npx skills add` copies this file only. The engine ships with the

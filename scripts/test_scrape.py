@@ -159,13 +159,27 @@ class JobOutcomes(unittest.TestCase):
         self.assertIn("proxy did not work", str(err))
         self.assertIn("ERR_PROXY_CONNECTION_FAILED", str(err))
 
+    def test_keyword_naming_a_tunnel_is_not_a_proxy_error(self):
+        # The engine's message holds the search URL, so the keyword is in it.
+        reason = "navigate https://www.google.com/maps/search/tunnel%20car%20wash%20socks: net::ERR_INTERNET_DISCONNECTED"
+        err, posts, _, _ = run_jobs([[("failed", reason)], [("failed", reason)]])
+        self.assertEqual(posts, 2)  # retried like any other failure
+        self.assertNotIn("proxy", str(err))
+
     def test_google_block_is_not_retried(self):
         reason = ("Google answered with its unusual-traffic page: this IP is rate-limited for now. "
                   "Wait, or add proxies")
         err, posts, slept, _ = run_jobs([[("failed", reason)]])
+        self.assertIsInstance(err, scrape.Blocked)
         self.assertEqual(posts, 1)
         slept.assert_not_called()
         self.assertIn("unusual-traffic page", str(err))
+        # An ok job that stopped on the block keeps its rows, and still says stop.
+        note = "Google answered with its unusual-traffic page: this IP is rate-limited for now. " \
+               "Wait, or add proxies. The rows found before that are kept"
+        err, _, _, _ = run_jobs([[("ok", note)]], downloads={"j1": self.CSV})
+        self.assertIsInstance(err, scrape.Blocked)
+        self.assertEqual((err.job_id, len(err.rows)), ("j1", 2))
 
     def test_failed_part_way_keeps_its_rows(self):
         # The engine was stopped while the job ran: it marks the job failed and keeps the rows.
@@ -185,6 +199,32 @@ class JobOutcomes(unittest.TestCase):
             err, _, _, _ = run_jobs(jobs, attempts=3)  # the download answers 404: no rows yet
             self.assertIsInstance(err, RuntimeError)
             self.assertIn("Gave up waiting", str(err))
+
+
+class StopsWhenBlocked(unittest.TestCase):
+    """After Google's unusual-traffic page, no more tiles or cities are searched."""
+    def run_main(self, argv, results):
+        out = os.path.join(tempfile.mkdtemp(), "leads.csv")
+        log = io.StringIO()
+        with mock.patch.object(scrape, "req", return_value=(200, b"null")), \
+             mock.patch.object(scrape, "run_job", side_effect=results) as run, \
+             mock.patch.object(scrape, "geocode", side_effect=lambda place, with_bbox=False: ("30.25", "-97.75") + ((BBOX,) if with_bbox else ())), \
+             mock.patch.object(sys, "argv", ["scrape.py", *argv, "--no-email", "--out", out]), redirect_stdout(log):
+            scrape.main()
+        with open(out, newline="", encoding="utf-8-sig") as f:
+            return run.call_count, [r["title"] for r in csv.DictReader(f)], log.getvalue()
+
+    def test_grid_stops_at_the_blocked_cell(self):
+        calls, titles, text = self.run_main(["plumbers", "--city", "Austin, TX", "--grid", "2"],
+                                            [("job-1", [_row("A"), _row("B")]), scrape.Blocked("✗ Job failed.")])
+        self.assertEqual((calls, titles), (2, ["Biz A", "Biz B"]))  # cells 3 and 4 never searched
+        self.assertIn("Stopped at cell 2/4", text)
+        self.assertIn("rate-limiting this IP", text)
+
+    def test_cities_stop_at_the_blocked_one(self):
+        calls, titles, _ = self.run_main(["plumbers", "--city", "Austin, TX", "--city", "Waco, TX"],
+                                         [scrape.Blocked("⚠ blocked", "job-1", [_row("A")]), ("job-2", [_row("B")])])
+        self.assertEqual((calls, titles), (1, ["Biz A"]))
 
 
 class NoDockerPaths(unittest.TestCase):
