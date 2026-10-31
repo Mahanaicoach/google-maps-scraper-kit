@@ -1240,8 +1240,12 @@ class ApiP3(Server):
         self.assertNotIn("lobstr.io</a>", ui)
         self.assertIn("socials: $('socials').checked", ui)
         self.assertIn("if (proxies.length) body.proxies = proxies", ui)
-        # sponsor tiles: hidden until sponsors.json lists one Mahan marked "ui": true, https links only, four at most
-        self.assertIn('<aside class="sponsors" id="sponsors" aria-labelledby="h-sp" hidden>', ui)
+        # as gosom: a star button, and a sponsor box that can be closed; paid sponsors in it only when
+        # sponsors.json lists one Mahan marked "ui": true, https links only, four at most
+        self.assertIn('Star on GitHub</a>', ui)
+        self.assertIn('Sponsor on GitHub</a>', ui)
+        self.assertIn('id="sp-close"', ui)
+        self.assertIn('<div class="sp-grid" id="sp-grid" hidden>', ui)
         for rule in ("s.ui === true", "s.url.startsWith('https://')", ".slice(0, 4)", "noopener noreferrer sponsored"):
             self.assertIn(rule, ui)
         self.assertNotIn(".innerHTML", ui)  # sponsor text is set as text, never parsed as HTML

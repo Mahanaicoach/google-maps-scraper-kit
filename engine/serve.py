@@ -153,12 +153,12 @@ PAGE = """<!doctype html>
 <title>Google Maps Scraper Kit</title>
 <style nonce="{nonce}">
 :root {{ color-scheme: light dark; --paper: #f5f3ee; --sheet: #fffdf8; --ink: #17191c; --soft: #5b5f66; --rule: #dcd8ce;
-  --go: #0b7a5b; --go-ink: #fff; --ring: #2f8f73; --bad: #b42318; --tag: #8a5a00; --alt: #3d5a80;
+  --go: #0b7a5b; --go-ink: #fff; --ring: #2f8f73; --bad: #b42318; --tag: #8a5a00; --alt: #3d5a80; --star: #f1c21b; --heart: #ea4aaa;
   --serif: ui-serif, "New York", Charter, "Iowan Old Style", Georgia, serif;
   --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }}
 @media (prefers-color-scheme: dark) {{ :root {{ --paper: #111312; --sheet: #181b19; --ink: #ebe8e1; --soft: #a3a69f;
-  --rule: #2c312d; --go: #46c49a; --go-ink: #0b1410; --ring: #7fdcbc; --bad: #ff8a7a; --tag: #e7b45a; --alt: #8fb3de; }} }}
+  --rule: #2c312d; --go: #46c49a; --go-ink: #0b1410; --ring: #7fdcbc; --bad: #ff8a7a; --tag: #e7b45a; --alt: #8fb3de; --star: #9a6700; --heart: #bf3989; }} }}
 * {{ box-sizing: border-box; }}
 body {{ margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.5 var(--sans); }}
 main {{ max-width: 860px; margin: 0 auto; padding: 0 20px 64px; }}
@@ -168,15 +168,23 @@ a {{ color: inherit; text-underline-offset: 3px; }} a:hover {{ color: var(--go);
 h1 {{ margin: 0; font: 600 1.6rem/1.2 var(--serif); letter-spacing: -.01em; }}
 .top nav {{ display: flex; gap: 16px; font-size: .9rem; color: var(--soft); }}
 .mono {{ font-family: var(--mono); font-size: .85em; }} .soft {{ color: var(--soft); font-size: .875rem; }}
-.sponsors {{ padding-top: 18px; }}
-.sp-head {{ display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }}
-.tag {{ color: var(--tag); font: 600 .7rem/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; }}
-.sp-head a {{ color: var(--soft); font-size: .8rem; }}
-.sp-grid {{ display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); }}
-.sp {{ display: flex; align-items: center; gap: 14px; min-height: 76px; padding: 14px 16px; color: var(--ink);
-  text-decoration: none; background: var(--sheet); border: 1px solid var(--rule); border-radius: 12px;
-  transition: border-color .15s, box-shadow .15s; }}
-.sp:hover {{ color: var(--ink); border-color: var(--ink); box-shadow: 0 8px 20px -14px rgba(0, 0, 0, .5); }}
+.stars {{ display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding-top: 16px; color: var(--soft); font-size: .9rem; }}
+.gh {{ display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px 14px; border-radius: 8px;
+  color: var(--paper); background: var(--ink); font-size: .9rem; font-weight: 600; text-decoration: none; transition: filter .15s; }}
+.gh:hover {{ color: var(--paper); filter: brightness(1.3); }} .gh .star {{ color: var(--star); }} .gh .heart {{ color: var(--heart); }}
+.sponsors {{ position: relative; margin-top: 16px; padding: 16px 16px 14px; background: var(--sheet);
+  border: 1px solid var(--rule); border-radius: 12px; }}
+.sp-close {{ position: absolute; top: 6px; right: 6px; min-height: 36px; width: 36px; padding: 0; border: 0;
+  background: transparent; color: var(--soft); font-size: 1.3rem; line-height: 1; }}
+.sp-close:hover {{ color: var(--ink); }}
+.sp-head {{ margin: 0 40px 4px 0; color: var(--soft); font-size: .85rem; }}
+.sp-ask {{ display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: 12px 0 0; padding-top: 12px;
+  border-top: 1px solid var(--rule); color: var(--soft); font-size: .9rem; }}
+.sp-grid[hidden] + .sp-ask {{ margin: 0; padding: 0 40px 0 0; border: 0; }}  /* no paid sponsor loaded: the ask alone */
+.sp-grid {{ display: grid; gap: 4px 16px; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); }}
+.sp {{ display: flex; align-items: center; gap: 14px; min-height: 64px; padding: 10px; margin: 0 -10px; color: var(--ink);
+  text-decoration: none; border-radius: 10px; transition: background-color .15s; }}
+.sp:hover {{ color: var(--ink); background: var(--paper); }}
 .sp-mark {{ flex: none; display: grid; place-items: center; width: 42px; height: 42px; border-radius: 10px;
   color: var(--sheet); background: var(--brand, var(--go)); font: 700 1.15rem/1 var(--serif); }}
 .sp:nth-child(2) .sp-mark {{ background: var(--brand, var(--ink)); }} .sp:nth-child(3) .sp-mark {{ background: var(--brand, var(--tag)); }}
@@ -250,10 +258,15 @@ progress {{ display: block; width: 100%; max-width: 200px; height: 6px; margin-t
 @media (prefers-reduced-motion: reduce) {{ * {{ transition: none !important; }} }}
 </style></head><body><main>
 <header class="top"><h1>Google Maps Scraper Kit</h1>
-<nav><span class="mono">v{version}</span><a href="/api/docs">API</a><a href="{repo}" rel="noopener">GitHub</a>
-<a href="https://github.com/sponsors/Mahanaicoach" rel="noopener">Sponsor</a></nav></header>
-<aside class="sponsors" id="sponsors" aria-labelledby="h-sp" hidden><div class="sp-head"><span class="tag" id="h-sp">Sponsored by</span>
-  <a href="https://github.com/sponsors/Mahanaicoach" rel="noopener">Become a sponsor</a></div><div class="sp-grid" id="sp-grid"></div></aside>
+<nav><span class="mono">v{version}</span><a href="/api/docs">API docs</a></nav></header>
+<div class="stars"><a class="gh" href="{repo}" target="_blank" rel="noopener"><span class="star"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2.5l2.9 6 6.6.8-4.9 4.6 1.3 6.6L12 17.2l-5.9 3.3 1.3-6.6L2.5 9.3l6.6-.8z"/></svg></span>Star on GitHub</a>
+  <span>Useful? A star helps other people find this free kit.</span></div>
+<aside class="sponsors" id="sponsors" aria-label="Sponsors"><button type="button" class="sp-close" id="sp-close"
+  aria-label="Hide sponsors">&times;</button>
+  <div class="sp-head" id="sp-head" hidden>Supported by</div><div class="sp-grid" id="sp-grid" hidden></div>
+  <p class="sp-ask"><span>Support the upkeep of this free, open-source kit.</span>
+    <a class="gh" href="https://github.com/sponsors/Mahanaicoach" target="_blank" rel="noopener"><span class="heart"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 21s-7.5-4.6-9.6-9.2C1 8.6 2.9 5 6.6 5c2.1 0 3.5 1.2 5.4 3.2C13.9 6.2 15.3 5 17.4 5 21.1 5 23 8.6 21.6 11.8 19.5 16.4 12 21 12 21z"/></svg></span>Sponsor on GitHub</a></p>
+</aside>
 <section aria-labelledby="h-new"><h2 id="h-new">New search</h2>
 <form id="f">
   <label class="sr" for="keywords">What to search, one per line</label>
@@ -405,6 +418,7 @@ $('kwpick').addEventListener('change', () => {{  // a picked business type becom
 }})();
 (function () {{  // sponsor tiles: only the entries Mahan marks "ui": true in sponsors.json, as text, https links only
   const box = $('sponsors'), grid = $('sp-grid'), key = 'gmskit-sponsors', day = 86400000;
+  $('sp-close').addEventListener('click', () => {{ box.hidden = true; }});  // as gosom: hidden until the page reloads
   const svg = (tag, attrs) => {{ const e = document.createElementNS('http://www.w3.org/2000/svg', tag);
     for (const k in attrs) e.setAttribute(k, attrs[k]); return e; }};
   function render(list) {{
@@ -431,7 +445,7 @@ $('kwpick').addEventListener('change', () => {{  // a picked business type becom
       go.appendChild(svg('path', {{d: 'M7 17L17 7M8 7h9v9'}}));
       a.append(mark, body, go); grid.appendChild(a);
     }}
-    box.hidden = false;
+    grid.hidden = $('sp-head').hidden = false;
   }}
   try {{
     const c = JSON.parse(localStorage.getItem(key) || 'null');
