@@ -649,6 +649,8 @@ class Worker(threading.Thread):
                         if not stop.is_set() and len(kws) - i > 1:
                             errors[-1] += f"; {len(kws) - i - 1} keyword(s) after it were not searched"
                         break
+                    if stop.is_set():  # the engine is stopping: leave the keyword for the resume
+                        break
                     size = self.store.append(jid, [], cols)
                     if size is None:
                         break  # deleted
@@ -904,8 +906,9 @@ def _public_connection(address, *args, **kwargs):
 
 
 def _hard_stop(conn):
-    """Arm SITE_HARD s after which the connection is shut down from a timer thread, which wakes a
-    read blocked on a dripping website; fetch() disarms it in its finally."""
+    """Arm the fetch's deadline (SITE_HARD s from fetch_window's start, so redirect hops share it);
+    at the deadline the socket is shut down from a timer thread, which wakes a read blocked on a
+    dripping website. fetch_window() disarms it."""
     sock = conn.sock  # taken now: urllib sends Connection: close, so the connection drops its reference
                       # once the response starts; the response's file keeps this same socket object
     def kill():
@@ -914,10 +917,22 @@ def _hard_stop(conn):
         except OSError:  # thread closes the socket itself (close() here would wait on its buffer lock)
             pass
     _cancel_hard_stop()
-    t = threading.Timer(SITE_HARD, kill)
+    left = getattr(_FETCH, "deadline", None)
+    t = threading.Timer(max(0.1, left - time.monotonic()) if left else SITE_HARD, kill)
     t.daemon = True
     t.start()
     _FETCH.timer = t
+
+
+class fetch_window:
+    """`with fetch_window():` around one website or DNS request: one SITE_HARD deadline for all its
+    connections (redirect hops too), and the timer disarmed on every exit."""
+    def __enter__(self):
+        _FETCH.deadline = time.monotonic() + SITE_HARD
+
+    def __exit__(self, *exc):
+        _cancel_hard_stop()
+        _FETCH.deadline = None
 
 
 def _cancel_hard_stop():
@@ -928,10 +943,14 @@ def _cancel_hard_stop():
 
 
 def _read_capped(resp, cap, seconds):
-    """Up to cap bytes of a response, for at most about `seconds`."""
+    """Up to cap bytes of a response, for at most about `seconds`: read1 returns what has arrived
+    (read(n) would block for all n bytes), and a connection the hard stop cut keeps what came."""
     out, end = bytearray(), time.monotonic() + seconds
     while len(out) < cap and time.monotonic() < end:
-        chunk = resp.read(min(1 << 14, cap - len(out)))
+        try:
+            chunk = resp.read1(min(1 << 14, cap - len(out)))
+        except (OSError, ValueError, http.client.HTTPException):  # cut off, or the TLS object torn down
+            break
         if not chunk:
             break
         out += chunk
@@ -1001,12 +1020,10 @@ def fetch(url, timeout=SITE_TIMEOUT):
         if not _public_host(urllib.parse.urlsplit(url).hostname or ""):
             return ""
         r = urllib.request.Request(ascii_url(url), headers={"User-Agent": UA, "Accept": "text/html"})
-        with _OPENER.open(r, timeout=timeout) as resp:
+        with fetch_window(), _OPENER.open(r, timeout=timeout) as resp:
             return _read_capped(resp, 400_000, 2 * timeout).decode("utf-8", "replace")
     except Exception:  # noqa: BLE001 - a broken website is just a website without emails
         return ""
-    finally:
-        _cancel_hard_stop()
 
 
 def site_host(url):
@@ -1039,8 +1056,8 @@ def mx_host(domain):
     if domain in _MX:
         return _MX[domain]
     try:
-        with _OPENER.open(urllib.request.Request(DOH + urllib.parse.urlencode({"name": domain, "type": "MX"}),
-                                                 headers={"User-Agent": UA}), timeout=8) as r:
+        with fetch_window(), _OPENER.open(urllib.request.Request(
+                DOH + urllib.parse.urlencode({"name": domain, "type": "MX"}), headers={"User-Agent": UA}), timeout=8) as r:
             ans = json.load(r)
     except Exception:  # noqa: BLE001 - no answer is not a verdict
         return ""

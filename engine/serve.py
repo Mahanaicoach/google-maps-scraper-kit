@@ -402,7 +402,7 @@ $('f').addEventListener('submit', async ev => {{
   if (at && !m) {{ $('coords').closest('details').open = true; $('coords').focus();
     return say('Map centre: paste two numbers such as 30.2672, -97.7431, or leave it empty.', 'bad'); }}
   const proxies = $('proxies').value.split('\\n').map(s => s.trim()).filter(Boolean);
-  const body = {{name: (keywords[0] || 'job').slice(0, 200), keywords, lang: $('lang').value.trim().toLowerCase(),
+  const body = {{name: Array.from(keywords[0] || 'job').slice(0, 200).join(''), keywords, lang: $('lang').value.trim().toLowerCase(),
     country: $('country').value.trim().toLowerCase(), lat: m ? m[1] : '', lon: m ? m[2] : '',
     zoom: +$('zoom').value || 15, depth: +$('depth').value, max_time: +$('max_time').value,
     email: $('email').checked, socials: $('socials').checked, verify_emails: $('verify').checked,

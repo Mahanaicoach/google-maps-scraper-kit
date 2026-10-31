@@ -256,6 +256,8 @@ class Blocked(Partial):
 
 
 CURRENT_JOB = None  # the job being polled, for the Ctrl-C message
+SALVAGE = {"rows": [], "job": None}  # what Ctrl-C can still save: the rows of the tiles and cities done so far
+WARNINGS = []  # engine notes on "ok" jobs (reviews cut short): printed once more in the final summary
 
 
 def run_job(body):
@@ -359,8 +361,9 @@ def _poll(body, job_id):
                 raise Blocked(f"⚠ The engine says: {error}", job_id, download_rows(job_id))
             if WARN_NOTE.sub("", error).strip(" ;,."):  # stopped at max_time, or keywords failed: incomplete
                 raise Partial(f"⚠ The engine says: {error}", job_id, download_rows(job_id))
-            if error:  # only the reviews or website pass ran out of time: the rows themselves are complete
-                print(f"  ⚠ The engine says: {error}. The rows are complete; raise --max-time for the rest.")
+            if error:  # only the reviews pass ran out of time: the rows are complete, the reviews of the rest are not
+                WARNINGS.append(f"The engine says: {error}. The rows are complete, but the places after that "
+                                f"have no reviews; raise --max-time for the rest.")
             return job_id, download_rows(job_id)
         if status == "failed":
             print()
@@ -484,8 +487,9 @@ def _public_connection(address, *args, **kwargs):
     return sock
 
 def _hard_stop(conn):
-    """Arm SITE_HARD s after which the connection is shut down from a timer thread, which wakes a
-    read blocked on a dripping website; _fetch_html disarms it in its finally."""
+    """Arm the fetch's deadline (SITE_HARD s from _fetch_window's start, so redirect hops share it);
+    at the deadline the socket is shut down from a timer thread, which wakes a read blocked on a
+    dripping website. _fetch_window() disarms it."""
     sock = conn.sock  # taken now: urllib sends Connection: close, so the connection drops its reference
                       # once the response starts; the response's file keeps this same socket object
     def kill():
@@ -494,10 +498,22 @@ def _hard_stop(conn):
         except OSError:  # thread closes the socket itself (close() here would wait on its buffer lock)
             pass
     _cancel_hard_stop()
-    t = threading.Timer(SITE_HARD, kill)
+    left = getattr(_FETCH, "deadline", None)
+    t = threading.Timer(max(0.1, left - time.monotonic()) if left else SITE_HARD, kill)
     t.daemon = True
     t.start()
     _FETCH.timer = t
+
+
+class _fetch_window:
+    """`with _fetch_window():` around one website or DNS request: one SITE_HARD deadline for all its
+    connections (redirect hops too), and the timer disarmed on every exit."""
+    def __enter__(self):
+        _FETCH.deadline = time.monotonic() + SITE_HARD
+
+    def __exit__(self, *exc):
+        _cancel_hard_stop()
+        _FETCH.deadline = None
 
 def _cancel_hard_stop():
     t = getattr(_FETCH, "timer", None)
@@ -506,10 +522,14 @@ def _cancel_hard_stop():
         _FETCH.timer = None
 
 def _read_capped(resp, cap, seconds):
-    """Up to cap bytes of a response, for at most about `seconds` (resp.read's timeout is per read)."""
+    """Up to cap bytes of a response, for at most about `seconds`: read1 returns what has arrived
+    (read(n) would block for all n bytes), and a connection the hard stop cut keeps what came."""
     out, end = bytearray(), time.monotonic() + seconds
     while len(out) < cap and time.monotonic() < end:
-        chunk = resp.read(min(1 << 14, cap - len(out)))
+        try:
+            chunk = resp.read1(min(1 << 14, cap - len(out)))
+        except (OSError, ValueError, http.client.HTTPException):
+            break
         if not chunk:
             break
         out += chunk
@@ -530,7 +550,8 @@ def _ascii_url(url):
 class _PublicPeer:
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._create_connection = _public_connection
+        if not _PROXIED:  # behind a proxy the socket peer is the proxy, often on a private address
+            self._create_connection = _public_connection
 
     def connect(self):
         super().connect()
@@ -559,12 +580,10 @@ class _PublicRedirectsOnly(urllib.request.HTTPRedirectHandler):
             return None  # urllib then raises HTTPError, which _fetch_html turns into ""
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
-# Behind a proxy from the environment the socket peer is the proxy, often on a private address,
-# so only the resolve-time check applies there.
-_HANDLERS = [_PublicRedirectsOnly]
-if not urllib.request.getproxies():
-    _HANDLERS += [_PublicHTTPHandler, _PublicHTTPSHandler]
-_OPENER = urllib.request.build_opener(*_HANDLERS)
+# Behind a proxy from the environment only the resolve-time check applies (see _PublicPeer); the
+# hard stop applies either way.
+_PROXIED = bool(urllib.request.getproxies())
+_OPENER = urllib.request.build_opener(_PublicRedirectsOnly, _PublicHTTPHandler, _PublicHTTPSHandler)
 
 def _fetch_html(url, timeout=10):
     if not url:
@@ -576,12 +595,10 @@ def _fetch_html(url, timeout=10):
             return ""
         r = urllib.request.Request(_ascii_url(url), headers={
             "User-Agent": "Mozilla/5.0 (compatible; " + UA + ")", "Accept": "text/html"})
-        with _OPENER.open(r, timeout=timeout) as resp:
+        with _fetch_window(), _OPENER.open(r, timeout=timeout) as resp:
             return _read_capped(resp, 400_000, 2 * timeout).decode("utf-8", "replace")
     except Exception:
         return ""
-    finally:
-        _cancel_hard_stop()
 
 @functools.lru_cache(maxsize=256)  # ponytail: homepages only (up to 400 KB each); evicted pages just refetch
 def _fetch_cached(url):
@@ -682,7 +699,7 @@ _LOCAL = r"[A-Za-z0-9._%+-]"
 EMAIL_RE = re.compile(rf"(?<!{_LOCAL}){_LOCAL}+@[A-Za-z0-9.-]+\.[A-Za-z]{{2,}}")
 MAILTO_RE = re.compile(r"mailto:([^\"'>\s?]+)", re.I)
 # Bounded quantifiers: a page of repeated "<a " made the unbounded form quadratic (12 s per 100 KB)
-HREF_RE = re.compile(r"<a\s[^>]{0,1000}?href\s*=\s*[\"']([^\"']{1,2000})[\"'][^>]{0,1000}>(.{0,500}?)</a>", re.I | re.S)
+HREF_RE = re.compile(r"<a\s[^>]{0,1000}?href\s*=\s*[\"']([^\"']{1,2000})[\"'][^>]{0,1000}>(.{0,5000}?)</a>", re.I | re.S)
 _JUNK_EXT = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".avif", ".css", ".js")
 _JUNK_DOMAIN = ("example", "sentry", "wixpress", "wix.com", "godaddy", "squarespace", "wordpress",
                 "domain.com", "email.com", "yourdomain", "mysite.com", "schema.org", "w3.org", "sentry.io",
@@ -796,7 +813,7 @@ def enrich_emails(results, deep=True, workers=None):
 def _doh_mx(domain):
     """MX lookup over DNS-over-HTTPS (Google's public resolver, no key) -> the JSON answer."""
     url = "https://dns.google/resolve?" + urllib.parse.urlencode({"name": domain, "type": "MX"})
-    with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=8) as r:
+    with _fetch_window(), _OPENER.open(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=8) as r:
         return json.load(r)
 
 @functools.lru_cache(maxsize=1024)
@@ -1066,6 +1083,7 @@ def main():
         job_id, skipped, ncells = job_id or jid, skipped + s, ncells + n
         failed_places += jid is None
         rows = dedupe(rows + place_rows)
+        SALVAGE["rows"], SALVAGE["job"] = rows, job_id
     if job_id is None:
         sys.exit("✗ No job finished; the reason is in the ✗ line above.")
     if failed_places:
@@ -1159,6 +1177,8 @@ def main():
         print(f"⚠ Could not write {out} ({e.strerror}); writing {fallback} instead.")
         out = fallback
         write(out)
+    for w in dict.fromkeys(WARNINGS):
+        print(f"⚠ {w}")
     print(f"  saved → {os.path.abspath(out)}  (opens in Excel or Google Sheets)")
     for r in results[:5]:
         tail = f" | IG:{r.get('instagram','') or '—'}" if a.socials else f" | {r.get('website','')}"
@@ -1169,12 +1189,26 @@ def main():
                  "--exclude on this file to get only the rest.")
 
 
+def interrupted():
+    """The Ctrl-C message. A grid or multi-city run stopped between tiles keeps what the finished
+    ones found, in a -partial.csv with the lead fields (the websites were not crawled yet)."""
+    saved = "nothing was saved."
+    if SALVAGE["rows"]:
+        path = f"results-{(SALVAGE['job'] or 'partial')[:8]}-partial.csv"
+        with open(path, "w", newline="", encoding="utf-8-sig") as f:
+            w = csv.DictWriter(f, fieldnames=LEAD)
+            w.writeheader()
+            w.writerows([{k: csv_safe(r.get(k, "")) for k in LEAD} for r in SALVAGE["rows"]])
+        saved = f"the {len(SALVAGE['rows'])} rows found so far are in {path} (lead fields, websites not crawled)."
+    if CURRENT_JOB:
+        key = " (with the X-API-Key header from .env)" if KEY else ""
+        return (f"\n✗ Stopped; {saved} Job {CURRENT_JOB} keeps running in the engine. "
+                f"Cancel it in the web UI at {BASE}, or with:\n    curl -X DELETE {BASE}/api/v1/jobs/{CURRENT_JOB}{key}")
+    return f"\n✗ Stopped; {saved} Jobs: {BASE}/api/v1/jobs"
+
+
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        if CURRENT_JOB:
-            key = ' -H "X-API-Key: $SCRAPER_API_KEY"' if KEY else ""
-            sys.exit(f"\n✗ Stopped; nothing was saved. Job {CURRENT_JOB} keeps running in the engine. "
-                     f"Cancel it in the web UI at {BASE}, or with:\n    curl -X DELETE{key} {BASE}/api/v1/jobs/{CURRENT_JOB}")
-        sys.exit(f"\n✗ Stopped; nothing was saved. Jobs: {BASE}/api/v1/jobs")
+        sys.exit(interrupted())

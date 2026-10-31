@@ -198,6 +198,9 @@ def start(download=True):
     try:  # one start at a time, from the first look: a second start during the first's 30 s boot
         lock = os.open(LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)  # would otherwise see its state file and stop it
     except FileExistsError:
+        if probe(port) == "ours":  # the other start finished, or the lock is stale and the engine is up
+            print(f"✓ The engine is already running: http://localhost:{port}")
+            return
         if time.time() - os.path.getmtime(LOCK) < 600:
             sys.exit("✗ Another `engine.py start` is running. Wait for it, or delete .engine/start.lock.")
         os.remove(LOCK)  # left by a start that crashed

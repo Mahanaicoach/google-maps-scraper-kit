@@ -167,7 +167,7 @@ downloads the CSV, keeps the 8 lead fields, and hands you a clean table plus the
 | `/scrape <business> in <city, ST> [depth]` | Run one scrape, return a clean table and CSV |
 | `/scrape-batch <keywords-file> [--city "City, ST"]` | Run many queries as one job |
 | `/scrape-setup` | Start the engine and run a health check |
-| `/scrape-jobs [list \| download <id> \| delete <id>]` | List, download or delete jobs |
+| `/scrape-jobs [list \| delete <id>]` | List or delete jobs |
 
 Plain requests trigger the skill too: *"build me a lead list of plumbers in Phoenix"*. The skill
 scrapes Google Maps business listings only. It does not scrape social platforms directly.

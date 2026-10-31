@@ -935,6 +935,27 @@ class EngineProgress(unittest.TestCase):
             scrape.main()
         self.assertEqual(bodies[0]["country"], "de")
 
+def _drip_server(body=True):
+    """A local site that sends one byte every 0.3 s, for the deadline tests. Returns its port."""
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(5)
+
+    def serve():
+        while True:
+            c, _ = srv.accept()
+            try:
+                c.recv(4096)
+                c.sendall(b"HTTP/1.1 200 OK\r\n" + (b"Content-Length: 400000\r\n\r\n" if body else b""))
+                while True:
+                    c.sendall(b"x")
+                    time.sleep(0.3)
+            except OSError:
+                pass
+    threading.Thread(target=serve, daemon=True).start()
+    return srv.getsockname()[1]
+
+
 class AuditGuards(unittest.TestCase):
     """The P5 audit's guards in the client: one check each."""
 
@@ -958,13 +979,16 @@ class AuditGuards(unittest.TestCase):
         self.assertLess(time.monotonic() - t, 8)  # the unbounded forms took 12 s and 5 s on the first two
 
     def test_read_capped_stops_at_the_deadline(self):
-        class Drip:
-            def read(self, n):
-                time.sleep(0.05)
-                return b"x"
+        port = _drip_server()
         t = time.monotonic()
-        self.assertTrue(scrape._read_capped(Drip(), 400_000, 0.3))
-        self.assertLess(time.monotonic() - t, 2)
+        with scrape.urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as resp:
+            out = scrape._read_capped(resp, 400_000, 1)
+        self.assertLess(time.monotonic() - t, 3)
+        self.assertTrue(0 < len(out) < 20)
+
+    def test_anchor_wrapping_an_icon_still_yields_its_link(self):
+        page = '<a class="btn" href="/contact-us"><svg>' + "p" * 900 + '</svg> Contact</a>'
+        self.assertEqual([m[0] for m in scrape.HREF_RE.findall(page)], ["/contact-us"])
 
     def test_engine_calls_skip_an_environment_proxy(self):
         self.assertFalse(any(isinstance(h, scrape.urllib.request.ProxyHandler) and h.proxies
@@ -976,27 +1000,29 @@ class AuditGuards(unittest.TestCase):
         self.assertTrue(scrape.WARN_NOTE.sub("", "stopped at max_time (600 s) during keyword 2").strip(" ;,."))
 
     def test_dripping_website_is_cut_off_by_the_hard_stop(self):
-        srv = socket.socket()
-        srv.bind(("127.0.0.1", 0))
-        srv.listen(1)
-
-        def serve():
-            c, _ = srv.accept()
-            try:
-                c.recv(4096)
-                c.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 400000\r\n\r\n")
-                while True:
-                    c.sendall(b"x")
-                    time.sleep(0.3)
-            except OSError:
-                pass
-        threading.Thread(target=serve, daemon=True).start()
+        port = _drip_server(body=False)
         with mock.patch.object(scrape, "SITE_HARD", 1), mock.patch.object(scrape, "_is_public_host", lambda h: True), \
                 mock.patch.object(scrape, "_is_public_ip", lambda ip: True):
             t = time.monotonic()
-            out = scrape._fetch_html(f"http://127.0.0.1:{srv.getsockname()[1]}/", timeout=2)
+            out = scrape._fetch_html(f"http://127.0.0.1:{port}/", timeout=2)
         self.assertLess(time.monotonic() - t, 4)
-        self.assertTrue(0 < len(out) < 20)
+        self.assertEqual(out, "")
+
+    def test_ctrl_c_keeps_the_finished_tiles(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(scrape.SALVAGE, {"rows": [
+                {"title": "=A1", "phone": "1", "website": "w", "place_id": "p"}], "job": "abcdef12-x"}):
+            cwd = os.getcwd()
+            os.chdir(d)
+            try:
+                msg = scrape.interrupted()
+                rows = list(csv.DictReader(open("results-abcdef12-partial.csv", encoding="utf-8-sig")))
+            finally:
+                os.chdir(cwd)
+        self.assertIn("1 rows found so far", msg)
+        self.assertEqual(rows[0]["title"], "'=A1")  # formula-guarded, lead fields only
+        self.assertNotIn("place_id", rows[0])
+        with mock.patch.dict(scrape.SALVAGE, {"rows": [], "job": None}):
+            self.assertIn("nothing was saved", scrape.interrupted())
 
     def test_env_quoted_value_keeps_a_hash(self):
         self.assertEqual(scrape._env_value('"ab #c"'), "ab #c")

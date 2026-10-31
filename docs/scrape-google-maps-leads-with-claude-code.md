@@ -34,7 +34,7 @@ Or use a slash command in Claude Code:
 | `/scrape <business> in <city, ST> [depth]` | Run one scrape, return a clean table and CSV |
 | `/scrape-batch <keywords-file> [--city "City, ST"]` | Run many queries as one job |
 | `/scrape-setup` | Start the engine and run a health check |
-| `/scrape-jobs [list \| download <id> \| delete <id>]` | List, download or delete jobs |
+| `/scrape-jobs [list \| delete <id>]` | List or delete jobs |
 
 ## What the agent does
 

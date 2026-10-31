@@ -8,7 +8,7 @@ No network, no Chrome, no Docker.
 """
 import csv, hashlib, http.client, importlib.util, io, json, os, queue, re, shutil, socket, sqlite3, subprocess, sys
 import tempfile
-import threading, time, unittest, unittest.mock, uuid, zipfile
+import threading, time, unittest, unittest.mock, urllib.request, uuid, zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -1518,6 +1518,27 @@ class LoopThree(Fakes):
         _, job = self.run_one()
         self.assertIn("stopped at max_time", job["Error"])
 
+def _drip_server(body=True):
+    """A local site that sends one byte every 0.3 s, for the deadline tests. Returns its port."""
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(5)
+
+    def serve():
+        while True:
+            c, _ = srv.accept()
+            try:
+                c.recv(4096)
+                c.sendall(b"HTTP/1.1 200 OK\r\n" + (b"Content-Length: 400000\r\n\r\n" if body else b""))
+                while True:
+                    c.sendall(b"x")
+                    time.sleep(0.3)
+            except OSError:
+                pass
+    threading.Thread(target=serve, daemon=True).start()
+    return srv.getsockname()[1]
+
+
 class AuditGuards(unittest.TestCase):
     """The P5 audit's guards: one check each (see the commit that added them)."""
     OK = {"name": "x", "keywords": ["a"], "lang": "en", "max_time": 5}
@@ -1552,39 +1573,25 @@ class AuditGuards(unittest.TestCase):
         self.assertEqual(jobs.ascii_url("http://h/plain?x=1"), "http://h/plain?x=1")
 
     def test_read_capped_stops_at_the_deadline(self):
-        class Drip:
-            def read(self, n):
-                time.sleep(0.05)
-                return b"x"
+        """A real dripping socket, with no hard stop: read1 lets the deadline check run between bytes."""
+        port = _drip_server()
         t = time.monotonic()
-        out = jobs._read_capped(Drip(), 400_000, 0.3)
-        self.assertLess(time.monotonic() - t, 2)
-        self.assertTrue(0 < len(out) < 100)
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as resp:
+            out = jobs._read_capped(resp, 400_000, 1)
+        self.assertLess(time.monotonic() - t, 3)
+        self.assertTrue(0 < len(out) < 20)
 
     def test_dripping_website_is_cut_off_by_the_hard_stop(self):
-        """A site that sends a byte every 0.3 s never trips the per-read timeout: SITE_HARD ends it."""
-        srv = socket.socket()
-        srv.bind(("127.0.0.1", 0))
-        srv.listen(1)
-
-        def serve():
-            c, _ = srv.accept()
-            try:
-                c.recv(4096)
-                c.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 400000\r\n\r\n")
-                while True:
-                    c.sendall(b"x")
-                    time.sleep(0.3)
-            except OSError:
-                pass
-        threading.Thread(target=serve, daemon=True).start()
+        """Headers that never end: no read deadline can help, SITE_HARD shuts the socket."""
+        port = _drip_server(body=False)
         with unittest.mock.patch.object(jobs, "SITE_HARD", 1), unittest.mock.patch.object(jobs, "_public_host", lambda h: True), \
                 unittest.mock.patch.object(jobs, "_public_ip", lambda ip: True):
             t = time.monotonic()
-            out = jobs.fetch(f"http://127.0.0.1:{srv.getsockname()[1]}/", timeout=2)
+            out = jobs.fetch(f"http://127.0.0.1:{port}/", timeout=2)
         self.assertLess(time.monotonic() - t, 4)
-        self.assertTrue(0 < len(out) < 20)
+        self.assertEqual(out, "")
         self.assertIsNone(jobs._FETCH.timer)
+        self.assertIsNone(jobs._FETCH.deadline)
 
     def test_env_value_keeps_a_hash_inside_quotes(self):
         self.assertEqual(serve.env_value('"ab #c"'), "ab #c")

@@ -258,7 +258,7 @@ Claude Code also offers these commands. Type `/` to see them:
 | `/scrape <business> in <city, ST> [depth]` | Run a scrape, get a clean table |
 | `/scrape-batch <keywords-file> [--city "City, ST"]` | Scrape many queries in one job |
 | `/scrape-setup` | Start the scraper + health check |
-| `/scrape-jobs [list \| download <id> \| delete <id>]` | List, download or delete jobs |
+| `/scrape-jobs [list \| delete <id>]` | List or delete jobs |
 
 Plain requests work too: *"scrape gyms in Miami with phone numbers."* The kit's own scripts, the exact
 `docker compose` forms this guide uses and the engine's health check are pre-approved in
