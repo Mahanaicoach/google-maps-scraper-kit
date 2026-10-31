@@ -30,6 +30,7 @@ On Windows, run the same commands with `py` or `python3`. The engine needs Pytho
 | `--max-time` | Job time limit in seconds. Default `600`. |
 | `--out` | Output path. Default `results-<short job id>.csv`. A `.json` extension writes JSON. |
 | `--json` | Writes JSON instead of CSV. |
+| `--details` | Reads each place panel for additional business photo URLs and published popular times; implies `--full`, adds one page load per place. Missing schedules stay blank. |
 | `--full` | Keeps all raw columns (the 36 classic ones plus `categories`) instead of the 8 lead fields. Review counts and weekly opening hours work headless ([SETUP §3](../SETUP.md#review-counts-hours-and-reviews)). Review texts stay empty: the script does not ask for them. |
 | `--fields` | Comma-separated columns to keep, overriding the lead fields. |
 | `--socials` | Adds Instagram, Facebook, LinkedIn, TikTok, YouTube and X from each website. Slower. Zero AI tokens. |

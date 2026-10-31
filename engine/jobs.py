@@ -105,6 +105,8 @@ def validate(body):
         raise ValueError("invalid geo coordinates")
     if body.get("max_time") in (None, 0):
         raise ValueError("missing max time")
+    if not isinstance(body.get("extra_details", False), bool):
+        raise ValueError("invalid extra_details: true or false")
     data = {"keywords": [k.strip() for k in kws], "lang": lang.lower(), "country": country.lower(),
             "lat": str(lat).strip(), "lon": str(lon).strip(),
             "zoom": _int(body, "zoom", 15, 1, 21, "zoom"),
@@ -114,6 +116,7 @@ def validate(body):
             "fast_mode": bool(body.get("fast_mode")), "email": bool(body.get("email")),
             "verify_emails": bool(body.get("verify_emails")), "socials": bool(body.get("socials")),
             "reviews_max": _int(body, "reviews_max", 0, 0, REVIEWS_MAX, "reviews_max"),
+            "extra_details": body.get("extra_details", False),
             "proxies": _proxies(body.get("proxies"))}
     return name.strip(), data
 
@@ -322,6 +325,8 @@ class Store:
                     d = {}
                 if not isinstance(d, dict):
                     d = {}
+                if not isinstance(d.get("keywords"), list):
+                    d["keywords"] = []
                 if isinstance(d.get("max_time"), int):
                     d["max_time"] //= 10 ** 9  # nanoseconds in 1.x, seconds here
                 with open(src, newline="", encoding="utf-8", errors="replace") as f:
@@ -497,7 +502,7 @@ class Worker(threading.Thread):
             self._running = (None, None)
             return
         done, stage = min(p.get("done", 0), len(kws)), p.get("stage", "search")
-        reviews = d.get("reviews_max") and stage in ("search", "reviews")
+        reviews = (d.get("reviews_max") or d.get("extra_details")) and stage in ("search", "reviews")
         if stage == "search":
             self.store.cut(jid, p.get("bytes", 0))  # the rows of a keyword cut short are searched again
         rows = self.store.read_rows(jid)  # [] when the cut removed the file
@@ -612,11 +617,13 @@ class Worker(threading.Thread):
                     break
                 if reason == "no-feed" and not again and time.monotonic() + 30 < deadline:
                     again = True  # Google sometimes shows no result list once (seen in CI): look once more
+                    if len(proxies) > 1:
+                        rot += 1  # through the next proxy
                     self.log(f"job {jid} keyword {i + 1}/{len(kws)}: no result list; one more try")
                     continue
                 if reason == "no-feed":
-                    notes.append(f"keyword {i + 1}: Google showed no result list twice (no results for it, "
-                                 "or a page the engine cannot read)")
+                    notes.append(f"keyword {i + 1}: Google showed no result list{' twice' if again else ''} "
+                                 "(no results for it, or a page the engine cannot read)")
                 retries, again = 0, False
                 if reason.startswith("timeout"):  # "timeout+dom-fallback" too
                     timed_out["yes"] = True
@@ -646,7 +653,7 @@ class Worker(threading.Thread):
                 n = self.add_reviews(rows, d, deadline, stop, [x for x in proxies if x not in bad] or proxies,
                                      save, notes)
                 self.store.rewrite(jid, rows, cols)  # keep the reviews if the engine stops during the next pass
-                self.log(f"job {jid}: reviews for {n}/{sum(1 for r in rows if r.get('place_id'))} places")
+                self.log(f"job {jid}: place details for {n}/{sum(1 for r in rows if r.get('place_id'))} places")
             if stage == "reviews" and not stop.is_set():
                 stage = "websites"
                 save(stage=stage)
@@ -721,9 +728,8 @@ class Worker(threading.Thread):
                 self._browser.dispose(ctx)
 
     def add_reviews(self, rows, d, deadline, stop, proxies, save=lambda: None, notes=None):
-        """Review count, stars histogram and up to reviews_max reviews per place, from each place's
-        panel (the result batches carry no review texts): one page load per place, until the
-        deadline. The number of places that got reviews."""
+        """Read requested place panels once for reviews and extra details, within the job deadline.
+        The number of panels that supplied parsed data; missing fields stay blank."""
         todo = [r for r in rows if r.get("place_id") and not r.get("user_reviews")]
         ctx = page = auth = None
         n = 0
@@ -751,9 +757,9 @@ class Worker(threading.Thread):
                     break
                 got = details.parse_place(body or "", d["reviews_max"])
                 for k, v in got.items():
-                    if k in ("user_reviews", "reviews_per_rating") or not r.get(k):
+                    if k in ("user_reviews", "reviews_per_rating", "images") or not r.get(k):
                         r[k] = str(v)
-                n += "user_reviews" in got
+                n += bool(got)
                 save()  # elapsed time, for a resume after a crash
         except (CDPError, OSError) as e:  # Chrome or the proxy went away: the reviews so far are kept
             if notes is not None:
@@ -765,6 +771,10 @@ class Worker(threading.Thread):
                 page.close()
             if ctx and not self._browser.cdp.closed:
                 self._browser.dispose(ctx)
+        if d.get("extra_details") and notes is not None:
+            missing = sum(not r.get("popular_times") for r in rows)
+            if missing:
+                notes.append(f"popular times unavailable for {missing}/{len(rows)} places")
         return n
 
 

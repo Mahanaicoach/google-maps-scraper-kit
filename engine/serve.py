@@ -87,6 +87,7 @@ JOB_PROPS = {
                                                        "drop domains that do not exist, add email_host"},
     "socials": {"type": "boolean", "description": "visit each website's homepage for Instagram, Facebook, LinkedIn, "
                                                  "TikTok, YouTube and X links"},
+    "extra_details": {"type": "boolean", "description": "read each place panel for business photos and published popular times; one page load per place, shared with reviews"},
     "reviews_max": {"type": "integer", "description": "0-5 reviews per place from its panel, one page load per place (headless supported)"},
     "proxies": {"type": "array", "items": {"type": "string"},
                 "description": "http(s)://[user:pass@]host:port or socks5://host:port; one per keyword in turn, "
@@ -183,6 +184,7 @@ A job the engine was stopped in the middle of carries on when it starts again.</
   <label>Country (optional)<input id="country" maxlength="2" pattern="[A-Za-z]{{2}}" placeholder="us"></label>
   <label>Time limit (seconds)<input id="max_time" type="number" min="1" max="86400" value="600"></label>
   <label><span>Emails</span><span><input type="checkbox" id="email" checked> visit each website</span></label>
+  <label><span>Place details</span><span><input type="checkbox" id="details"> photos and published popular times (slower)</span></label>
   <div class="wide row"><button class="primary">Start scraping</button>
     <span class="muted">Coordinates: right-click a spot in Google Maps and click the numbers.</span></div>
   <label class="wide" id="keybox" hidden>API key (SCRAPER_API_KEY)<input id="key" type="password" autocomplete="off"></label>
@@ -216,7 +218,7 @@ function progress(j) {{
   if (j.Status === 'pending') return p.keywords_done ? 'pending (resumes at keyword ' + (p.keywords_done + 1) + ')' : 'pending';
   if (j.Status !== 'working') return j.Status + (p.places ? ' · ' + p.places + ' places' : '');
   const stage = {{search: 'keyword ' + Math.min(p.keywords_done + 1, p.keywords_total) + '/' + p.keywords_total,
-    reviews: 'reading reviews', websites: 'checking websites'}}[p.stage] || p.stage || '';
+    reviews: 'reading place details', websites: 'checking websites'}}[p.stage] || p.stage || '';
   return 'working · ' + stage + ' · ' + (p.places || 0) + ' places · ' + (p.percent || 0) + '%';
 }}
 async function remove(j) {{
@@ -245,7 +247,7 @@ $('f').addEventListener('submit', async ev => {{
   const body = {{name: keywords[0] || 'job', keywords, lang: $('lang').value.trim().toLowerCase(),
     country: $('country').value.trim().toLowerCase(),
     lat: $('lat').value.trim(), lon: $('lon').value.trim(), depth: +$('depth').value,
-    max_time: +$('max_time').value, email: $('email').checked, zoom: 15}};
+    max_time: +$('max_time').value, email: $('email').checked, extra_details: $('details').checked, zoom: 15}};
   try {{
     const r = await api('POST', '/api/v1/jobs', body), d = await r.json();
     say(r.ok ? 'Job created. It runs in the background; this list refreshes by itself.' : 'Not started: ' + d.message);

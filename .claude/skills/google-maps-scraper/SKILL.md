@@ -123,7 +123,9 @@ columns are exactly these.
 `review_count`, `open_hours` (the week) and `reviews_link` are filled when Google sends them: the
 engine's headless Chrome sends its own user agent with `HeadlessChrome` replaced by `Chrome`, which
 gets Google's full view. Google can still leave a field out. Review texts come only through the raw
-API's `reviews_max`. Images stay empty.
+API's `reviews_max`. `images` holds business photo URLs from the search results; `scripts/scrape.py
+--details` (API `extra_details`) adds the place panel's photos and `popular_times`, one page load
+per place, only when the user asks for them.
 
 ### Return only the 8 lead fields (default)
 The raw CSV has 36 columns and most are noise for outreach. **By default, return only the 8 lead

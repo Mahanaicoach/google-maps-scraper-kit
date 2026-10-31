@@ -974,6 +974,44 @@ def entity(days=7, reviews=False):
     return e
 
 
+class ExtraDetailsParser(unittest.TestCase):
+    def test_photos_from_search_and_panel_are_valid_json_and_deduplicated(self):
+        e = [None] * 204
+        photo = [None] * 7
+        photo[6] = ["https://lh3.googleusercontent.com/business-photo"]
+        e[37] = [[photo]]
+        e[72] = [[photo, None, [None] * 7]]
+        panel = [None] * 4
+        panel[2], panel[3] = "Exterior", [[None] * 6 + [["https://lh3.googleusercontent.com/exterior"]]]
+        e[171] = [[panel]]
+        out = details.parse_entity(e)
+        images = json.loads(out["images"])
+        self.assertEqual(images, [{"title": "Exterior", "image": "https://lh3.googleusercontent.com/exterior"},
+                                  {"title": "", "image": "https://lh3.googleusercontent.com/business-photo"}])
+        row = jobs.to_row(out, "x")
+        self.assertEqual(json.loads(row["images"]), images)
+        photo[6] = ["javascript:alert(1)"]
+        e[171] = None
+        self.assertNotIn("images", details.parse_entity(e))
+
+    def test_popular_times_preserves_zero_and_rejects_invalid_hours(self):
+        days = [[7, [[12, 50], [24, 80], [13, True]]],
+                [1, [[8, 0], [9, 100], [-1, 1], [10, 101], None]],
+                [True, [[8, 20]]], [8, [[8, 10]]], [2, None], None]
+        self.assertEqual(json.loads(details.popular_times(days)),
+                         {"Monday": {"8": 0, "9": 100}, "Sunday": {"12": 50}})
+        for absent in (None, [], {}, [None], [[1, []]]):
+            self.assertEqual(details.popular_times(absent), "")
+
+    def test_details_only_panel_does_not_return_an_unrequested_review(self):
+        e = entity(reviews=True)
+        e[84] = [[[1, [[8, 20]]]]]
+        body = ")]}'\n" + json.dumps([None] * 6 + [e])
+        out = details.parse_place(body, limit=0)
+        self.assertNotIn("user_reviews", out)
+        self.assertEqual(json.loads(out["popular_times"]), {"Monday": {"8": 20}})
+
+
 class FullView(unittest.TestCase):
     """details.py fields that only Google's full view carries (a Chrome window), from made-up data."""
 
@@ -1269,6 +1307,29 @@ class LoopTwo(Fakes):
         maps.collect = collect
         _, job = self.run_one(keywords=["a", "b", "c", "d"], proxies=["http://dead:1", "http://ok:2"])
         self.assertEqual((job["Status"], calls), ("ok", ["http://dead:1"] + ["http://ok:2"] * 4))
+
+    def test_extra_details_shares_the_review_pass_and_warns_for_missing_popular_times(self):
+        RESULTS["cafes in Austin"] = ([place(1)], "end-of-list")
+        calls = []
+        def panel(page, url):
+            calls.append(url)
+            return "body"
+        with unittest.mock.patch.object(maps, "place_panel", side_effect=panel), \
+             unittest.mock.patch.object(details, "parse_place", return_value={"images": '[{"title":"","image":"https://example.com/photo"}]'}):
+            jid, job = self.run_one(extra_details=True, reviews_max=1)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(json.loads(self.rows(jid)[0]["images"]))
+        self.assertEqual(job["Status"], "ok")
+        self.assertIn("popular times unavailable for 1/1 places", job["Error"])
+
+    def test_details_only_runs_without_requesting_reviews(self):
+        RESULTS["cafes in Austin"] = ([place(1)], "end-of-list")
+        calls = []
+        self.worker.add_reviews = lambda rows, d, *a, **k: calls.append(d["reviews_max"]) or 1
+        _, job = self.run_one(extra_details=True)
+        self.assertEqual((calls, job["Status"]), ([0], "ok"))
+        with self.assertRaisesRegex(ValueError, "invalid extra_details"):
+            jobs.validate(dict(GOOD, extra_details="false"))
 
     def test_headless_runs_the_reviews_pass(self):
         RESULTS["cafes in Austin"] = ([place(1)], "end-of-list")

@@ -4,11 +4,11 @@ While the result list scrolls, the page fetches batches of about 20 places from
 `https://www.google.com/search?tbm=map…` as `)]}'\\n[...]` JSON; each batch carries the full place
 entity (name, address, phone, website, rating, coordinates, ids…). The engine captures those
 responses in the browser (cdp Network events) and parses them here, so no place page is opened for
-them: the spike showed the place page document itself holds no entity data any more. Review texts
-are the one thing the batches lack: they come from the `/maps/preview/place` response a place's
-panel downloads (parse_place), only for jobs that ask for them. Standard library only.
+them. Requested reviews and extra details come from the `/maps/preview/place` response a place's
+panel downloads (parse_place). Business photo URLs in search batches need no panel load.
+Standard library only.
 """
-import json
+import json, urllib.parse
 
 # Index path of each field inside a place entity. Checked on live batches in the spike
 # (2026-10-31): title, category, address, rating, lat/lon, place_id, data_id, timezone, thumbnail
@@ -38,6 +38,7 @@ FIELDS = {
     "description": (32, 1, 1),
 }
 HOURS = (203, 0)  # [[day name, 1-7 (Monday-Sunday), date, [[text, ...], ...], ...], ...], from today on
+POPULAR = (84, 0)  # [[weekday 1-7, [[hour 0-23, busyness 0-100, ...], ...]], ...]
 HISTOGRAM = (175, 3)  # place panel: [one-star count, ..., five-star count]
 REVIEWS = (175, 9, 0, 0)  # place panel: the reviews it shows first (about 5)
 LISTS = {"categories": (13,), "address_lines": (2,)}
@@ -68,6 +69,12 @@ def parse_entity(entity):
     hours = open_hours(dig(entity, HOURS))
     if hours:
         out["open_hours"] = hours
+    photos = images(entity)
+    if photos:
+        out["images"] = photos
+    traffic = popular_times(dig(entity, POPULAR))
+    if traffic:
+        out["popular_times"] = traffic
     if "data_id" in out and ":" in out["data_id"]:
         try:
             out["cid"] = str(int(out["data_id"].split(":")[1], 16))
@@ -96,9 +103,55 @@ def open_hours(days):
     return json.dumps({name: spans for _, (name, spans) in sorted(week.items())}, ensure_ascii=False)
 
 
+def images(entity):
+    """Photo URLs already supplied by Maps, as the existing images column's JSON objects."""
+    found, seen = [], set()
+    # Search cards and panels use different gallery layouts. Never include reviewer profiles.
+    groups = [(dig(entity, (171, 0)), (3, 0, 6, 0), (2,)),
+              (dig(entity, (37, 0)), (6, 0), ()),
+              (dig(entity, (72, 0)), (6, 0), ())]
+    for items, path, title_path in groups:
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            url = dig(item, path)
+            if not isinstance(url, str) or url in seen:
+                continue
+            try:
+                parsed = urllib.parse.urlsplit(url)
+                if parsed.scheme != "https" or not parsed.hostname:
+                    continue
+            except ValueError:
+                continue
+            seen.add(url)
+            title = _text(dig(item, title_path)) if title_path else ""
+            found.append({"title": title, "image": url})
+    return json.dumps(found, ensure_ascii=False) if found else ""
+
+
+def popular_times(days):
+    """Published hourly busyness by weekday; missing data stays absent, never an empty object."""
+    if not isinstance(days, list):
+        return ""
+    names = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+    week = {}
+    for day in days:
+        number, slots = dig(day, (0,)), dig(day, (1,))
+        if type(number) is not int or not 1 <= number <= 7 or not isinstance(slots, list):
+            continue
+        hours = {}
+        for slot in slots:
+            hour, busy = dig(slot, (0,)), dig(slot, (1,))
+            if type(hour) is int and 0 <= hour <= 23 and type(busy) is int and 0 <= busy <= 100:
+                hours[str(hour)] = busy
+        if hours:
+            week[number] = hours
+    return json.dumps({names[d - 1]: week[d] for d in sorted(week)}) if week else ""
+
+
 def parse_place(body, limit=5):
     """review_count, reviews_per_rating and up to `limit` user_reviews from one `/maps/preview/place`
-    response. Reviewer names and photos are left out: the kit collects business data, not people."""
+    response, plus available business photos and popular times. Reviewer identities are omitted."""
     if body.startswith(")]}'"):
         body = body.split("\n", 1)[-1]
     try:
@@ -107,12 +160,12 @@ def parse_place(body, limit=5):
         return {}
     if not isinstance(entity, list):
         return {}
-    out = {k: v for k, v in parse_entity(entity).items() if k in ("review_count", "reviews_link", "open_hours")}
+    out = {k: v for k, v in parse_entity(entity).items() if k in ("review_count", "reviews_link", "open_hours", "images", "popular_times")}
     hist = dig(entity, HISTOGRAM)
     if isinstance(hist, list) and len(hist) == 5 and all(isinstance(n, int) for n in hist):
         out["reviews_per_rating"] = json.dumps({str(i): n for i, n in enumerate(hist, 1)})
     reviews = []
-    for r in dig(entity, REVIEWS) or []:
+    for r in (dig(entity, REVIEWS) or []) if limit > 0 else []:
         rating, text = dig(r, (0, 2, 0, 0)), _text(dig(r, (0, 2, 15, 0, 0)))
         if isinstance(rating, int) and not isinstance(rating, bool):
             reviews.append({"Rating": rating, "When": _text(dig(r, (0, 1, 6))), "Description": text})

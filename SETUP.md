@@ -175,6 +175,23 @@ each place's panel, one page load per place. It fills `user_reviews` (a JSON lis
 `{"Rating", "When", "Description"}`; reviewer names and photos are left out) and
 `reviews_per_rating` (`{"1": n, ... "5": n}`). `scripts/scrape.py` has no flag for reviews.
 
+Business photo URLs from search results are included in the `images` column without additional
+page loads. Use `--full` to keep that column in CLI output. Photos are linked, not downloaded.
+
+For additional place-panel data, use:
+
+```bash
+python3 scripts/scrape.py "coffee shops in Austin TX" 30.2672 -97.7431 --details --no-email
+```
+
+`--details` implies `--full` and requests `extra_details: true` from the API. The web UI has a
+**Place details** checkbox. The engine reads each place panel once for available photo URLs and
+published popular times; jobs requesting reviews share this pass. This adds one page load per place.
+`popular_times` is JSON such as `{"Monday": {"8": 20, "9": 50}}`: local hour and relative busyness
+from 0 to 100, not visitor counts. Google may provide no schedule. Missing data stays blank, and the
+job note reports how many schedules were unavailable; an empty object does not count as a schedule.
+No reviewer identities or reviewer photos are added.
+
 Rather not change the user agent? Set `SCRAPER_HEADLESS=0` in `.env` and restart with
 `python3 scripts/engine.py restart`: Chrome then runs as a normal window placed off-screen, with its
 user agent unchanged, and gets the same data. A window needs a display (not Docker, not a server
@@ -302,7 +319,8 @@ Nothing is lost:
 - The jobs in 1.x's web UI come along. On its first start the new engine reads 1.x's job volume
   (read-only) and lists those jobs with their CSVs; a job 1.x had not finished shows as `failed`,
   with its rows, and a job that never produced a CSV is left out. This happens once, so a job you
-  delete afterwards stays deleted.
+  delete afterwards stays deleted; a job whose data cannot be read is skipped, and the engine's log
+  names its id (`docker compose logs`).
 - The old volume itself is kept as it was. Once you no longer need it, free its disk space:
   `docker compose down`, then `docker volume rm` with the name `docker volume ls` shows ending in
   `_gmaps_data`, then `docker compose up -d` (Compose creates an empty one in its place).
