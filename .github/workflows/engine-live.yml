@@ -1,0 +1,57 @@
+# The kit's own engine against real Google Maps, once per platform: start it the way a user does,
+# run one small scrape through scripts/scrape.py, and require places back. Runs when the engine
+# changes, or by hand (Actions > engine-live > Run workflow). The logs print counts only: scraped
+# names, phones and emails never reach them.
+name: engine-live
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "engine/**"
+      - "scripts/engine.py"
+      - ".github/workflows/engine-live.yml"
+jobs:
+  live:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: start the engine (downloads the pinned Chrome only when none is installed)
+        run: python scripts/engine.py start
+      - name: status, guards and web UI
+        run: |
+          python scripts/engine.py status
+          test "$(curl -s http://localhost:8080/api/v1/jobs)" = null
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.com' http://localhost:8080/api/v1/jobs)" = 421
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Origin: https://evil.com' -X POST -d '{}' http://localhost:8080/api/v1/jobs)" = 403
+          curl -s -X POST -d '{}' http://localhost:8080/api/v1/jobs | grep -q 'missing name'
+          curl -s http://localhost:8080/ | grep -q 'github.com/Mahanaicoach/google-maps-scraper-kit'
+      - name: scrape (depth 2, no email crawl)
+        run: |
+          start=$(date +%s)
+          python scripts/scrape.py "coffee shops in Austin TX" 30.2672 -97.7431 --depth 2 --no-email --out leads.csv > scrape.log 2>&1 || true
+          echo "seconds=$(( $(date +%s) - start ))"
+          grep -v "^  •" scrape.log | tr '\r' '\n' | grep -v "^  status:" || true
+          python - <<'PY'
+          import csv, sys
+          rows = list(csv.DictReader(open("leads.csv", encoding="utf-8-sig")))
+          fill = {k: sum(1 for r in rows if r.get(k)) for k in ("title", "phone", "website", "address", "review_rating")}
+          print(f"places={len(rows)}", fill)
+          sys.exit(0 if rows else 1)
+          PY
+      - name: engine log (counts only)
+        if: always()
+        run: cat .engine/engine.log || true
+      - name: stop
+        if: always()
+        run: python scripts/engine.py stop

@@ -92,16 +92,20 @@ class Batches:
         self.page.cdp.unsubscribe("Network.responseReceived", self.q, self.page.sid)
 
 
-def collect(page, url, depth=1, max_seconds=180, log=print):
+def collect(page, url, depth=1, max_seconds=180, log=print, stop=lambda: False):
     """Open `url`, scroll the result feed, and return (places, stop reason, stats).
     `depth` is the number of result batches to read (about 20 places each, like the old engine's
-    depth); the list may end sooner. Places are de-duplicated on data_id."""
+    depth); the list may end sooner. Places are de-duplicated on data_id. `stop()` returning True
+    ends the scroll early (a deleted job). Reason "blocked" means Google answered with its
+    unusual-traffic page."""
     for k, v in CONSENT_COOKIES.items():
         page.set_cookie(k, v, ".google.com")
     batches = Batches(page)
     seen, started, reason, stale = {}, time.time(), "depth", 0
     try:
         page.navigate(url)
+        if "/sorry/" in page.url():
+            return [], "blocked", {"batches": 0, "dom_links": 0}
         if "consent.google" in page.url():
             page.eval(JS_CONSENT)
             page.wait_for("!location.href.includes('consent.google')", timeout=15)
@@ -124,7 +128,7 @@ def collect(page, url, depth=1, max_seconds=180, log=print):
             take()
             time.sleep(0.4)
         log(f"  batch {batches.count}: {len(seen)} places")
-        while batches.count < depth and time.time() - started < max_seconds:
+        while batches.count < depth and time.time() - started < max_seconds and not stop():
             if any(m in (page.eval(JS_END) or "") for m in END_MARKERS):
                 reason = "end-of-list"
                 break
@@ -145,7 +149,9 @@ def collect(page, url, depth=1, max_seconds=180, log=print):
                 stale = 0
                 log(f"  batch {batches.count}: {len(seen)} places")
         else:
-            if time.time() - started >= max_seconds:
+            if stop():
+                reason = "stopped"
+            elif time.time() - started >= max_seconds:
                 reason = "timeout"
         take()
         links = page.eval(JS_LINKS) or []

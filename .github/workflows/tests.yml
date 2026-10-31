@@ -1,5 +1,5 @@
-# Two jobs, no Google traffic. "offline" is the Python client on the three desktop platforms a new
-# user installs on. "fresh-install" is a new user's first ten minutes on Linux minus the scrape:
+# Two jobs, no Google traffic. "offline" is the Python client and the kit's own engine on the three
+# desktop platforms a new user installs on. "fresh-install" is a new user's first ten minutes on Linux minus the scrape:
 # clone, docker compose up, the health check, the patched web UI and API docs, the proxy's checks.
 name: tests
 on:
@@ -19,6 +19,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: python scripts/test_scrape.py
+      - run: python engine/test_cdp.py
+      - run: python engine/test_engine.py
       - run: bash -n scripts/scrape.sh
       - run: python -c "import json; json.load(open('.claude/settings.json'))"
   fresh-install:

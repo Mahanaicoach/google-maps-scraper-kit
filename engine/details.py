@@ -12,10 +12,10 @@ import json
 # Index path of each field inside a place entity. Checked on live batches in the spike
 # (2026-10-31): title, category, address, rating, lat/lon, place_id, data_id, timezone, thumbnail
 # filled on 60/60 entities, website 55/60, phone 46/60 (listings without one).
-# review_count is the one unverified path: (37, 1) is an integer on every entity in the range a
-# review count has (23 to 1998 on 40 coffee shops), but signed-out Google Maps shows no counts in
-# the list or the place panel, so it could not be compared against the page. Verify it in P1
-# against a few listings whose counts are known (a signed-in browser shows them).
+# review_count is not here: signed out, Google leaves (4, 8) empty, and (37, 1) is a different
+# number (60 and 82 where the page showed 61 and 134 reviews, 2026-10-31). Headless Chrome gets
+# Google's limited view, whose result cards show "4.8 stars" without the count, so the CSV's
+# review_count column stays empty.
 FIELDS = {
     "title": (11,),
     "category": (13, 0),
@@ -23,7 +23,6 @@ FIELDS = {
     "website": (7, 0),
     "phone": (178, 0, 0),
     "review_rating": (4, 7),
-    "review_count": (37, 1),
     "latitude": (9, 2),
     "longitude": (9, 3),
     "plus_code": (183, 2, 2, 0),

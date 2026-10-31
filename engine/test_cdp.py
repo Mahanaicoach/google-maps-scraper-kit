@@ -177,7 +177,7 @@ class Parser(unittest.TestCase):
         self.assertEqual(got["phone"], "+1 512-555-0100")
         self.assertEqual(got["website"], "https://example.com/")
         self.assertEqual(got["review_rating"], 4.6)
-        self.assertEqual(got["review_count"], 321)
+        self.assertNotIn("review_count", got)  # (37, 1) is not the count: it comes from the card labels
         self.assertEqual((got["latitude"], got["longitude"]), (30.2671, -97.743))
         self.assertEqual(got["place_id"], "ChIJabc")
         self.assertEqual(got["cid"], "255")
