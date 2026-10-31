@@ -129,6 +129,10 @@ def kill(pid):
         return True
     for _ in range(150):  # the engine leads its own process group, Chrome included
         try:
+            os.waitpid(pid, os.WNOHANG)  # our own child (start that timed out): reap it, or it lingers as a zombie
+        except ChildProcessError:
+            pass
+        try:
             os.killpg(pid, 0)
         except (ProcessLookupError, PermissionError):
             return True

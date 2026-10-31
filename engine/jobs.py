@@ -503,7 +503,8 @@ class Worker(threading.Thread):
                         refused.add(proxy)
                     if PROXY_FAILED.search(str(e)):
                         bad.add(proxy)
-                    if self._browser.cdp.closed and not stop.is_set() and relaunched < RELAUNCHES:
+                    if (self._browser.cdp.closed and not stop.is_set() and relaunched < RELAUNCHES
+                            and deadline - time.monotonic() > 0):
                         relaunched += 1  # Chrome died on its own: a new one takes the same keyword
                         self.log(f"job {jid} keyword {i + 1}/{len(kws)}: Chrome stopped ({e}); starting it again")
                         self._browser.close()
@@ -545,7 +546,7 @@ class Worker(threading.Thread):
                     self.log(f"job {jid} keyword {i + 1}/{len(kws)}: Google's unusual-traffic page; stopping")
                     break
                 retries = 0
-                if reason == "timeout":
+                if reason.startswith("timeout"):  # "timeout+dom-fallback" too
                     timed_out["yes"] = True
                 size = self.store.append(jid, [], cols)
                 if size is None:
@@ -557,7 +558,7 @@ class Worker(threading.Thread):
                 self.log(f"job {jid} keyword {i + 1}/{len(kws)}: {len(places)} places, {len(rows)} in all, "
                          f"{stats['batches']} batches, {time.monotonic() - t0:.1f} s ({reason})")
                 if reason.startswith("error: ") and self._browser.cdp.closed:  # Chrome failed mid-scroll;
-                    if stop.is_set() or relaunched >= RELAUNCHES:                # the places before it are kept
+                    if stop.is_set() or relaunched >= RELAUNCHES or deadline <= time.monotonic():  # rows kept
                         if not stop.is_set() and len(kws) - i > 1:
                             errors[-1] += f"; {len(kws) - i - 1} keyword(s) after it were not searched"
                         break
@@ -569,7 +570,8 @@ class Worker(threading.Thread):
                 stage = "reviews" if reviews else "websites"
                 save(stage=stage, bytes=self.store.append(jid, [], cols), blocked=blocked, retried=retries,
                      failed=len(errors), last_error=errors[-1] if errors else "", timed_out=timed_out["yes"])
-            windowed = self._browser and not (self.headless or browser.always_headless(self._browser.path))
+            windowed = not (self.headless or browser.always_headless(
+                self._browser.path if self._browser else browser.find_chrome()))
             if stage == "reviews" and rows and not windowed:  # the limited view has no reviews: do not try
                 notes.append("no reviews: Google's limited view, which a headless Chrome gets, shows none; "
                              "set SCRAPER_HEADLESS=0, with an installed Chrome, to run it as a window")
@@ -590,9 +592,11 @@ class Worker(threading.Thread):
                 self._browser.close()
                 self._browser = None
         if stage == "websites" and (d["email"] or d.get("socials")) and rows and not stop.is_set():
-            n = add_site_data(rows, max(deadline - time.monotonic(), EMAIL_MIN_SECONDS), email=d["email"],
-                              socials=d.get("socials"), verify=d.get("verify_emails"), stop=stop.is_set)
+            n, unchecked = add_site_data(rows, max(deadline - time.monotonic(), EMAIL_MIN_SECONDS), email=d["email"],
+                                         socials=d.get("socials"), verify=d.get("verify_emails"), stop=stop.is_set)
             self.log(f"job {jid}: website data for {n}/{sum(1 for r in rows if r['website'])} websites")
+            if unchecked and not stop.is_set():
+                notes.append(f"{unchecked} website(s) not checked: ran out of time")
         self._running = (None, None)
         if self.stopped.is_set() and self.store.get(jid):  # the engine is exiting: resume on the next start
             if stage != "search":  # rows a pass changed; while searching the CSV is the record already
@@ -606,14 +610,14 @@ class Worker(threading.Thread):
                  + (f"Waited and retried {retries} time(s). " if retries else "") + "Wait, or add proxies")
         p.update(stage="done", elapsed=round(used + time.monotonic() - started, 1), places=len(rows))
         if rows or not (errors or blocked):
-            head = ""
-            if timed_out["yes"]:  # the search ran out of time (a website pass that runs late does not count)
-                head = "stopped at max_time; the rows found so far are kept"
+            heads = []
+            if timed_out["yes"]:  # the search ran out of time (the passes after it note their own)
+                heads.append("stopped at max_time; the rows found so far are kept")
             if errors:
-                head = f"{len(errors)} keyword(s) failed: {errors[-1]}"
+                heads.append(f"{len(errors)} keyword(s) failed: {errors[-1]}")
             if blocked:
-                head, notes = f"{block}. The rows found before that are kept", []
-            status, note = "ok", "; ".join(([head] if head else []) + notes)
+                heads, notes = [f"{block}. The rows found before that are kept"], []
+            status, note = "ok", "; ".join(heads + notes)
         else:
             status = "failed"
             note = block if blocked else errors[-1]
@@ -665,12 +669,18 @@ class Worker(threading.Thread):
                 auth = browser.ProxyAuth(page, user, password)
             for k, v in maps.CONSENT_COOKIES.items():
                 page.set_cookie(k, v, ".google.com")
-            for r in todo:
-                if stop.is_set() or time.monotonic() >= deadline:
+            for k, r in enumerate(todo):
+                if stop.is_set():
+                    break
+                if time.monotonic() >= deadline:
+                    if notes is not None:
+                        notes.append(f"reviews read for {k} of {len(todo)} places: ran out of time")
                     break
                 url = r["link"] + f"&hl={d['lang']}" + (f"&gl={d['country']}" if d.get("country") else "")
                 body = maps.place_panel(page, url)
                 if body == "blocked":
+                    if notes is not None:
+                        notes.append(f"reviews read for {k} of {len(todo)} places: Google's unusual-traffic page")
                     break
                 got = details.parse_place(body or "", d["reviews_max"])
                 for k, v in got.items():
@@ -830,6 +840,8 @@ def mx_host(domain):
     else:
         host = "microsoft_365" if "outlook.com" in mx else "other"
     if host:
+        if len(_MX) > 4096:  # ponytail: forget all at the cap; an LRU would keep the busy domains
+            _MX.clear()
         _MX[domain] = host
     return host
 
@@ -851,7 +863,7 @@ def add_site_data(rows, seconds, email=True, socials=False, verify=False, get=No
     """One homepage fetch per row with a website, SITE_WORKERS at a time, for at most `seconds` or
     until stop() is true: `emails` (joined by ", ", like the old engine), the social columns, and
     with verify an MX check of each address's domain (dns.google) that drops domains that do not
-    exist and fills `email_host`. The number of rows that got something."""
+    exist and fills `email_host`. (rows that got something, rows not checked in time)."""
     get = get or fetch
 
     def work(r):
@@ -881,4 +893,4 @@ def add_site_data(rows, seconds, email=True, socials=False, verify=False, get=No
             got = {k: v for k, v in f.result().items() if v}
             futs[f].update(got)
             n += bool(got)
-    return n
+    return n, len(pending)

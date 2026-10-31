@@ -57,6 +57,9 @@ class FakePage:
     def __init__(self, cdp, context=None):
         pass
 
+    def set_cookie(self, *a):
+        pass
+
     def close(self):
         pass
 
@@ -966,7 +969,7 @@ class Websites(unittest.TestCase):
         hosts = {"shop.com": "google_workspace", "gone-forever.com": "nxdomain"}
         with unittest.mock.patch.object(jobs, "mx_host", side_effect=hosts.get):
             n = jobs.add_site_data(rows, 10, socials=True, verify=True, get=pages.get)
-        self.assertEqual(n, 1)
+        self.assertEqual(n, (1, 0))
         self.assertEqual((rows[0]["emails"], rows[0]["email_host"]), ("info@shop.com", "google_workspace"))
         self.assertEqual((rows[0]["instagram"], rows[0]["facebook"]), ("https://www.instagram.com/shopco", "https://facebook.com/shopco"))
         self.assertEqual(rows[1]["emails"], "")  # its only address is on a domain that does not exist
@@ -1091,7 +1094,7 @@ class LoopOne(Fakes):
                 r["user_reviews"] = '[{"Rating": 5}]'
             return len(rows)
         self.worker.add_reviews, self.worker.headless = reviews, False  # window mode
-        stopping = lambda *a, **k: self.worker.shutdown() or 0  # the engine stops during the website pass
+        stopping = lambda *a, **k: self.worker.shutdown() or (0, 0)  # the engine stops during the website pass
         with unittest.mock.patch.object(jobs, "add_site_data", side_effect=stopping):
             jid, job = self.run_one(reviews_max=1, email=True)
         self.assertEqual((job["Status"], job["Progress"]["stage"]), ("pending", "websites"))
@@ -1111,7 +1114,7 @@ class LoopOne(Fakes):
             on_batch([place(1, website="https://a.com")], 1)  # streamed, then Google refuses the rest
             return [], "blocked", {"batches": 1, "dom_links": 0}
         maps.collect = collect
-        stopping = lambda *a, **k: self.worker.shutdown() or 0
+        stopping = lambda *a, **k: self.worker.shutdown() or (0, 0)
         with unittest.mock.patch.object(jobs, "add_site_data", side_effect=stopping):
             jid, job = self.run_one(email=True)
         self.assertEqual(job["Status"], "pending")
@@ -1225,7 +1228,7 @@ class LoopTwo(Fakes):
         RESULTS["cafes in Austin"] = ([place(1, website="https://a.com")], "end-of-list")
         def slow_pass(rows, seconds, **kw):
             time.sleep(1.2)  # runs past the job's 1 s max_time
-            return 0
+            return 0, 0
         with unittest.mock.patch.object(jobs, "add_site_data", side_effect=slow_pass):
             _, job = self.run_one(email=True, max_time=1)
         self.assertEqual((job["Status"], job["Error"]), ("ok", ""))
@@ -1247,6 +1250,35 @@ class LoopTwo(Fakes):
             for srv in servers:
                 srv.shutdown()
                 srv.server_close()
+
+
+class LoopThree(Fakes):
+    """Audit loop 3: passes that run out of time say so; a timeout with the DOM fallback counts."""
+
+    def test_website_pass_out_of_time_says_so(self):
+        RESULTS["cafes in Austin"] = ([place(1, website="https://a.com"), place(2, website="https://b.com")], "end-of-list")
+        with unittest.mock.patch.object(jobs, "fetch", side_effect=lambda url, timeout=0: time.sleep(3) or ""), \
+             unittest.mock.patch.object(jobs, "EMAIL_MIN_SECONDS", 0.3):
+            _, job = self.run_one(email=True, max_time=1)
+        self.assertEqual(job["Status"], "ok")
+        self.assertIn("2 website(s) not checked: ran out of time", job["Error"])
+
+    def test_reviews_out_of_time_say_so(self):
+        RESULTS["cafes in Austin"] = ([place(1), place(2), place(3)], "end-of-list")
+        self.worker.headless = False
+        saved = (maps.place_panel, details.parse_place)
+        maps.place_panel = lambda page, url: time.sleep(0.6) or "body"
+        details.parse_place = lambda body, limit=5: {"user_reviews": "[]"}
+        try:
+            _, job = self.run_one(reviews_max=1, max_time=1)
+        finally:
+            maps.place_panel, details.parse_place = saved
+        self.assertIn("reviews read for 2 of 3 places: ran out of time", job["Error"])
+
+    def test_timeout_with_the_dom_fallback_is_a_timeout(self):
+        RESULTS["cafes in Austin"] = ([place(1)], "timeout+dom-fallback")
+        _, job = self.run_one()
+        self.assertIn("stopped at max_time", job["Error"])
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)
