@@ -180,7 +180,7 @@ socials and CSV output. It works on macOS, Linux and Windows.
 python3 scripts/scrape.py --keywords-file examples/queries.example.txt --city "Denver, CO"
 ```
 
-One keyword per line. One job. One CSV.
+One keyword per line. One job (more only when a search comes back full and splits). One CSV.
 
 ---
 

@@ -37,7 +37,7 @@ On Windows, run the same commands with `py` or `python3`. Python is only the cli
 | `--tech` | Adds `fb_pixel`, `google_ads_tag`, `analytics`, `bing_ads`, `linkedin_insight`, `tiktok_pixel` (yes/no, blank if the site did not load), `cms`, `mobile_friendly` and a 0-100 `intent_score`, and sorts by that score. Shares the homepage fetch with `--socials`. Zero AI tokens. |
 | `--keyword` | Adds an extra keyword to the same job. Repeatable. |
 | `--lang` | Two-letter language the engine asks Google for, e.g. `pt`, `es`, `de`. Default `en`. Use the market's language so category names come back in it. |
-| `--keywords-file` | Reads one keyword per line from a file. One job, one CSV. |
+| `--keywords-file` | Reads one keyword per line from a file. One job (more only when a search comes back full and splits), one CSV. |
 | `--proxy` | Proxy URL for the engine, repeatable: `http://`, `https://`, `socks5://` or `socks5h://`. This engine needs `user:pass@` for socks5. The engine rotates them; a wrong proxy fails the job and the script prints the engine's reason. |
 | `--min-rating`, `--min-reviews` | Keep rows rated X or higher, or with N or more reviews. Unrated rows drop. |
 | `--no-website` | Keep only businesses without a website: the classic web-design prospect list. |

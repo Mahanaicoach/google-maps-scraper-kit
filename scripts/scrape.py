@@ -23,7 +23,7 @@ Notes:
 - Geocoding uses OpenStreetMap Nominatim (free, no key). It allows ~1 request/sec and requires a
   descriptive User-Agent (set below). Do not loop it aggressively.
 """
-import argparse, csv, functools, io, ipaddress, json, math, os, re, shutil, socket, subprocess, sys, time
+import argparse, collections, csv, functools, io, ipaddress, json, math, os, re, shutil, socket, subprocess, sys, time
 import html as _html, http.client, urllib.request, urllib.parse, urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
@@ -95,13 +95,19 @@ def poll_attempts(max_time):
     return max(1, budget // POLL_EVERY)
 
 
+_NO_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+_LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
+
+
 def req(method, path, body=None):
     headers = {"Content-Type": "application/json", "User-Agent": UA}
     if KEY:
         headers["X-API-Key"] = KEY
     data = json.dumps(body).encode() if body is not None else None
     r = urllib.request.Request(BASE + path, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(r, timeout=60) as resp:
+    # An HTTP_PROXY in the shell must not catch the local engine: that fails with a proxy error.
+    opener = _NO_PROXY.open if urllib.parse.urlparse(BASE).hostname in _LOCAL_HOSTS else urllib.request.urlopen
+    with opener(r, timeout=60) as resp:
         return resp.status, resp.read()
 
 
@@ -174,6 +180,12 @@ def split_cell(cell):
                  radius=max(1000, math.ceil(cell["radius"] / 2)), zoom=min(19, cell["zoom"] + 1),
                  _dlat=cell["_dlat"] / 2, _dlon=cell["_dlon"] / 2, _level=cell["_level"] + 1)
             for i in (-1, 1) for j in (-1, 1)]
+
+
+def filters_active(a):
+    """True when a row filter is on, so --limit cannot be judged before the filters run."""
+    return any(getattr(a, k, None) for k in ("min_rating", "min_reviews", "no_website", "has_phone",
+                                             "has_email", "exclude"))
 
 
 def job_body(body, cell):
@@ -542,7 +554,15 @@ def _fetch_html(url, timeout=10):
         r = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0 (compatible; " + UA + ")", "Accept": "text/html"})
         with _OPENER.open(r, timeout=timeout) as resp:
-            return resp.read(400_000).decode("utf-8", "replace")
+            # Read in chunks against a wall-clock deadline: a site that drips bytes forever would
+            # otherwise hold one of the SITE_WORKERS until 400 KB arrived.
+            data, deadline = b"", time.monotonic() + 2 * timeout
+            while len(data) < 400_000 and time.monotonic() < deadline:
+                chunk = resp.read1(65536)
+                if not chunk:
+                    break
+                data += chunk
+            return data[:400_000].decode("utf-8", "replace")
     except Exception:
         return ""
 
@@ -692,7 +712,9 @@ def is_real_email(e):
     local, _, dom = e.rpartition("@")
     if not EMAIL_RE.fullmatch(e) or e.endswith(_JUNK_EXT):
         return False
-    return local not in _JUNK_LOCAL and not any(j in dom for j in _JUNK_DOMAIN)
+    labels = re.split(r"[.-]", dom)  # whole labels: sentry.wixpress.com is junk, sentrysecurity.com is not
+    junk = any((dom == j or dom.endswith("." + j)) if "." in j else j in labels for j in _JUNK_DOMAIN)
+    return local not in _JUNK_LOCAL and not junk
 
 
 # "name [at] domain [dot] com", "name (at) domain dot com" and friends, adapted from OpenLeadFinder.
@@ -829,7 +851,8 @@ def scrape_place(a, body, city, keywords):
     else:
         print(f"▶ Creating job: {len(keywords)} keyword(s) @ {lat},{lon} depth={a.depth}")
     queue = list(cells or [point_cell(lat, lon)])
-    job_id, rows, skipped, i, total, capped = None, [], 0, 0, len(queue), False
+    job_id, rows, skipped, i, total, capped, warned = None, [], 0, 0, len(queue), False, False
+    enough = a.limit if a.limit and not filters_active(a) else None  # rows wanted; None = all
     while queue:  # sequential on purpose: never parallel jobs against Google
         cell, i = queue.pop(0), i + 1
         tiled = bool(cells) or cell["_level"] > 0
@@ -837,6 +860,10 @@ def scrape_place(a, body, city, keywords):
             print(f"▶ Cell {i}/{total} @ {cell['lat']},{cell['lon']} radius={cell['radius']}m zoom={cell['zoom']}")
         try:
             jid, cell_rows = run_job(job_body(body, cell))
+        except KeyboardInterrupt:  # keep what the finished jobs returned instead of losing them all
+            print(f"\n⚠ Stopped early: keeping the rows from the {i - 1 - skipped} finished job(s).")
+            skipped, a.stop = skipped + 1 + len(queue), True
+            break
         except Exception as e:
             if not tiled:  # the one plain search failed: nothing to keep
                 print(str(e))
@@ -848,13 +875,22 @@ def scrape_place(a, body, city, keywords):
         rows = dedupe(rows + cell_rows)
         if tiled:
             print(f"  cell {i}/{total}: {len(cell_rows)} rows, {len(rows)} unique so far")
-        if a.split and len(cell_rows) >= SATURATION_ROWS and cell["_level"] < SPLIT_LEVELS:
+        if enough and len(rows) >= enough:
+            print(f"  --limit {enough} reached: skipping the remaining {len(queue)} job(s)")
+            total -= len(queue)
+            break
+        # Google's cap is per search, so a batch job is "full" when its biggest keyword is.
+        per_keyword = max([0] + list(collections.Counter(r.get("input_id") for r in cell_rows).values()))
+        if a.split and per_keyword >= SATURATION_ROWS and cell["_level"] < SPLIT_LEVELS:
             if total + 4 > MAX_JOBS:
                 if not capped:
                     print(f"  ⚠ {MAX_JOBS} jobs reached for this place; dense areas left unsplit.")
                 capped = True
                 continue
-            print(f"  ⚡ dense area ({len(cell_rows)} rows): splitting it into 4 closer searches")
+            print(f"  ⚡ dense area ({per_keyword} rows): splitting it into 4 closer searches")
+            if not warned:
+                print("  ℹ Each split adds 4 jobs against Google; add --no-split to keep one job per search.")
+                warned = True
             queue[0:0] = split_cell(cell)  # look closer right away, then carry on with the grid
             total += 4
     if bbox:  # radius does not clip results in normal mode, so tiles leak outside the city
@@ -940,6 +976,16 @@ def main():
         sys.exit("✗ --limit must be 1 or more.")
     if a.has_email and not a.email:
         sys.exit("✗ --has-email needs the email crawl: drop --no-email.")
+    if a.verify_emails and not a.email:
+        sys.exit("✗ --verify-emails needs the email crawl: drop --no-email.")
+    if a.json and a.out and a.out.lower().endswith(".csv"):
+        sys.exit("✗ --json with a .csv --out: drop --json, or name the file .json.")
+    if not a.city and a.lat and a.lon:
+        try:
+            float(a.lat), float(a.lon)
+        except ValueError:
+            sys.exit(f"✗ lat and lon must be numbers, e.g. 30.2672 -97.7431 (got {a.lat!r} {a.lon!r}).")
+    a.stop = False  # set by scrape_place on Ctrl-C, so the next --city is not started
     if a.city and (a.lat or a.lon):
         print("ℹ --city given, so the lat/lon arguments are ignored.")
     if a.out and os.path.dirname(a.out):  # fail now, not after the scrape, if the folder is unusable
@@ -952,7 +998,7 @@ def main():
         if not a.city:
             sys.exit("✗ --grid needs --city: the city's bounding box is what gets split into tiles.")
         if not 1 <= a.grid <= 10:
-            sys.exit("✗ --grid must be between 1 and 10 (10 x 10 = 100 jobs is the ceiling).")
+            sys.exit(f"✗ --grid must be between 1 and 10 (10 x 10 = 100 tiles; with splits at most {MAX_JOBS} jobs per place).")
 
     cities = a.city or [None]
     try:
@@ -1007,6 +1053,8 @@ def main():
         job_id, skipped, ncells = job_id or jid, skipped + s, ncells + n
         failed_places += jid is None
         rows = dedupe(rows + place_rows)
+        if a.stop:
+            break
     if job_id is None:
         sys.exit("✗ No job finished; the reason is in the ✗ line above.")
     if failed_places:
@@ -1027,6 +1075,8 @@ def main():
         fields = LEAD
     if a.has_email and "emails" not in fields:
         sys.exit("✗ --has-email needs the emails column: add emails to --fields.")
+    if a.verify_emails and "emails" not in fields:
+        sys.exit("✗ --verify-emails needs the emails column: add emails to --fields.")
     if before and not rows:
         print(f"⚠ Nothing left: the filters and --exclude dropped all {before} rows. Loosen them and rerun; "
               f"the file below has only a header.")
@@ -1046,7 +1096,7 @@ def main():
             verify_emails(rows)
             fields = fields + ["email_host"]
             dead = total - sum(1 for r in rows if r.get("emails"))
-            print(f"  dropped {dead} addresses on domains that do not exist")
+            print(f"  {dead} businesses lost their addresses: the domains do not exist")
     if a.has_email:
         rows = [r for r in rows if r.get("emails")][:a.limit or None]
         print(f"  --has-email kept {len(rows)} rows")

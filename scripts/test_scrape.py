@@ -64,14 +64,19 @@ class SplitCell(unittest.TestCase):
 class Saturation(unittest.TestCase):
     """A search that comes back full splits into 4 closer searches (OpenLeadFinder's fix for the
     per-search ceiling); --no-split keeps one job; MAX_JOBS caps the fan-out."""
-    def run_place(self, rows_by_zoom, **over):
+    def run_place(self, rows_by_zoom, keywords=1, interrupt_at=None, **over):
         sent = []
 
         def fake_run_job(body):
             sent.append(body)
+            if interrupt_at == len(sent):
+                raise KeyboardInterrupt
             n = rows_by_zoom.get(body["zoom"], 0)
-            return f"job-{len(sent)}", [_row(f"z{body['zoom']} {body['lat']} {body['lon']} {k}") for k in range(n)]
-        ns = dict(lat="30.2672", lon="-97.7431", city=None, grid=None, depth=1, split=True)
+            rows = [_row(f"z{body['zoom']} {body['lat']} {body['lon']} {k}") for k in range(n)]
+            for k, r in enumerate(rows):
+                r["input_id"] = f"kw{k % keywords}"  # the engine tags each row with its keyword
+            return f"job-{len(sent)}", rows
+        ns = dict(lat="30.2672", lon="-97.7431", city=None, grid=None, depth=1, split=True, limit=None)
         ns.update(over)
         with mock.patch.object(scrape, "run_job", fake_run_job), redirect_stdout(io.StringIO()) as log:
             job_id, rows, skipped, njobs = scrape.scrape_place(
@@ -99,6 +104,31 @@ class Saturation(unittest.TestCase):
             sent, _, _, _, log = self.run_place({15: 120, 16: 120})
         self.assertEqual(len(sent), 1)
         self.assertIn("3 jobs reached", log)
+
+    def test_batch_is_full_per_keyword_not_in_total(self):
+        sent, *_ = self.run_place({15: 120}, keywords=3)  # 40 rows per keyword: nobody hit the cap
+        self.assertEqual(len(sent), 1)
+        sent, *_ = self.run_place({15: 300}, keywords=3)  # 100 each: full
+        self.assertEqual(len(sent), 5)
+
+    def test_limit_stops_the_fan_out_unless_filters_need_more(self):
+        sent, rows, _, njobs, log = self.run_place({15: 120, 16: 30}, limit=50)
+        self.assertEqual((len(sent), len(rows), njobs), (1, 120, 1))
+        self.assertIn("--limit 50 reached", log)
+        sent, *_ = self.run_place({15: 120, 16: 30}, limit=50, has_phone=True)  # a filter may drop rows
+        self.assertEqual(len(sent), 5)
+
+    def test_ctrl_c_keeps_finished_jobs(self):
+        sent, rows, skipped, njobs, log = self.run_place({15: 120, 16: 30}, interrupt_at=3)
+        self.assertEqual((len(sent), len(rows)), (3, 150))  # root + 1 child finished, 3 never ran
+        self.assertEqual(skipped, 3)
+        self.assertIn("Stopped early", log)
+
+    def test_bad_lat_lon_exit_cleanly(self):
+        argv = ["scrape.py", "dentists in Austin TX", "abc", "-97.7"]
+        with mock.patch.object(sys, "argv", argv), redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
+            scrape.main()
+        self.assertIn("must be numbers", str(cm.exception))
 
 
 class Dedupe(unittest.TestCase):
