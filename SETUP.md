@@ -164,7 +164,8 @@ your IP address): `--lang de --country de`.
 Signed out, Google gives a browser whose user agent says `HeadlessChrome` its "limited view": no
 review counts, today's opening hours only, no reviews. The engine runs Chrome headless, so it sends
 that Chrome's own user agent with `HeadlessChrome` replaced by `Chrome` (same OS and version; nothing
-else is changed). Google then returns `review_count`, the week's `open_hours` (as JSON like
+else is changed). Google then returns (checked live on macOS, Linux, Windows and in Docker on
+2026-10-31; Google can change this at any time) `review_count`, the week's `open_hours` (as JSON like
 `{"Monday": ["7 AM–9 PM"], ...}`) and `reviews_link`, with or without Docker and with the downloaded
 headless shell too. `--min-reviews` filters on the counts. Google can still leave a field out; if
 every count is missing, the script warns and skips that filter rather than dropping every row.
@@ -300,7 +301,8 @@ Nothing is lost:
 - The CSVs you downloaded are your own files; the update does not touch them.
 - The jobs in 1.x's web UI come along. On its first start the new engine reads 1.x's job volume
   (read-only) and lists those jobs with their CSVs; a job 1.x had not finished shows as `failed`,
-  with its rows. This happens once, so a job you delete afterwards stays deleted.
+  with its rows, and a job that never produced a CSV is left out. This happens once, so a job you
+  delete afterwards stays deleted.
 - The old volume itself is kept as it was. Once you no longer need it, free its disk space:
   `docker compose down`, then `docker volume rm` with the name `docker volume ls` shows ending in
   `_gmaps_data`, then `docker compose up -d` (Compose creates an empty one in its place).

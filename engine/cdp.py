@@ -235,13 +235,21 @@ class Page:
         if context:
             params["browserContextId"] = context
         self.target = cdp.send("Target.createTarget", params)["targetId"]
-        self.sid = cdp.send("Target.attachToTarget", {"targetId": self.target, "flatten": True})["sessionId"]
-        for domain in ("Page", "Runtime", "Network"):
-            cdp.send(f"{domain}.enable", session_id=self.sid)
-        if cdp.user_agent:
-            self.send("Emulation.setUserAgentOverride", {"userAgent": cdp.user_agent})
-        if url != "about:blank":
-            self.navigate(url)
+        try:
+            self.sid = cdp.send("Target.attachToTarget", {"targetId": self.target, "flatten": True})["sessionId"]
+            for domain in ("Page", "Runtime", "Network"):
+                cdp.send(f"{domain}.enable", session_id=self.sid)
+            if cdp.user_agent:  # see browser.Browser: a headless Chrome's agent without "Headless"
+                self.send("Emulation.setUserAgentOverride", {"userAgent": cdp.user_agent})
+            if url != "about:blank":
+                self.navigate(url)
+        except Exception:  # never leave a tab behind that nobody holds
+            if not cdp.closed:
+                try:
+                    cdp.send("Target.closeTarget", {"targetId": self.target})
+                except Exception:
+                    pass
+            raise
 
     def send(self, method, params=None, timeout=None):
         return self.cdp.send(method, params, self.sid, timeout)

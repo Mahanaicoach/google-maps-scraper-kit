@@ -264,6 +264,18 @@ class PageUserAgent(unittest.TestCase):
         cdp.Page(conn)
         self.assertNotIn("Emulation.setUserAgentOverride", [c[0] for c in conn.calls])
 
+    def test_a_failed_setup_closes_the_tab(self):
+        from unittest.mock import Mock
+        conn = Mock(user_agent="Mozilla/5.0 Chrome/156.0.0.0", closed=None)
+        def send(method, params=None, session_id=None, timeout=None):
+            if method == "Emulation.setUserAgentOverride":
+                raise cdp.CDPError("refused")
+            return {"targetId": "T", "sessionId": "S"}
+        conn.send.side_effect = send
+        with self.assertRaises(cdp.CDPError):
+            cdp.Page(conn)
+        self.assertEqual(conn.send.call_args.args, ("Target.closeTarget", {"targetId": "T"}))
+
     def test_initial_url_loads_after_tab_configuration(self):
         from unittest.mock import Mock
         conn = Mock(user_agent="Mozilla/5.0 Chrome/156.0.0.0")

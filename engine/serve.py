@@ -15,7 +15,7 @@ Google Maps, for email or socials jobs to the businesses' own websites, and for 
 to Google's public DNS (dns.google), nothing else.
 Standard library only.
 """
-import argparse, csv, hmac, html, io, json, os, re, secrets, signal, socket, socketserver, sqlite3, sys, threading
+import argparse, csv, hmac, html, io, json, os, re, secrets, signal, socket, socketserver, sys, threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -531,8 +531,8 @@ def main():
     if failed:
         log(f"{failed} job(s) stopped mid-run {jobs.MAX_RESUMES + 1} times: marked failed, rows kept")
     try:
-        imported = store.import_kit1(os.path.join(browser.HOME, "kit1"))
-    except (OSError, sqlite3.Error, ValueError) as e:
+        imported = store.import_kit1(os.path.join(browser.HOME, "kit1"), log)
+    except Exception as e:  # the old jobs never stop the engine from starting
         imported = 0
         log(f"kit 1.x jobs not imported, tried again on the next start: {type(e).__name__}: {e}")
     if imported:

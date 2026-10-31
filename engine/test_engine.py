@@ -223,18 +223,26 @@ class Store(Fakes):
         w.execute("PRAGMA journal_mode=WAL")
         w.execute("CREATE TABLE jobs (id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL, "
                   "data TEXT NOT NULL, created_at INT NOT NULL, updated_at INT NOT NULL)")
-        done, stuck, nocsv = (str(uuid.uuid4()) for _ in range(3))
+        done, stuck, nocsv, baddate, big = (str(uuid.uuid4()) for _ in range(5))
         body = json.dumps({"keywords": ["cafe", "bar"], "lang": "en", "max_time": 180 * 10 ** 9})
         with w:
-            for jid, status in ((done, "ok"), (stuck, "working"), (nocsv, "ok"), ("../evil", "ok")):
+            for jid, status in ((done, "ok"), (stuck, "working"), (nocsv, "ok"), ("../evil", "ok"), (big, "ok")):
                 w.execute("INSERT INTO jobs VALUES (?, ?, ?, ?, 1793466309, 1793466322)", (jid, "old " + status, status, body))
-        for jid in (done, stuck, "../evil"):
+            w.execute("INSERT INTO jobs VALUES (?, 'odd', 'ok', ?, 'not a time', 0)", (baddate, body))
+        for jid in (done, stuck, "../evil", baddate):
             with open(os.path.join(old, f"{jid}.csv"), "w", newline="") as f:
                 f.write("input_id,title\n1,\"A\nB\"\n2,C\n")
+        with open(os.path.join(old, f"{big}.csv"), "w", newline="") as f:
+            f.write("input_id,descriptions\n1," + "x" * 200_000 + "\n")  # past csv's 128 KB field limit
+        logged = []
         try:
-            self.assertEqual(self.store.import_kit1(old), 2)
+            self.assertEqual(self.store.import_kit1(old, logged.append), 3)
         finally:
             w.close()
+        self.assertEqual(logged, [f"kit 1.x job {baddate} not imported: ValueError"])  # skipped, the rest kept
+        self.assertIsNone(self.store.get(baddate))
+        self.assertFalse(os.path.exists(self.store.csv_path(baddate)))
+        self.assertEqual(jobs.public(self.store.get(big))["Progress"]["places"], 1)
         a, b = self.store.get(done), self.store.get(stuck)
         self.assertEqual((a["Status"], a["Name"], a["Date"], a["Data"]["max_time"]), ("ok", "old ok", "2026-10-31T17:05:09+00:00", 180))
         self.assertEqual(jobs.public(a)["Progress"], {"keywords_done": 2, "keywords_total": 2, "places": 2, "percent": 100, "stage": "done"})
@@ -273,6 +281,17 @@ class Worker(Fakes):
         _, job = self.run_one()
         self.assertEqual(job["Status"], "failed")
         self.assertIn("No Chrome", job["Error"])
+
+    def test_no_feed_is_tried_once_more(self):
+        RESULTS["cafes in Austin"] = ([place(1)], ["no-feed", "end-of-list"])  # once, then the list
+        _, job = self.run_one()
+        self.assertEqual((job["Status"], SEARCHED.count("cafes in Austin"), job["Error"]), ("ok", 2, ""))
+        self.assertEqual(job["Progress"]["places"], 1)
+        SEARCHED.clear()
+        RESULTS["cafes in Austin"] = ([], "no-feed")  # twice: a note, no third look
+        _, job = self.run_one()
+        self.assertEqual((job["Status"], SEARCHED.count("cafes in Austin")), ("ok", 2))
+        self.assertIn("no result list twice", job["Error"])
 
     def test_blocked_fails(self):
         RESULTS["cafes in Austin"] = ([], "blocked")

@@ -1,8 +1,8 @@
-"""engine-live.yml: one depth-1 job with reviews_max=1 against the engine on localhost:8080; exits 1
+"""engine-live.yml: one depth-1 job with reviews_max=1 against the engine on localhost (SCRAPER_PORT, default 8080); exits 1
 unless Google's full view came back (review counts and reviews filled). Prints counts only."""
-import json, sys, time, urllib.request
+import json, os, sys, time, urllib.request
 
-BASE = "http://localhost:8080/api/v1/jobs"
+BASE = f"http://localhost:{os.environ.get('SCRAPER_PORT', '8080')}/api/v1/jobs"
 
 
 def call(method, url, body=None):

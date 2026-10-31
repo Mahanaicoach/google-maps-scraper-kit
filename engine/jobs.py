@@ -283,11 +283,12 @@ class Store:
                     pass
         return bool(gone)
 
-    def import_kit1(self, folder):
+    def import_kit1(self, folder, log=print):
         """Kit 1.x's jobs and their CSVs, from the old engine's data folder (docker-compose.yml mounts
         its volume read-only on .engine/kit1), so an update from 1.x keeps them in the job list. Once
-        only: a marker file stops it next time, so a job deleted here stays deleted. Jobs imported;
-        an unreadable old database raises sqlite3.Error and is tried again on the next start."""
+        only: a marker file stops it next time, so a job deleted here stays deleted. Jobs with no CSV
+        (never run) are left out, and one that cannot be read is skipped and logged by id. Jobs
+        imported; an unreadable old database raises sqlite3.Error and is tried again on the next start."""
         marker = os.path.join(self.folder, "kit1-imported")
         if os.path.exists(marker) or not os.path.isfile(os.path.join(folder, "jobs.db")):
             return 0
@@ -304,6 +305,7 @@ class Store:
                 old.close()
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+        csv.field_size_limit(2 ** 31 - 1)  # a 1.x cell (a long description) can pass csv's 128 KB default
         n = 0
         for jid, name, status, data, created in rows:
             try:
@@ -313,25 +315,34 @@ class Store:
             src = os.path.join(folder, f"{jid}.csv")
             if not plain or not os.path.isfile(src) or self.get(jid):
                 continue
-            try:
-                d = json.loads(data or "{}")
-            except ValueError:
-                d = {}
-            if not isinstance(d, dict):
-                d = {}
-            if isinstance(d.get("max_time"), int):
-                d["max_time"] //= 10 ** 9  # nanoseconds in 1.x, seconds here
-            with open(src, newline="", encoding="utf-8", errors="replace") as f:
-                places = max(sum(1 for _ in csv.reader(f)) - 1, 0)
-            ok = status == "ok"
-            with self.lock, self.db:
-                shutil.copyfile(src, self.csv_path(jid))
-                self.db.execute("INSERT INTO jobs (id, name, date, status, data, error, progress) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                (jid, str(name), datetime.fromtimestamp(int(created), timezone.utc).isoformat(timespec="seconds"),
-                                 "ok" if ok else "failed", json.dumps(d),
-                                 "" if ok else f"kit 1.x job that was {status} there; its rows are kept",
-                                 json.dumps({"done": len(d.get("keywords") or []) if ok else 0, "places": places,
-                                             "stage": "done" if ok else ""})))
+            try:  # one odd old job must never stop the engine from starting
+                try:
+                    d = json.loads(data or "{}")
+                except ValueError:
+                    d = {}
+                if not isinstance(d, dict):
+                    d = {}
+                if isinstance(d.get("max_time"), int):
+                    d["max_time"] //= 10 ** 9  # nanoseconds in 1.x, seconds here
+                with open(src, newline="", encoding="utf-8", errors="replace") as f:
+                    places = max(sum(1 for _ in csv.reader(f)) - 1, 0)
+                date = datetime.fromtimestamp(int(created), timezone.utc).isoformat(timespec="seconds")
+                ok = status == "ok"
+                with self.lock, self.db:
+                    shutil.copyfile(src, self.csv_path(jid))
+                    self.db.execute("INSERT INTO jobs (id, name, date, status, data, error, progress) "
+                                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                    (jid, str(name), date, "ok" if ok else "failed", json.dumps(d),
+                                     "" if ok else f"kit 1.x job that was {status} there; its rows are kept",
+                                     json.dumps({"done": len(d.get("keywords") or []) if ok else 0, "places": places,
+                                                 "stage": "done" if ok else ""})))
+            except Exception as e:
+                try:
+                    os.remove(self.csv_path(jid))
+                except OSError:
+                    pass
+                log(f"kit 1.x job {jid} not imported: {type(e).__name__}")
+                continue
             n += 1
         with open(marker, "w"):
             pass
@@ -539,7 +550,7 @@ class Worker(threading.Thread):
                 timed_out["yes"] = True  # resumed with no time left: the other keywords stay unsearched
             if ((stage == "search" and done < len(kws)) or reviews) and budget > 0 and not stop.is_set():
                 self._browser = browser.Browser(lang=locale(d), headless=self.headless)
-            i = done
+            i, again = done, False
             while stage == "search" and i < len(kws) and self._browser:
                 left = deadline - time.monotonic()
                 if left <= 0:
@@ -578,7 +589,7 @@ class Worker(threading.Thread):
                         if not stop.is_set() and len(kws) - i > 1:
                             errors[-1] += f"; {len(kws) - i - 1} keyword(s) after it were not searched"
                         break
-                    i, retries = i + 1, 0
+                    i, retries, again = i + 1, 0, False
                     save(failed=len(errors), last_error=errors[-1])
                     continue
                 on_batch(places, stats["batches"])  # places no batch carried (one place, the DOM fallback)
@@ -599,7 +610,14 @@ class Worker(threading.Thread):
                     blocked = True
                     self.log(f"job {jid} keyword {i + 1}/{len(kws)}: Google's unusual-traffic page; stopping")
                     break
-                retries = 0
+                if reason == "no-feed" and not again and time.monotonic() + 30 < deadline:
+                    again = True  # Google sometimes shows no result list once (seen in CI): look once more
+                    self.log(f"job {jid} keyword {i + 1}/{len(kws)}: no result list; one more try")
+                    continue
+                if reason == "no-feed":
+                    notes.append(f"keyword {i + 1}: Google showed no result list twice (no results for it, "
+                                 "or a page the engine cannot read)")
+                retries, again = 0, False
                 if reason.startswith("timeout"):  # "timeout+dom-fallback" too
                     timed_out["yes"] = True
                 size = self.store.append(jid, [], cols)

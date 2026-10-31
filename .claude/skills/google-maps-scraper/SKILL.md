@@ -16,9 +16,9 @@ result has up to **36 raw fields**, plus `categories`.
 
 ## Step 0: Check the engine is running
 ```bash
-curl -s http://localhost:8080/api/v1/jobs >/dev/null 2>&1 && echo UP || echo DOWN
+curl -s http://localhost:8080/api/v1/jobs
 ```
-If `DOWN` and the working folder has `scripts/engine.py` (the full kit), first run
+It prints `null` or a JSON list of jobs when the engine is up, and nothing when it is down. If down and the working folder has `scripts/engine.py` (the full kit), first run
 `python3 scripts/engine.py status` (`py` on Windows): it names the Chrome, Chromium, Edge or Brave the
 engine will drive (it exits 1 while the engine is not running; that is expected). Only when it names one, start the engine with `python3 scripts/engine.py start`,
 or run `docker compose up -d` if the user runs it in Docker, then retry. If it finds no browser, do not
@@ -57,8 +57,7 @@ from anywhere else.
   `email_host` column.
 - `"reviews_max"` (0 to 5, default 0): the engine opens each place's panel, one page load per place,
   and fills `user_reviews` (a JSON list of `{"Rating", "When", "Description"}`, without reviewer names
-  or photos) and `reviews_per_rating` (`{"1": n, ... "5": n}`). A headless engine gets no reviews,
-  and the job's `Error` says so (see the window-mode note under Step 3).
+  or photos) and `reviews_per_rating` (`{"1": n, ... "5": n}`).
 
 ```bash
 curl -s -X POST http://localhost:8080/api/v1/jobs \
