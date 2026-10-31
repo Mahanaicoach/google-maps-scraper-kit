@@ -26,13 +26,14 @@ straight into `.engine/` on your machine, under Google's terms for Chrome (its `
 open-source licenses listed in its `LICENSE.headless_shell` file. The Docker image installs Debian's
 `chromium` package instead, under Chromium's BSD-style license and the notices Debian ships with it.
 
-## Business category names: lobstrio/google-business-categories
+## City list: GeoNames
 
-The web UI's "Add a business type" box suggests Google's business category names (4,053, US
-English) from [lobstrio/google-business-categories](https://github.com/lobstrio/google-business-categories)
-by lobstr.io. Your browser loads the list from GitHub at runtime, pinned to one commit in
-`engine/serve.py`, and caches it for 30 days. This repository does not contain or redistribute it,
-because that repository has no license file.
+The web UI's Where box offers only real places: about 168,000 cities and towns of more than 1,000
+people (name, region, country, coordinates), from the [GeoNames](https://www.geonames.org/)
+`cities1000` dump, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+`engine/presets/cities.tsv.gz` is that data, cut to those five fields, one row per city label.
+
+The What box's business types (`engine/presets/business-types.json`) are a hand-picked list for this kit.
 
 ## Website signals adapted from OpenLeadFinder
 

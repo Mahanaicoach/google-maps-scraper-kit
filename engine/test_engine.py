@@ -8,7 +8,7 @@ No network, no Chrome, no Docker.
 """
 import csv, hashlib, http.client, importlib.util, io, json, os, queue, re, shutil, socket, sqlite3, subprocess, sys
 import tempfile
-import threading, time, unittest, unittest.mock, urllib.request, uuid, zipfile
+import threading, time, unittest, unittest.mock, urllib.parse, urllib.request, uuid, zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -1237,26 +1237,30 @@ class ApiP3(Server):
                          ["schema"]["required"], ["name", "keywords", "lang", "max_time"])
         ui = self.call("GET", "/")[1].decode()
         self.assertIn('id="country"', ui)
-        self.assertIn('list="kwlist"', ui)
+        self.assertIn('<input id="what" role="combobox"', ui)
+        self.assertIn('<input id="where" role="combobox"', ui)
+        self.assertIn("const TYPES = " + json.dumps(serve.TYPES) + ";", ui)  # the What list is in the page, no download
         front = ui.split("<details>")[0]  # what a beginner sees before opening a section
         self.assertIn('<input type="checkbox" id="email" checked>', front)
         self.assertIn('<input type="checkbox" id="socials" checked>', front)  # socials on by default
-        for el in ('id="coords"', 'id="depth"', 'id="lang"', 'id="max_time"', 'id="proxies"', 'id="reviews"'):
+        for el in ('id="depth"', 'id="lang"', 'id="max_time"', 'id="proxies"', 'id="reviews"'):
             self.assertNotIn(el, front)
             self.assertIn(el, ui)
         self.assertEqual(ui.count("<details>"), 3)  # location and language, advanced options, proxies
         self.assertNotIn("lobstr.io</a>", ui)
         self.assertIn("socials: $('socials').checked", ui)
         self.assertIn("if (proxies.length) body.proxies = proxies", ui)
-        # newcomer test: Enter in the type box never submits; a picked type waits for its city; a search
-        # with no place warns once; downloads are named after the search; local times; a favicon
-        self.assertIn("if (ev.key === 'Enter') {{ ev.preventDefault(); pick(); }}".replace("{{", "{").replace("}}", "}"), ui)
-        self.assertIn("v + ' in '", ui)
-        self.assertIn("Start anyway", ui)
+        # preset only: Enter in a box never submits; text not in a list is refused; each type is searched in
+        # each city, one job per city centred on it; downloads are named after the search; local times; a favicon
+        for rule in ("} else if (ev.key === 'Enter') {  // never submits the form", "if (active >= 0) pick(active);",
+                     "is not in the list", "is not picked yet", "whats.map(w => w + ' in ' + c.label)",
+                     "lat: c.lat, lon: c.lon", "for (const c of wheres)", "'/api/v1/cities?q=' + encodeURIComponent(q)"):
+            self.assertIn(rule, ui)
+        for gone in ('id="keywords"', 'id="coords"', 'id="kwpick"', "<datalist", "Start anyway", "raw.githubusercontent.com/lobstrio"):
+            self.assertNotIn(gone, ui)
         self.assertIn("a.download = fileName(j) + '.' + fmt", ui)
         self.assertIn("toLocaleString", ui)
         self.assertIn('<link rel="icon" href="data:image/svg+xml,', ui)
-        self.assertIn('placeholder="e.g. coffee shops in Austin TX"', ui)
         # as gosom: a star button, and a sponsor box that can be closed; paid sponsors in it only when
         # sponsors.json lists one Mahan marked "ui": true, https links only, four at most
         self.assertIn('Star on GitHub</a>', ui)
@@ -1266,8 +1270,6 @@ class ApiP3(Server):
         for rule in ("s.ui === true", "s.url.startsWith('https://')", ".slice(0, 4)", "noopener noreferrer sponsored"):
             self.assertIn(rule, ui)
         self.assertNotIn(".innerHTML", ui)  # sponsor text is set as text, never parsed as HTML
-        self.assertIn(serve.CATEGORIES, ui)  # loaded by the browser from GitHub, pinned to a commit
-        self.assertRegex(serve.CATEGORIES, r"/[0-9a-f]{40}/")
         script = re.search(r"<script nonce=[^>]+>(.*)</script>", ui, re.S).group(1)
         self.assertNotIn("'\n'", script)  # PAGE must say \\n: a bare newline in a JS string breaks the page
 
@@ -1279,6 +1281,40 @@ class ApiKeyDocs(Server):
         self.assertEqual(self.call("GET", "/api/docs")[0], 200)
         self.assertEqual(self.call("GET", "/api/openapi.json")[0], 200)
         self.assertEqual(self.call("GET", "/api/v1/jobs/00000000-0000-0000-0000-000000000000/download")[0], 401)
+        self.assertEqual(self.call("GET", "/api/v1/cities?q=austin")[0], 401)
+
+
+class Presets(Server):
+    def cities(self, q):
+        code, body, _ = self.call("GET", "/api/v1/cities?q=" + urllib.parse.quote(q))
+        self.assertEqual(code, 200)
+        return json.loads(body)
+
+    def test_where(self):
+        top = self.cities("")  # nothing typed: the biggest US cities
+        self.assertEqual((len(top), top[0]["label"]), (20, "New York City, New York, US"))
+        self.assertTrue(all(c["country"] == "US" for c in top))
+        self.assertEqual(self.cities("austin")[0], {"label": "Austin, Texas, US", "lat": "30.2672", "lon": "-97.7431",
+                                                    "country": "US"})
+        self.assertEqual([c["label"] for c in self.cities("Austin, Tex")], ["Austin, Texas, US"])
+        self.assertEqual(self.cities("sao paulo")[0]["label"], "São Paulo, BR")  # accents fold
+        self.assertEqual(self.cities("lodz")[0]["label"], "Łódź, Łódź Voivodeship, PL")
+        self.assertEqual(self.cities("shanghai")[0]["label"], "Shanghai, CN")  # region == name: said once
+        self.assertEqual(self.cities("no such place xq"), [])
+        self.assertLessEqual(len(self.cities("s")), 20)
+
+    def test_data(self):
+        self.assertEqual(len({t.lower() for t in serve.TYPES}), len(serve.TYPES))  # no duplicate business types
+        self.assertTrue(all(t == t.strip() and 0 < len(t) <= 80 for t in serve.TYPES))
+        labels = set()
+        for row in serve.cities():
+            key, label, lat, lon, cc = row.split("\t")
+            self.assertTrue(-90 <= float(lat) <= 90 and -180 <= float(lon) <= 180, row)
+            self.assertRegex(cc, r"^[A-Z]{2}$")
+            self.assertEqual(key, serve.fold(label))
+            labels.add(label)
+        self.assertEqual(len(labels), len(serve.cities()))  # each label names one city
+        self.assertGreater(len(labels), 150000)
 
 
 

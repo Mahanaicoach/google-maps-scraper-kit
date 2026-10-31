@@ -109,15 +109,14 @@ web UI and API docs in the browser:
 - API docs: **http://localhost:8080/api/docs** (a plain page; the OpenAPI JSON is at
   http://localhost:8080/api/openapi.json). Neither needs the API key.
 
-The page has a form. Up front is "What to search": one keyword per line, with the city named in each
-("coffee shops in Austin TX"). Below it are an optional "Add a business type" box and two checkboxes
-that are on by default, "Emails" and "Social profiles", under "Collect". Both read each business's homepage.
-Pick a business type and the page adds `<Type> in ` to "What to search" (for example `Bakery in `) and
-puts the cursor there, so you type the city. Pressing Enter in the business type box adds the line and
-never starts a search. A search line with no place (no " in ", " near " or comma) and no map centre
-gets a warning first; a second press of "Start anyway" runs it. Three collapsed sections hold the rest:
-- **Location and language:** an optional map centre pasted as `30.2672, -97.7431`, zoom, language and
-  country.
+The page has a form. Up front are "What" and "Where": type a few letters, then pick a business type
+(about 200, such as "Dentists") and a city (about 168,000 from GeoNames, such as "Austin, Texas, US").
+Both boxes take only picks from their lists, so a search never names a place or a type that does not
+exist; add as many of each as you like. Each type is searched in each city, one job per city, with the
+map centred on that city ("Dentists in Austin, Texas, US"). Pressing Enter in either box adds the pick
+and never starts a search. Below them are two checkboxes that are on by default, "Emails" and "Social
+profiles", under "Collect". Both read each business's homepage. Three collapsed sections hold the rest:
+- **Location and language:** zoom, language and country (default: the city's country).
 - **Advanced options:** depth, time limit, reviews per place (0 to 5) and an MX check of email domains.
 - **Proxies:** one per line. `http://` and `https://` work with or without `user:pass`; `socks5://`
   works without a login.

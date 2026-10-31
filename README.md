@@ -227,22 +227,22 @@ One keyword per line. One job. One CSV.
   Google for minutes to hours. When Google answers with its unusual-traffic page, the engine waits
   and retries the keyword up to 2 times, then stops the job and keeps the rows found before that.
   Your Google account is not affected. See [Responsible use](#responsible-use).
-- **The web UI is a simple form for beginners.** Up front are "What to search" (one keyword per line,
-  with the city named in each), an optional business-type box, and two options that are on by
-  default: "Emails" and "Social profiles", under "Collect". Pick a business type and the page adds
-  `<Type> in ` to "What to search" (for example `Bakery in `) and puts the cursor there, so you type
-  the city. Enter in the business-type box adds the line and never starts a search. A search line
-  with no place (no " in ", " near " or comma) and no map centre gets a warning first; a second press
-  of "Start anyway" runs it. Three collapsed sections hold the rest: "Location
+- **The web UI is a simple form for beginners.** Up front are "What" (a business type) and "Where"
+  (a city), and two options that are on by default: "Emails" and "Social profiles", under "Collect".
+  Both boxes take only picks from their lists, and each pick becomes a tag you can remove: type a
+  few letters, then pick. Text that is not in a list is refused, and Enter never starts a search.
+  Three collapsed sections hold the rest: "Location
   and language", "Advanced options" and "Proxies". The job list shows each job's status with a
   progress bar (a review stage reads "reading reviews 7 of 20"), its times in your local time, and
   CSV, JSON and Delete buttons. Downloads are named after the search, for example
   `bakery-in-portland-or-c063a815.csv`. It downloads the raw CSV or JSON, and its email and
   social options read homepages only, so the scripts find more emails and return the clean lead
-  fields. The page loads
-  two static files from GitHub (`raw.githubusercontent.com`), with no tracking: the sponsor box's
-  `assets/sponsors/sponsors.json` from this repo (cached for a day), and the business category list
-  behind its "Add a business type" box (cached for 30 days). Scraped data stays on your machine.
+  fields. Its What and Where boxes take only picks from their lists: about 200 business types
+  (`engine/presets/business-types.json`, add a niche there) and about 168,000 cities from GeoNames,
+  so a search never names a place that does not exist. Each type is searched in each city, one
+  job per city, with the map centred on that city. The page loads one static file from GitHub
+  (`raw.githubusercontent.com`), with no tracking: the sponsor box's
+  `assets/sponsors/sponsors.json` from this repo (cached for a day). Scraped data stays on your machine.
 - **Service-area businesses often have no address.** Plumbers, cleaners and other mobile services
   often hide their street address on Google, so `address` is empty for them. The city and the phone
   usually remain.

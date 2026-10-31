@@ -15,7 +15,7 @@ Google Maps, for email or socials jobs to the businesses' own websites, and for 
 to Google's public DNS (dns.google), nothing else.
 Standard library only.
 """
-import argparse, csv, hmac, html, io, json, os, re, secrets, signal, socket, socketserver, sys, threading, unicodedata
+import argparse, csv, gzip, hmac, html, io, json, os, re, secrets, signal, socket, socketserver, sys, threading, unicodedata
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -34,12 +34,14 @@ REPO = "https://github.com/Mahanaicoach/google-maps-scraper-kit"
 # The web UI's sponsor box: the browser reads this static file from GitHub (cached a day, no
 # tracking), so the sponsors it lists change without anyone updating their copy of the kit.
 SPONSORS = "https://raw.githubusercontent.com/Mahanaicoach/google-maps-scraper-kit/master/assets/sponsors/sponsors.json"
-# Keyword ideas for the web UI: Google Business Profile category names (4,053, US English) from
-# lobstrio/google-business-categories, pinned to one commit. The browser loads it from GitHub, like
-# the sponsor box; the kit ships no copy, because that repository has no licence file.
-CATEGORIES = ("https://raw.githubusercontent.com/lobstrio/google-business-categories/"
-              "4ee1c4788d07c812a32986177c2a51c28957062f/data/google-business-categories.txt")
-CATEGORIES_REPO = "https://github.com/lobstrio/google-business-categories"
+# The web UI's What and Where boxes offer only these, so nobody searches for a business type or a
+# place that does not exist: presets/business-types.json (hand-picked; add a niche there) and
+# presets/cities.tsv.gz (GeoNames cities1000, CC BY 4.0: name, region, country code, lat, lon, biggest first).
+PRESETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "presets")
+with open(os.path.join(PRESETS, "business-types.json"), encoding="utf-8") as _f:
+    TYPES = json.load(_f)
+TYPES_JS = json.dumps(TYPES).replace("</", "<\\/")  # the What list, inlined in the page script
+_cities, _cities_lock = None, threading.Lock()
 ENV_KEYS = ("SCRAPER_PORT", "SCRAPER_API_KEY", "SCRAPER_HEADLESS")
 MAX_BODY = 1 << 20
 LOCAL = r"(localhost|127\.0\.0\.1|\[::1\])"
@@ -57,6 +59,44 @@ def file_name(job, jid):
     s = unicodedata.normalize("NFKD", (job or {}).get("Name") or "")
     s = "".join(c for c in s if not unicodedata.combining(c)).lower()
     return (re.sub(r"[^a-z0-9]+", "-", s).strip("-")[:60] or "results") + "-" + jid[:8]
+
+
+FOLD = str.maketrans({"ł": "l", "ø": "o", "đ": "d", "ı": "i", "ß": "ss", "æ": "ae", "œ": "oe", "þ": "th"})
+
+
+def fold(s):
+    """"sao paulo sp br" for "São Paulo, SP, BR": accents dropped (also ł, ø, ı...), lower case, punctuation
+    as single spaces."""
+    s = "".join(c for c in unicodedata.normalize("NFKD", s.lower().translate(FOLD)) if not unicodedata.combining(c))
+    return " ".join(re.sub(r"[\W_]+", " ", s).split())
+
+
+def cities():
+    """Every city as one "folded label<TAB>label<TAB>lat<TAB>lon<TAB>country" line, biggest first. Read on the
+    first lookup, then kept (about 35 MB)."""
+    global _cities
+    with _cities_lock:
+        if _cities is None:
+            rows = []
+            with gzip.open(os.path.join(PRESETS, "cities.tsv.gz"), "rt", encoding="utf-8") as f:
+                for line in f:
+                    name, admin, cc, lat, lon = line.rstrip("\n").split("\t")
+                    label = ", ".join([name] + ([admin] if admin and admin != name else []) + [cc])
+                    rows.append("\t".join((fold(label), label, lat, lon, cc)))
+            _cities = rows
+    return _cities
+
+
+def find_cities(q, limit=20):
+    """The biggest cities whose "name, region, country" starts with q; with no q, the biggest in the US."""
+    q, out = fold(q), []
+    for row in cities():  # ponytail: a linear scan, about 30 ms; a prefix index if lookups ever lag
+        if row.startswith(q) if q else row.endswith("\tUS"):
+            _, label, lat, lon, cc = row.split("\t")
+            out.append({"label": label, "lat": lat, "lon": lon, "country": cc})
+            if len(out) == limit:
+                break
+    return out
 
 
 def log(msg):
@@ -133,6 +173,9 @@ OPENAPI = {
             "delete": {"summary": "Delete a job and its results (stops it if it is running)"}},
         "/api/v1/jobs/{id}/download": {"get": {"summary": "The job's CSV, the rows so far while it works; "
                                                           "?format=json for a JSON array of the same rows"}},
+        "/api/v1/cities": {"get": {"summary": "Up to 20 cities for the web UI's Where box, each {label, lat, lon, "
+                                              "country}: ?q=aus gives the biggest whose \"name, region, country\" "
+                                              "starts with it, no q the biggest US cities (GeoNames, CC BY 4.0)"}},
         "/api/openapi.json": {"get": {"summary": "This description as OpenAPI JSON (the page at /api/docs shows it)"}},
     },
 }
@@ -216,18 +259,28 @@ h2 {{ margin: 0 0 12px; font: 600 1.15rem/1.3 var(--serif); }}
 section {{ padding: 28px 0 0; }}
 form {{ display: grid; gap: 14px; }}
 .sr {{ position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }}
-.search {{ display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; background: var(--sheet);
+.ww {{ display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }}
+.pick {{ display: grid; gap: 6px; align-content: start; }}
+.search {{ display: flex; align-items: center; gap: 10px; padding: 6px 14px; background: var(--sheet);
   border: 1.5px solid var(--ink); border-radius: 14px; box-shadow: 0 1px 0 var(--rule); }}
 .search:focus-within {{ outline: 3px solid var(--ring); outline-offset: 2px; }}
-.search svg {{ flex: none; margin-top: 3px; color: var(--go); }}
-.search textarea {{ flex: 1; min-height: 52px; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink);
-  font: 1.05rem/1.55 var(--sans); resize: vertical; }}
+.search svg {{ flex: none; color: var(--go); }}
+.search input {{ flex: 1; padding: 0; border: 0; outline: 0; background: transparent; font-size: 1.05rem; }}
+.box {{ position: relative; }}
+.opts {{ position: absolute; z-index: 5; left: 0; right: 0; top: calc(100% + 4px); max-height: 280px; overflow-y: auto;
+  margin: 0; padding: 4px; list-style: none; background: var(--sheet); border: 1px solid var(--rule); border-radius: 10px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / .14); }}
+.opts li {{ padding: 9px 10px; border-radius: 6px; cursor: pointer; }}
+.opts li:hover, .opts li[aria-selected=true] {{ background: color-mix(in srgb, var(--go) 12%, var(--sheet)); }}
+.tags:empty {{ display: none; }}
+.tag {{ min-height: 36px; padding: 6px 12px; border-color: var(--go); border-radius: 999px;
+  background: color-mix(in srgb, var(--go) 10%, var(--sheet)); }}
 .hint {{ margin: -6px 2px 0; }}
 label {{ display: grid; gap: 6px; font-size: .9rem; font-weight: 600; }}
 input {{ font: inherit; font-weight: 400; min-height: 44px; width: 100%; padding: 9px 12px; color: var(--ink);
   background: var(--sheet); border: 1px solid var(--rule); border-radius: 8px; }}
 input:hover {{ border-color: var(--soft); }}
-input[type=number], #coords {{ font-family: var(--mono); font-size: .95rem; }}
+input[type=number] {{ font-family: var(--mono); font-size: .95rem; }}
 textarea {{ font: inherit; }}
 .collect {{ display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; border: 0; }}
 .collect legend {{ float: left; margin-right: 6px; padding: 12px 0; font-size: .9rem; color: var(--soft); }}
@@ -287,27 +340,33 @@ progress {{ display: block; width: 100%; max-width: 200px; height: 6px; margin-t
 </aside>
 <section aria-labelledby="h-new"><h2 id="h-new">New search</h2>
 <form id="f">
-  <label class="sr" for="keywords">What to search, one per line</label>
-  <div class="search"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/>
-    <circle cx="12" cy="9.5" r="2.5"/></svg>
-    <textarea id="keywords" rows="2" required placeholder="e.g. coffee shops in Austin TX"></textarea></div>
-  <p class="hint soft">One search per line. Name the city, as you would in Google Maps.</p>
-  <label class="sr" for="kwpick">Add a business type</label>
-  <input id="kwpick" list="kwlist" autocomplete="off" placeholder="+ Add a business type, e.g. dentist or roofing contractor">
-  <datalist id="kwlist"></datalist>
+  <div class="ww">
+    <div class="pick"><label for="what">What</label><div class="box">
+      <div class="search"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+        <input id="what" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="what-opts"
+          autocomplete="off" placeholder="e.g. Dentists"></div>
+      <ul class="opts" id="what-opts" role="listbox" aria-label="Business types" hidden></ul></div>
+      <div class="row tags" id="whats"></div></div>
+    <div class="pick"><label for="where">Where</label><div class="box">
+      <div class="search"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/>
+        <circle cx="12" cy="9.5" r="2.5"/></svg>
+        <input id="where" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="where-opts"
+          autocomplete="off" placeholder="e.g. Austin"></div>
+      <ul class="opts" id="where-opts" role="listbox" aria-label="Cities" hidden></ul></div>
+      <div class="row tags" id="wheres"></div></div>
+  </div>
+  <p class="hint soft">Pick from the lists; add as many as you like. Each business type is searched in each city, one job per city.</p>
   <fieldset class="collect"><legend>Collect</legend>
     <label class="chip"><input type="checkbox" id="email" checked> Emails</label>
     <label class="chip"><input type="checkbox" id="socials" checked> Social profiles</label>
   </fieldset>
   <details><summary>Location and language</summary><div class="body">
-    <label class="wide" for="coords"><span>Map centre <span class="soft">optional</span></span>
-      <input id="coords" inputmode="decimal" autocomplete="off" placeholder="e.g. 30.2672, -97.7431">
-      <span class="soft">Right-click a spot in Google Maps, click the numbers to copy them, paste here. Left empty,
-      Google uses the city in your search.</span></label>
+    <p class="wide soft">Each job centres the map on its city.</p>
     <label for="zoom">Zoom<input id="zoom" type="number" min="1" max="21" value="15"></label>
     <label for="lang">Language<input id="lang" value="en" maxlength="2" pattern="[A-Za-z]{{2}}"></label>
-    <label for="country"><span>Country <span class="soft">optional</span></span><input id="country" maxlength="2" pattern="[A-Za-z]{{2}}" placeholder="e.g. us"></label>
+    <label for="country"><span>Country <span class="soft">optional</span></span><input id="country" maxlength="2" pattern="[A-Za-z]{{2}}" placeholder="the city's"></label>
   </div></details>
   <details><summary>Advanced options</summary><div class="body">
     <label for="depth">Depth<input id="depth" type="number" min="1" max="1000" value="5">
@@ -395,64 +454,87 @@ async function load() {{
     if (!list.length) {{ const tr = document.createElement('tr'); cell(tr, 'No jobs yet. Start a search above.', 'soft').colSpan = 4; tb.appendChild(tr); }}
   }} catch (e) {{ say(e.message, 'bad'); }}
 }}
+const TYPES = {types};
+const whats = [], wheres = [];  // picked business types, picked cities {{label, lat, lon, country}}
+function tags(box, list) {{  // each pick is a button; pressing it removes the pick
+  box.replaceChildren();
+  list.forEach((v, i) => {{
+    const b = document.createElement('button'), text = v.label || v; b.type = 'button'; b.className = 'tag';
+    b.textContent = text + ' ×'; b.setAttribute('aria-label', 'Remove ' + text);
+    b.addEventListener('click', () => {{ list.splice(i, 1); tags(box, list); }}); box.appendChild(b);
+  }});
+}}
+function combo(input, box, source, choose) {{  // a box that takes only picks from its own list: arrows move, Enter or a click picks
+  let items = [], active = -1;
+  function show(list) {{
+    items = list; active = list.length ? 0 : -1; box.replaceChildren();
+    list.forEach((it, i) => {{
+      const li = document.createElement('li'); li.id = box.id + '-' + i; li.setAttribute('role', 'option'); li.textContent = it.label;
+      li.addEventListener('mousedown', ev => {{ ev.preventDefault(); pick(i); }}); box.appendChild(li);
+    }});
+    mark(); box.hidden = !list.length; input.setAttribute('aria-expanded', String(!box.hidden));
+  }}
+  function mark() {{
+    [...box.children].forEach((li, i) => li.setAttribute('aria-selected', String(i === active)));
+    if (active < 0) return input.removeAttribute('aria-activedescendant');
+    input.setAttribute('aria-activedescendant', box.id + '-' + active); box.children[active].scrollIntoView({{block: 'nearest'}});
+  }}
+  function pick(i) {{ choose(items[i]); input.value = ''; say('', ''); source('', show); }}
+  input.addEventListener('input', () => {{ if ($('msg').className === 'bad') say('', ''); source(input.value.trim(), show); }});
+  input.addEventListener('focus', () => source(input.value.trim(), show));
+  input.addEventListener('blur', () => show([]));
+  input.addEventListener('keydown', ev => {{
+    if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {{
+      ev.preventDefault(); if (!items.length) return;
+      active = (active + (ev.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length; mark();
+    }} else if (ev.key === 'Enter') {{  // never submits the form
+      ev.preventDefault();
+      if (active >= 0) pick(active);
+      else if (input.value.trim()) say('"' + input.value.trim() + '" is not in the list. Type a few letters, then pick from it.', 'bad');
+    }} else if (ev.key === 'Escape') show([]);
+  }});
+}}
+combo($('what'), $('what-opts'), (q, show) => show(TYPES.filter(t => t.toLowerCase().includes(q.toLowerCase())).map(t => ({{label: t}}))),
+  t => {{ if (!whats.includes(t.label)) whats.push(t.label); tags($('whats'), whats); }});
+let timer = 0;
+combo($('where'), $('where-opts'), (q, show) => {{  // the biggest cities that start with q; nothing typed, the biggest US ones
+  clearTimeout(timer);
+  timer = setTimeout(async () => {{
+    try {{
+      const r = await api('GET', '/api/v1/cities?q=' + encodeURIComponent(q)); if (!r.ok) return;
+      const found = await r.json();
+      if (q === $('where').value.trim() && document.activeElement === $('where')) show(found);  // else a newer lookup is coming
+    }} catch (e) {{ say(e.message, 'bad'); }}
+  }}, 120);
+}}, c => {{ if (!wheres.some(w => w.label === c.label)) wheres.push(c); tags($('wheres'), wheres); }});
 $('f').addEventListener('submit', async ev => {{
   ev.preventDefault();
-  const keywords = $('keywords').value.split('\\n').map(s => s.trim()).filter(Boolean);
-  const at = $('coords').value.trim(), m = at.match(/^(-?\\d+(?:\\.\\d+)?)\\s*[,\\s]\\s*(-?\\d+(?:\\.\\d+)?)$/);
-  if (at && !m) {{ $('coords').closest('details').open = true; $('coords').focus();
-    return say('Map centre: paste two numbers such as 30.2672, -97.7431, or leave it empty.', 'bad'); }}
+  for (const box of [$('what'), $('where')]) if (box.value.trim()) {{ box.focus();
+    return say('"' + box.value.trim() + '" is not picked yet. Pick it from the list, or clear the box.', 'bad'); }}
+  if (!whats.length || !wheres.length) {{ (whats.length ? $('where') : $('what')).focus();
+    return say('Pick at least one business type and one city from the lists.', 'bad'); }}
   const proxies = $('proxies').value.split('\\n').map(s => s.trim()).filter(Boolean);
-  const body = {{name: Array.from(keywords[0] || 'job').slice(0, 200).join(''), keywords, lang: $('lang').value.trim().toLowerCase(),
-    country: $('country').value.trim().toLowerCase(), lat: m ? m[1] : '', lon: m ? m[2] : '',
-    zoom: +$('zoom').value || 15, depth: +$('depth').value, max_time: +$('max_time').value,
-    email: $('email').checked, socials: $('socials').checked, verify_emails: $('verify').checked,
-    reviews_max: +$('reviews').value || 0}};
-  if (proxies.length) body.proxies = proxies;
-  const go = $('go'), bare = m ? [] : keywords.filter(k => !/\\b(in|near)\\s+\\S|,/i.test(k));
-  if (bare.length && go.dataset.anyway !== '1') {{  // Google would search around this computer's location
-    go.dataset.anyway = '1'; go.textContent = 'Start anyway';
-    return say('No city in: ' + bare.slice(0, 3).map(k => '"' + k + '"').join(', ') + (bare.length > 3 ? '…' : '')
-      + '. Google would search near this computer. Add a city (dentist in Denver CO), set a map centre, or press Start anyway.', 'bad');
-  }}
-  delete go.dataset.anyway; go.disabled = true; go.textContent = 'Starting…';
+  const go = $('go'); go.disabled = true; go.textContent = 'Starting…';
+  let started = 0;
   try {{
-    const r = await api('POST', '/api/v1/jobs', body), d = await r.json();
-    if (r.ok) say('Started. It runs in the background, and the list below updates by itself.', 'ok');
-    else say('Not started: ' + d.message, 'bad');
-    load();
+    for (const c of wheres) {{  // one job per city, its map centred on that city
+      const keywords = whats.map(w => w + ' in ' + c.label);
+      const body = {{name: Array.from(keywords[0] + (keywords.length > 1 ? ' +' + (keywords.length - 1) + ' more' : '')).slice(0, 200).join(''),
+        keywords, lang: $('lang').value.trim().toLowerCase(), country: $('country').value.trim().toLowerCase() || c.country.toLowerCase(),
+        lat: c.lat, lon: c.lon, zoom: +$('zoom').value || 15, depth: +$('depth').value, max_time: +$('max_time').value,
+        email: $('email').checked, socials: $('socials').checked, verify_emails: $('verify').checked,
+        reviews_max: +$('reviews').value || 0}};
+      if (proxies.length) body.proxies = proxies;
+      const r = await api('POST', '/api/v1/jobs', body), d = await r.json();
+      if (!r.ok) return say('Not started' + (started ? ' after ' + started + ' job(s)' : '') + ': ' + d.message, 'bad');
+      started++;
+    }}
+    say(started === 1 ? 'Started. It runs in the background, and the list below updates by itself.'
+      : 'Started ' + started + ' jobs, one per city. They run one after another, and the list below updates by itself.', 'ok');
   }} catch (e) {{ say(e.message, 'bad'); }}
-  finally {{ go.disabled = false; go.textContent = 'Start scraping'; }}
+  finally {{ go.disabled = false; go.textContent = 'Start scraping'; load(); }}
 }});
 load(); setInterval(load, 3000);
-function pick() {{  // a picked business type becomes a keyword line that waits for its city: "Bakery in "
-  const v = $('kwpick').value.trim(); if (!v) return;
-  const k = $('keywords'); k.value = (k.value.trim() ? k.value.trim() + '\\n' : '') + v + ' in ';
-  $('kwpick').value = ''; k.focus(); k.setSelectionRange(k.value.length, k.value.length); unwarn();
-  say('Type the city after "' + v + ' in".', '');
-}}
-function unwarn() {{ const go = $('go'); if (go.dataset.anyway) {{ delete go.dataset.anyway; go.textContent = 'Start scraping'; }} }}
-$('kwpick').addEventListener('change', pick);
-$('kwpick').addEventListener('keydown', ev => {{ if (ev.key === 'Enter') {{ ev.preventDefault(); pick(); }} }});
-$('keywords').addEventListener('input', unwarn); $('coords').addEventListener('input', unwarn);
-(function () {{  // keyword ideas: Google's business category names, cached for 30 days, as text only
-  const key = 'gmskit-categories', month = 30 * 86400000;
-  function fill(names) {{
-    const list = $('kwlist'); list.replaceChildren();
-    for (const n of names) {{ const o = document.createElement('option'); o.value = n; list.appendChild(o); }}
-  }}
-  function clean(text) {{
-    return text.split('\\n').map(s => s.trim()).filter(s => s && s.length <= 80).slice(0, 5000);
-  }}
-  try {{
-    const c = JSON.parse(localStorage.getItem(key) || 'null');
-    if (c && Date.now() - c.t < month && Array.isArray(c.names)) return fill(c.names);
-  }} catch (e) {{}}
-  fetch('{categories}', {{credentials: 'omit'}}).then(r => r.ok ? r.text() : '').then(t => {{
-    const names = clean(t); if (!names.length) return;
-    fill(names);
-    try {{ localStorage.setItem(key, JSON.stringify({{t: Date.now(), names}})); }} catch (e) {{}}
-  }}).catch(() => {{}});
-}})();
 (function () {{  // sponsor tiles: only the entries Mahan marks "ui": true in sponsors.json, as text, https links only
   const box = $('sponsors'), grid = $('sp-grid'), key = 'gmskit-sponsors', day = 86400000;
   $('sp-close').addEventListener('click', () => {{ box.hidden = true; }});  // as gosom: hidden until the page reloads
@@ -602,6 +684,8 @@ class Handler(BaseHTTPRequestHandler):
             csp = f"default-src 'none'; style-src 'nonce-{nonce}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
             return self.reply(200, docs_page(nonce).encode(), "text/html; charset=utf-8",
                               [("Content-Security-Policy", csp)])
+        if path == "/api/v1/cities":
+            return self.reply(200, find_cities(urllib.parse.parse_qs(query).get("q", [""])[0][:100]))
         if path == "/api/openapi.json":
             return self.reply(200, OPENAPI)
         if path == "/":
@@ -610,8 +694,7 @@ class Handler(BaseHTTPRequestHandler):
                    "connect-src 'self' https://raw.githubusercontent.com; img-src 'self' data:; "
                    "form-action 'self'; base-uri 'none'; "
                    "frame-ancestors 'none'")
-            page = PAGE.format(nonce=nonce, version=VERSION, repo=REPO, sponsors=SPONSORS, categories=CATEGORIES,
-                               categories_repo=CATEGORIES_REPO).encode()
+            page = PAGE.format(nonce=nonce, version=VERSION, repo=REPO, sponsors=SPONSORS, types=TYPES_JS).encode()
             return self.reply(200, page, "text/html; charset=utf-8", [("Content-Security-Policy", csp)])
         self.fail(404, "not found")
 
