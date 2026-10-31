@@ -73,6 +73,27 @@ class Download(unittest.TestCase):
         self.assertIn("SHA-256", str(e.exception))
         self.assertEqual(os.listdir(home), [])
 
+    def test_restart_never_downloads(self):
+        # scrape.py may run `engine.py restart` unattended; fetching code is for an explicit start.
+        with mock.patch.object(engine, "HOME", tempfile.mkdtemp()), \
+             mock.patch.object(engine, "build", return_value=("engine-bin", "0" * 64)), \
+             mock.patch.object(engine.urllib.request, "urlopen") as fetched:
+            with self.assertRaises(SystemExit) as e:
+                engine.binary(download=False)
+        fetched.assert_not_called()
+        self.assertIn("engine.py start", str(e.exception))
+
+
+class Processes(unittest.TestCase):
+    def test_stop_never_kills_a_process_that_is_not_the_kits(self):
+        # After a reboot the pid in state.json can belong to anything; this test runner is not ours.
+        self.assertFalse(engine.ours(os.getpid()))
+        with mock.patch.object(engine.os, "killpg", create=True) as killpg, \
+             mock.patch.object(engine.subprocess, "run", wraps=engine.subprocess.run) as run:
+            engine.kill(os.getpid())
+        killpg.assert_not_called()
+        self.assertFalse(any("taskkill" in str(c) for c in run.call_args_list))
+
 
 class Upstream(BaseHTTPRequestHandler):
     def log_message(self, *a):

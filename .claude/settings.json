@@ -1,12 +1,12 @@
 {
-  "$comment": "Pre-approves the safe, local commands this kit uses so Claude can scrape on autopilot without a permission prompt each time. All entries are local-only (localhost / this folder's scripts / docker). Nothing here can reach the public internet except the scraper's own outbound calls.",
+  "$comment": "Pre-approves the safe, local commands this kit uses so Claude can scrape without a permission prompt each time. All entries are local-only (localhost, this folder's scripts, the kit's own container). Deleting data (docker compose down -v) and anything that downloads code (scripts/engine.py start) still ask first.",
   "permissions": {
     "allow": [
-      "Bash(docker compose up:*)",
-      "Bash(docker compose down:*)",
-      "Bash(docker compose stop:*)",
-      "Bash(docker compose start:*)",
-      "Bash(docker compose ps:*)",
+      "Bash(docker compose up -d)",
+      "Bash(docker compose down)",
+      "Bash(docker compose stop)",
+      "Bash(docker compose start)",
+      "Bash(docker compose ps)",
       "Bash(docker ps:*)",
       "Bash(curl http://localhost:8080/:*)",
       "Bash(curl -s http://localhost:8080/:*)",
@@ -20,7 +20,14 @@
       "Bash(python3 scripts/scrape.py:*)",
       "Bash(python scripts/scrape.py:*)",
       "Bash(py scripts/scrape.py:*)",
-      "Bash(docker restart:*)"
+      "Bash(docker restart gmaps-scraper)",
+      "Bash(python3 scripts/test_engine.py)",
+      "Bash(python3 scripts/engine.py status)",
+      "Bash(python3 scripts/engine.py stop)",
+      "Bash(python3 scripts/engine.py restart)",
+      "Bash(python scripts/engine.py status)",
+      "Bash(python scripts/engine.py stop)",
+      "Bash(python scripts/engine.py restart)"
     ],
     "deny": []
   }

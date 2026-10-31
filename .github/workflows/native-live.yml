@@ -10,6 +10,8 @@ on:
       - .github/workflows/native-live.yml
 jobs:
   scrape:
+    # Not on pull requests from forks: they could point engine.py at another download.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
       matrix:

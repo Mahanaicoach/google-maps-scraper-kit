@@ -8,4 +8,5 @@ Manage scrape jobs through the engine's API. Request: **$ARGUMENTS** (default to
 - **delete <job-id>**: `DELETE http://localhost:8080/api/v1/jobs/<job-id>` to free disk space, then confirm it returned HTTP 200.
 - **download <job-id>**: `GET .../jobs/<job-id>/download`, then save the CSV and report the row count.
 
+Only use a job id that is a UUID (hex digits and dashes) taken from the job list; refuse anything else.
 The `google-maps-scraper` skill has the full API reference.

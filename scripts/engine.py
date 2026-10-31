@@ -16,6 +16,12 @@ import hashlib, http.client, json, os, platform, re, signal, socket, subprocess,
 import urllib.parse, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+for _stream in (sys.stdout, sys.stderr):  # ▶ ✓ ✗ on a Windows cp1252 console
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HOME = os.path.join(KIT, ".engine")
 STATE = os.path.join(HOME, "state.json")
@@ -63,8 +69,9 @@ def build():
         sys.exit("✗ The engine has no Linux arm64 build. Use Docker instead (see SETUP.md).")
     if machine == "arm64" and system == "darwin" and \
             subprocess.run(["arch", "-x86_64", "/usr/bin/true"], capture_output=True).returncode:
-        sys.exit("✗ Apple Silicon runs the engine through Rosetta, which is not installed. Install it:\n"
-                 "    softwareupdate --install-rosetta --agree-to-license")
+        sys.exit("✗ Apple Silicon runs the engine through Rosetta, which is not installed. Install it\n"
+                 "  yourself (macOS asks you to accept Apple's licence), then run start again:\n"
+                 "    softwareupdate --install-rosetta")
     return BUILDS[system]
 
 
@@ -76,12 +83,15 @@ def sha256(path):
     return h.hexdigest()
 
 
-def binary():
-    """Path to a verified engine build, downloading it once."""
+def binary(download=True):
+    """Path to a verified engine build, downloading it once. restart never downloads: scrape.py may
+    call it unattended, and fetching code is for an explicit `start` only."""
     name, digest = build()
     path = os.path.join(HOME, name)
     if os.path.exists(path) and sha256(path) == digest:
         return path
+    if not download:
+        sys.exit("✗ The engine build is missing or changed. Run: python3 scripts/engine.py start")
     os.makedirs(HOME, exist_ok=True)
     print(f"▶ Downloading the engine ({name}, about 60 MB) from its GitHub release…")
     tmp = path + ".part"
@@ -116,6 +126,8 @@ def answers(port, timeout=2):
 
 def port_free(port):
     with socket.socket() as s:
+        if os.name != "nt":  # like the proxy's own server: closed connections in TIME_WAIT do not block
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind(("127.0.0.1", port))
             return True
@@ -134,8 +146,22 @@ def spawn(cmd, log):
                             start_new_session=True, cwd=HOME).pid
 
 
+def ours(pid):
+    """True if `pid` is still this kit's engine or proxy. After a reboot or crash the pid in
+    state.json may belong to an unrelated process, which stop must never kill."""
+    if os.name == "nt":
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                             capture_output=True, text=True, errors="replace").stdout.lower()
+        return "google_maps_scraper" in out or "python" in out or "py.exe" in out
+    out = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True,
+                         errors="replace").stdout
+    return HOME in out or (os.path.basename(__file__) in out and "_proxy" in out)
+
+
 def kill(pid):
     """Stop a process and its children (the engine starts Chromium)."""
+    if not ours(pid):
+        return
     if os.name == "nt":
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
         return
@@ -155,7 +181,7 @@ def kill(pid):
         pass
 
 
-def start():
+def start(download=True):
     port = public_port()
     st = read_state()
     if st and answers(port):
@@ -166,7 +192,7 @@ def start():
     if not port_free(port):
         sys.exit(f"✗ Port {port} is in use. Is the Docker engine running? Stop it with "
                  f"`docker compose stop`, or set SCRAPER_PORT in .env to a free port.")
-    path = binary()
+    path = binary(download)
     with socket.socket() as s:  # a free private port for the engine itself
         s.bind(("127.0.0.1", 0))
         engine_port = s.getsockname()[1]
@@ -291,7 +317,7 @@ def main():
     if cmd == "_proxy":
         return serve_proxy(int(sys.argv[2]), int(sys.argv[3]))
     actions = {"start": start, "stop": stop, "status": status,
-               "restart": lambda: (stop(quiet=True), start())}
+               "restart": lambda: (stop(quiet=True), start(download=False))}
     if cmd not in actions:
         sys.exit("Usage: python3 scripts/engine.py start | stop | restart | status")
     actions[cmd]()
