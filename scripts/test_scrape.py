@@ -238,7 +238,7 @@ class StopsWhenBlocked(unittest.TestCase):
         with mock.patch.object(scrape, "req", return_value=(200, b"null")), \
              mock.patch.object(scrape, "run_job", side_effect=results) as run, \
              mock.patch.object(scrape, "geocode", side_effect=lambda place, with_bbox=False: ("30.25", "-97.75") + ((BBOX,) if with_bbox else ())), \
-             mock.patch.object(sys, "argv", ["scrape.py", *argv, "--no-email", "--out", out]), redirect_stdout(log):
+             mock.patch.object(sys, "argv", ["scrape.py", *argv, "--no-email", "--no-socials", "--out", out]), redirect_stdout(log):
             try:
                 scrape.main()
             except SystemExit as e:  # a run cut short by Google exits non-zero, after writing the file
@@ -405,7 +405,7 @@ class EmailCrawl(unittest.TestCase):
         def fake_run_job(body):
             sent.append(body)
             return "job-x", [_row("A")]
-        argv = ["scrape.py", "dentists in Austin TX", "30.2", "-97.7", "--no-email",
+        argv = ["scrape.py", "dentists in Austin TX", "30.2", "-97.7", "--no-email", "--no-socials",
                 "--out", os.path.join(tempfile.mkdtemp(), "leads.csv")]
         with mock.patch.object(scrape, "req", return_value=(200, b"null")), \
              mock.patch.object(scrape, "run_job", fake_run_job), \
@@ -539,7 +539,7 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("dropped 1 rows outside the city box", text)
         with open(out, newline="", encoding="utf-8-sig") as f:  # the kit writes a BOM for Excel
             rows = list(csv.reader(f))
-        self.assertEqual(rows[0], scrape.LEAD)
+        self.assertEqual(rows[0], scrape.LEAD + scrape.SOCIAL_FIELDS)  # socials are on by default
         self.assertEqual([r[0] for r in rows[1:]], ["Biz A", "Biz B", "Biz C", "Biz D", "Biz E"])
 
     def test_two_cities_filters_exclude_limit(self):
@@ -553,7 +553,7 @@ class EndToEnd(unittest.TestCase):
         with open(earlier, "w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=scrape.LEAD); w.writeheader()
             w.writerow({"title": "Biz A", "address": ""})
-        argv = ["scrape.py", "plumbers", "--city", "Austin, TX", "--city", "Round Rock, TX", "--no-email",
+        argv = ["scrape.py", "plumbers", "--city", "Austin, TX", "--city", "Round Rock, TX", "--no-email", "--no-socials",
                 "--exclude", earlier, "--limit", "2", "--out", out, "--socials", "--fields", "title,phone"]
         log = io.StringIO()
         try:
@@ -580,7 +580,7 @@ class NothingLeft(unittest.TestCase):
         srv = ThreadingHTTPServer(("127.0.0.1", 0), MockEngine)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         out = os.path.join(tempfile.mkdtemp(), "leads.csv")
-        argv = ["scrape.py", "plumbers in Austin TX", "30.2", "-97.7", "--no-email", "--min-rating", "5", "--out", out]
+        argv = ["scrape.py", "plumbers in Austin TX", "30.2", "-97.7", "--no-email", "--no-socials", "--min-rating", "5", "--out", out]
         log = io.StringIO()
         try:
             with mock.patch.object(scrape, "BASE", f"http://127.0.0.1:{srv.server_port}"), \
@@ -599,7 +599,7 @@ class NothingLeft(unittest.TestCase):
         srv = ThreadingHTTPServer(("127.0.0.1", 0), MockEngine)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         out = os.path.join(tempfile.mkdtemp(), "leads.csv")
-        argv = ["scrape.py", "plumbers in Austin TX", "30.2", "-97.7", "--no-email", "--min-reviews", "10", "--out", out]
+        argv = ["scrape.py", "plumbers in Austin TX", "30.2", "-97.7", "--no-email", "--no-socials", "--min-reviews", "10", "--out", out]
         log = io.StringIO()
         try:
             with mock.patch.object(scrape, "BASE", f"http://127.0.0.1:{srv.server_port}"), \
@@ -678,7 +678,7 @@ class FormulaGuard(unittest.TestCase):
         row = dict(_row("A"), title="=cmd()", phone="+1 512-555-0100")
         with mock.patch.object(scrape, "req", return_value=(200, b"null")), \
              mock.patch.object(scrape, "run_job", return_value=("job-1", [row])), \
-             mock.patch.object(sys, "argv", ["scrape.py", "x", "1", "2", "--no-email", "--out", out]), \
+             mock.patch.object(sys, "argv", ["scrape.py", "x", "1", "2", "--no-email", "--no-socials", "--out", out]), \
              redirect_stdout(io.StringIO()):
             scrape.main()
         with open(out, newline="", encoding="utf-8-sig") as f:
@@ -698,7 +698,7 @@ class Reviews(unittest.TestCase):
         row = dict(_row("A"), user_reviews='[{"Rating": 5}]', reviews_per_rating='{"5": 1}')
         with mock.patch.object(scrape, "req", return_value=(200, b"null")), \
              mock.patch.object(scrape, "run_job", return_value=("job-1", [row])) as run, \
-             mock.patch.object(sys, "argv", ["scrape.py", "x", "1", "2", "--no-email", "--reviews", "3", "--out", out]), \
+             mock.patch.object(sys, "argv", ["scrape.py", "x", "1", "2", "--no-email", "--no-socials", "--reviews", "3", "--out", out]), \
              redirect_stdout(io.StringIO()):
             scrape.main()
         self.assertEqual(run.call_args[0][0]["reviews_max"], 3)
@@ -708,18 +708,40 @@ class Reviews(unittest.TestCase):
         self.assertEqual(got["user_reviews"], '[{"Rating": 5}]')
         with mock.patch.object(scrape, "req", return_value=(200, b"null")), \
              mock.patch.object(scrape, "run_job", return_value=("job-1", [row])) as run, \
-             mock.patch.object(sys, "argv", ["scrape.py", "x", "1", "2", "--no-email", "--out", out]), \
+             mock.patch.object(sys, "argv", ["scrape.py", "x", "1", "2", "--no-email", "--no-socials", "--out", out]), \
              redirect_stdout(io.StringIO()):
             scrape.main()
         self.assertNotIn("reviews_max", run.call_args[0][0])
         with mock.patch.object(scrape, "req", return_value=(200, b"null")), \
              mock.patch.object(scrape, "run_job", return_value=("job-1", [row])), \
-             mock.patch.object(sys, "argv", ["scrape.py", "x", "1", "2", "--no-email", "--reviews", "1",
+             mock.patch.object(sys, "argv", ["scrape.py", "x", "1", "2", "--no-email", "--no-socials", "--reviews", "1",
                                              "--fields", "title,user_reviews", "--out", out]), \
              redirect_stdout(io.StringIO()):
             scrape.main()
         with open(out, newline="", encoding="utf-8-sig") as f:
             self.assertEqual(next(csv.reader(f)), ["title", "user_reviews", "reviews_per_rating"])
+
+
+class SocialsByDefault(unittest.TestCase):
+    def scrape_with(self, *extra):
+        out = os.path.join(tempfile.mkdtemp(), "leads.csv")
+        with mock.patch.object(scrape, "req", return_value=(200, b"null")), \
+             mock.patch.object(scrape, "run_job", return_value=("job-1", [_row("A")])), \
+             mock.patch.object(scrape, "enrich_sites") as enrich, \
+             mock.patch.object(sys, "argv", ["scrape.py", "x", "1", "2", "--no-email", *extra, "--out", out]), \
+             redirect_stdout(io.StringIO()):
+            scrape.main()
+        with open(out, newline="", encoding="utf-8-sig") as f:
+            return enrich.called, next(csv.reader(f))
+
+    def test_on_unless_turned_off(self):
+        called, header = self.scrape_with()
+        self.assertTrue(called)
+        self.assertEqual(header[-6:], scrape.SOCIAL_FIELDS)
+        self.assertEqual(self.scrape_with("--socials"), (called, header))  # the old opt-in still works
+        called, header = self.scrape_with("--no-socials")
+        self.assertFalse(called)
+        self.assertNotIn("instagram", header)
 
 
 class RegexSpeed(unittest.TestCase):
@@ -896,7 +918,7 @@ class EngineProgress(unittest.TestCase):
         def fake_run_job(body):
             bodies.append(body)
             return "j1", []
-        argv = ["scrape.py", "x in y", "1", "2", "--country", "DE", "--no-email",
+        argv = ["scrape.py", "x in y", "1", "2", "--country", "DE", "--no-email", "--no-socials",
                 "--out", os.path.join(tempfile.mkdtemp(), "o.csv")]
         with mock.patch.object(scrape, "req", return_value=(200, b"null")), \
              mock.patch.object(scrape, "run_job", fake_run_job), mock.patch.object(sys, "argv", argv), \

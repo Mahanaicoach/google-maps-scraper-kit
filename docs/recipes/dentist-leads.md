@@ -28,10 +28,10 @@ That is 9 jobs, run one at a time. Results are deduped on `place_id`, and rows o
 
 ## Step 3: Add social profiles
 
-Add `--socials` for Instagram, Facebook and LinkedIn links found on each practice website:
+Social profiles are on by default. The CSV has `instagram`, `facebook`, `linkedin`, `tiktok`, `youtube` and `x` columns, filled from links on each practice website. Add `--no-socials` if you do not want them:
 
 ```bash
-python3 scripts/scrape.py "dentists in Denver CO" --city "Denver, CO" --grid 3 --socials
+python3 scripts/scrape.py "dentists in Denver CO" --city "Denver, CO" --grid 3 --no-socials
 ```
 
 Want specialists too? The kit ships a ready batch file with dentists, orthodontists, dental hygienists and pediatric dentists in Denver:
@@ -57,7 +57,7 @@ Illustrative rows only:
 - `website`: the site you will review before you reach out.
 - `category`: separates general dentists from orthodontists and other specialists.
 - `review_rating`: a quick read on the practice's reputation. `review_count` works [headless](../../SETUP.md#review-counts-hours-and-reviews) and supports `--min-reviews` filtering.
-- `instagram`, `facebook`, `linkedin`: added by `--socials` when the site links them.
+- `instagram`, `facebook`, `linkedin` (and `tiktok`, `youtube`, `x`): on by default, filled when the site links them. `--no-socials` drops them.
 
 ## What to expect
 

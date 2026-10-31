@@ -43,7 +43,7 @@ Each search stops at about 120 listings. Add `--grid 3` to split the city into 9
 python3 scripts/scrape.py --keywords-file roofing.txt --city "Phoenix, AZ" --grid 3
 ```
 
-Add `--socials` to any of these commands for Instagram, Facebook and LinkedIn links found on each website.
+Each of these commands also returns Instagram, Facebook, LinkedIn, TikTok, YouTube and X links found on each website. Add `--no-socials` to skip them.
 
 ## Example output
 

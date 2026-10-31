@@ -39,12 +39,11 @@ Or use a slash command in Claude Code:
 ## What the agent does
 
 1. Runs a health check on the engine at `localhost:8080`, and starts it with `python3 scripts/engine.py start` (or `docker compose up -d` if you run Docker) if it is down.
-2. Asks once whether you also want Instagram, Facebook and LinkedIn profiles.
-3. Builds the job with the required `max_time`, `lat` and `lon`, with emails on by default.
-4. Polls the job in the background until it finishes.
-5. Downloads the CSV.
-6. Keeps the 8 lead fields: name, phone, email, website, category, address, rating and review count.
-7. Saves the file, then presents a short table and the CSV path instead of dumping every row into chat.
+2. Builds the job with the required `max_time`, plus `lat` and `lon` to centre the map (they are optional: with neither, Google places the search by the city in the keyword), with emails and social profiles on by default. It skips the social profiles only if you say you do not want them.
+3. Polls the job in the background until it finishes.
+4. Downloads the CSV.
+5. Keeps the 8 lead fields (name, phone, email, website, category, address, rating and review count), then the six social columns: Instagram, Facebook, LinkedIn, TikTok, YouTube and X.
+6. Saves the file, then presents a short table and the CSV path instead of dumping every row into chat.
 
 The kit's own scripts and the engine's health check are pre-approved in `.claude/settings.json`, so Claude Code does not prompt for each one.
 

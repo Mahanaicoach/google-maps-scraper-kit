@@ -29,8 +29,12 @@ clearly abusive use (surveilling individuals, spam). The skill has the full guid
 - API base: `http://localhost:8080`, bound to localhost, with **no auth** unless `SCRAPER_API_KEY` is set in `.env`
   (then send it as an `X-API-Key` header). Never expose it publicly.
 - Create a job with `POST /api/v1/jobs`. These body fields are **required**, or it returns 422:
-  `name` (any label), `keywords` (array), `lang` (`"en"`), `lat` and `lon` (as **strings**), and
-  `max_time` (in **seconds**, e.g. `300`).
+  `name` (any label), `keywords` (array), `lang` (`"en"`) and `max_time` (in **seconds**, e.g. `300`).
+  `lat` and `lon` (as **strings**) are optional but you should send both: they centre the map precisely.
+  With neither, Google places the search by the place named in the keyword. With only one of them the
+  API returns `422 missing geo coordinates`.
+- Social profiles are on by default in `scripts/scrape.py` (`--no-socials` skips them). Do not ask the
+  user first. On the raw API, `"socials": true` in the job body is still opt-in.
 - The create response is `{"id":"<uuid>"}` (lowercase `id`). Check status with `GET /api/v1/jobs/{id}`; its field is `"Status"`, and it becomes `"ok"` when done.
   Its `"Error"` field says why a job failed, or why an `ok` job stopped early.
 - `depth` is result batches of about 20 places each: depth 1 ≈ 20, depth 5 up to about 100 (Google stops near 120).

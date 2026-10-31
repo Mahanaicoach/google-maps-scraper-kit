@@ -17,8 +17,9 @@
 
 **A free, open-source Google Maps scraper for lead generation that runs on your own machine.**
 Name a business type and a city. Get back an outreach-ready CSV with name, phone, email, website,
-category, address, rating and review count. Add `--socials` for Instagram, Facebook, LinkedIn, TikTok,
-YouTube and X, or `--no-website` for the businesses that still need a site.
+category, address, rating and review count, plus Instagram, Facebook, LinkedIn, TikTok, YouTube and X
+links when the site shows them. Add `--no-socials` to skip those, or `--no-website` for the businesses
+that still need a site.
 
 No Google Maps API key, no SaaS credits, no data leaving your computer. One command starts the
 engine, with or without Docker. Then run it from the terminal, or let Claude Code, Codex or Cursor
@@ -89,7 +90,7 @@ Already running another copy of the kit on this machine? Set `SCRAPER_PORT` in `
 No coordinates handy? Let the Python CLI geocode the city:
 
 ```bash
-python3 scripts/scrape.py "dentists in Denver CO" --city "Denver, CO" --depth 5 --socials
+python3 scripts/scrape.py "dentists in Denver CO" --city "Denver, CO" --depth 5
 ```
 
 Each `--depth` step loads one more batch of about 20 places: `--depth 2` returns about 40, `--depth 5`
@@ -102,7 +103,7 @@ python3 scripts/scrape.py "dentists in Denver CO" --city "Denver, CO" --grid 3
 ### Example output
 
 `results-<short job id>.csv` from the first command above (pass `--out` to name it yourself).
-Illustrative rows:
+Illustrative rows. The file also has six social columns after these eight (see below):
 
 | title | phone | emails | website | category | address | review_rating | review_count |
 |---|---|---|---|---|---|---|---|
@@ -111,7 +112,8 @@ Illustrative rows:
 
 `review_count` works in headless mode; see [Honest limits](#honest-limits).
 
-`--socials` adds `instagram`, `facebook`, `linkedin`, `tiktok`, `youtube` and `x` columns. `--tech` adds
+The social columns `instagram`, `facebook`, `linkedin`, `tiktok`, `youtube` and `x` come after the eight
+lead fields by default. `--no-socials` drops them. `--tech` adds
 `fb_pixel`, `google_ads_tag`, `analytics`, `bing_ads`, `linkedin_insight`, `tiktok_pixel`, `cms`,
 `mobile_friendly` and `intent_score`, and sorts the hottest leads first. `--verify-emails` adds
 `email_host`. `--full` keeps every raw column, including coordinates, place IDs, all categories, price
@@ -142,7 +144,7 @@ npx skills add mahanaicoach/google-maps-scraper-kit
 
 This installs the skill file only. The engine ships with the kit, so the agent first asks you to
 install it (the [Quick start](#quick-start)) and then calls its API directly. The scripts' extras
-(`--socials`, `--tech`, `--grid`, geocoding, the email crawl and the 8-column cleanup) and the slash
+(the social profile columns, `--tech`, `--grid`, geocoding, the email crawl and the lead-field cleanup) and the slash
 commands come with Option A.
 
 Then ask in plain language:
@@ -168,10 +170,10 @@ scrapes Google Maps business listings only. It does not scrape social platforms 
 
 | | |
 |---|---|
-| **8 lead fields by default** | name, phone, email, website, category, address, rating, review count. The engine writes 37 raw columns; `--full` keeps them all. |
+| **8 lead fields by default** | name, phone, email, website, category, address, rating, review count, then the six social columns (`--no-socials` drops them). The engine writes 37 raw columns; `--full` keeps them all. |
 | **Email extraction, on by default** | After the Maps job, the script crawls every business website, 16 at a time: the homepage, then its contact and about pages if the homepage shows no email. It prints your found rate. |
 | **Beyond the 120 cap** | `--grid 3` splits the city into 3 x 3 map tiles, runs them one at a time and dedupes on `place_id`. |
-| **Social enrichment** | `--socials` finds Instagram, Facebook, LinkedIn, TikTok, YouTube and X profiles in code (HTTP + regex). Zero AI tokens. |
+| **Social enrichment, on by default** | Finds Instagram, Facebook, LinkedIn, TikTok, YouTube and X profiles in code (HTTP + regex), reusing the homepage the email crawl already fetched. Zero AI tokens. `--no-socials` skips it. |
 | **Who already advertises** | `--tech` spots a Meta Pixel, Google Ads tag, analytics, Bing Ads, LinkedIn Insight and TikTok pixels on each website, plus its platform (WordPress, Shopify, Wix…) and mobile support, then ranks leads by an `intent_score` from 0 to 100. Zero AI tokens. |
 | **Filters** | `--no-website` (businesses that still need a site), `--min-rating`, `--min-reviews`, `--has-phone`, `--has-email`, `--limit`. `--exclude earlier.csv` skips the places you already have, so a weekly re-run returns only new leads. |
 | **Email checks** | `--verify-emails` looks up each domain's MX record over DNS (no key), drops dead domains and labels the mail host (`google_workspace`, `microsoft_365`, `other`, `none`; blank when the row has no email). |
@@ -217,8 +219,13 @@ One keyword per line. One job. One CSV.
   Google for minutes to hours. When Google answers with its unusual-traffic page, the engine waits
   and retries the keyword up to 2 times, then stops the job and keeps the rows found before that.
   Your Google account is not affected. See [Responsible use](#responsible-use).
-- **The web UI is a simple form.** It downloads the raw CSV or JSON, and its email option reads
-  homepages only, so the scripts find more emails and return the clean 8 lead fields. The page loads
+- **The web UI is a simple form for beginners.** Up front are "What to search" (one keyword per line,
+  with the city named in each), an optional business-type box, and two options that are on by
+  default: "Emails" and "Social profiles", under "Collect". Three collapsed sections hold the rest: "Location
+  and language", "Advanced options" and "Proxies". The job list shows each job's status with a
+  progress bar, and CSV, JSON and Delete buttons. It downloads the raw CSV or JSON, and its email and
+  social options read homepages only, so the scripts find more emails and return the clean lead
+  fields. The page loads
   two static files from GitHub (`raw.githubusercontent.com`), with no tracking: the sponsor box's
   `assets/sponsors/sponsors.json` from this repo (cached for a day), and the business category list
   behind its "Add a business type" box (cached for 30 days). Scraped data stays on your machine.
@@ -237,7 +244,7 @@ One keyword per line. One job. One CSV.
 | Where data goes | Stays on your machine | Provider's servers | Provider's servers | Your machine |
 | Rows per query | Whole city with --grid, deduped | Close to zero | Whole city with a location input, billed per result | A handful |
 | Emails and socials | Built in | No | Often a paid add-on | Manual |
-| Output | Clean CSV, 8 lead fields | Chat text | CSV or JSON | Spreadsheet |
+| Output | Clean CSV, 8 lead fields plus social links | Chat text | CSV or JSON | Spreadsheet |
 | Driven by an AI agent | Yes, skill included | n/a | No | No |
 
 Ask a chat AI to "scrape Google Maps" and it hits a consent wall and JavaScript-rendered pages, so
@@ -274,7 +281,7 @@ Windows and on arm64 Linux, needs no workarounds for jobs that never finish, and
 It keeps the same job API and column names, so scripts and files made for 1.x still work, and an
 update from 1.x brings the old jobs along. A few columns hold their data differently (reviews come
 on request, without reviewer names): [SETUP, Upgrading from kit 1.x](SETUP.md#upgrading-from-kit-1x). On top sits the lead-focused layer: a dependency-free
-Python CLI with geocoding and batching, email and social enrichment to a clean 8-column CSV, and a
+Python CLI with geocoding and batching, email and social enrichment to a clean CSV, and a
 Claude Code skill with slash commands and safety guardrails. See [CREDITS.md](CREDITS.md).
 
 **Do I need Claude Code to use it?**
@@ -294,8 +301,9 @@ as untrusted, and a re-audit is requested in
 [vercel-labs/skills#2624](https://github.com/vercel-labs/skills/issues/2624).
 
 **What data do I get for each business?**
-Name, phone, email, website, category, address, rating and review count by default. Add `--socials`
-for Instagram, Facebook, LinkedIn, TikTok, YouTube and X, or `--full` for every raw column.
+Name, phone, email, website, category, address, rating and review count, then Instagram, Facebook,
+LinkedIn, TikTok, YouTube and X links by default. Add `--no-socials` to drop the social columns, or
+`--full` for every raw column.
 
 **How many leads can I scrape?**
 Up to about 120 per search. Add `--grid 3` to split the city into 9 map tiles and get past that cap,

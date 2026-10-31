@@ -104,9 +104,18 @@ browser:
 - API docs: **http://localhost:8080/api/docs** (a plain page; the OpenAPI JSON is at
   http://localhost:8080/api/openapi.json). Neither needs the API key.
 
-The page has a form (keywords, latitude, longitude, depth, language, country, time limit, emails)
-and a job list with each job's progress and CSV, JSON and Delete buttons. A job's error, if any,
-shows under its name. Its "Add a business type" box suggests Google's business category names
+The page has a form. Up front is "What to search": one keyword per line, with the city named in each
+("coffee shops in Austin TX"). Below it are an optional "Add a business type" box and two checkboxes
+that are on by default, "Emails" and "Social profiles", under "Collect". Both read each business's homepage.
+Three collapsed sections hold the rest:
+- **Location and language:** an optional map centre pasted as `30.2672, -97.7431`, zoom, language and
+  country.
+- **Advanced options:** depth, time limit, reviews per place (0 to 5) and an MX check of email domains.
+- **Proxies:** one per line. `http://` and `https://` work with or without `user:pass`; `socks5://`
+  works without a login.
+
+The job list shows each job's status with a progress bar, and CSV, JSON and Delete buttons. A job's
+error, if any, shows under its name. The business type box suggests Google's business category names
 (4,053, US English); pick one and it is added as a keyword line. Your browser loads that list from
 GitHub and keeps it for 30 days. The page downloads the engine's raw rows, the rows so far while a
 job works. The scripts give you the cleaned 8 lead fields and find more emails.
@@ -136,7 +145,7 @@ bash scripts/scrape.sh "coffee shops in Austin TX" 30.2672 -97.7431 5
 
 Both scripts create the job, poll until it is done, download the CSV, keep the 8 lead fields and
 print a short preview. The Python CLI also prints the job's progress while it polls, e.g.
-`keyword 2/3, 41 places, 50%`. The full results go to a file. Each `depth` step loads one more batch of about
+`keyword 2/3, 41 places, 50%`. It also adds the six social columns (`--no-socials` drops them). The full results go to a file. Each `depth` step loads one more batch of about
 20 places, so depth 5 returns up to about 100, near Google's cap of about 120 per search.
 
 **Skip the coordinates.** Pass `--city` and the Python CLI geocodes the city for you:
@@ -222,8 +231,8 @@ The engine ships with the kit, so with Option B install the kit too (step 1) and
 Then ask in plain language:
 > "Make sure the scraper is running, then scrape **dentists in Denver CO**, depth 5, and give me a table of name, phone, website."
 
-The agent checks the engine is up and starts it if not. It then builds the job with the required
-`name`, `keywords`, `lang`, `lat`, `lon` and `max_time`, polls in the background, downloads the CSV and hands you clean rows. It
+The agent checks the engine is up and starts it if not. It then builds the job with `name`,
+`keywords`, `lang`, `max_time` and `lat`/`lon`, polls in the background, downloads the CSV and hands you clean rows. It
 follows the skill's safety rules on every run.
 
 > **MCP is optional.** You can wrap the API as a Model Context Protocol server, but a local,
@@ -280,8 +289,8 @@ curl -X DELETE http://localhost:8080/api/v1/jobs/<job-id>
 | `Permission denied` running `./scripts/scrape.sh` | The file lost its execute bit (a ZIP download does that). Run `bash scripts/scrape.sh …` instead. |
 | `port is already allocated` / something else already uses 8080 | Just updated from kit 1.x and an old container still holds it? Run `docker compose down --remove-orphans`, then `docker compose up -d`, in the kit folder. Otherwise set `SCRAPER_PORT=8081` in `.env`, then start the engine again (`python3 scripts/engine.py restart` or `docker compose up -d`). The engine, Compose and both scripts read the same file, so nothing else needs editing. With Docker the port inside the container stays 8080 (do not change the right-hand side of the mapping). If your `.env` still has a `SCRAPER_BASE_URL` line, delete it or update its port: it overrides `SCRAPER_PORT`. The slash commands and the skill show `localhost:8080` in their examples, so tell Claude the port you picked; its one pre-approved `curl` command, the health check, is pinned to 8080 too, so add `Bash(curl -s http://localhost:8081/api/v1/jobs)` to `.claude/settings.json` if you want it to stop asking. **A second copy of the kit on the same machine** (a fork next to the original, a test clone): change `SCRAPER_PORT` in its `.env`. Without Docker that is all, because each copy keeps its own `.engine/` folder. With Docker, also set `COMPOSE_PROJECT_NAME` to a name nobody else uses (`docker compose ls` lists them), as `.env.example` shows; with the default name, `docker compose up -d` takes over the other copy's container. |
 | `422 missing max time` | Job body needs `max_time` (in **seconds**, e.g. `300`). |
-| `422 missing geo coordinates` | Job body needs `lat` and `lon` as **strings**, e.g. `"30.2672"`. |
-| `422 missing name` / `422 missing lang` | Job body needs `name` (any label) and `lang` (`"en"`). All six required fields: `name`, `keywords`, `lang`, `lat`, `lon`, `max_time`. |
+| `422 missing geo coordinates` | Only one of `lat` and `lon` was sent. Send both, as **strings** (e.g. `"30.2672"`), or neither. With neither, Google places the search by the place named in the keyword ("coffee shops in Austin TX"). |
+| `422 missing name` / `422 missing lang` | Job body needs `name` (any label) and `lang` (`"en"`). Four fields are required: `name`, `keywords`, `lang`, `max_time`. Send `lat` and `lon` together or not at all; both are recommended because they centre the map precisely. |
 | `422 invalid proxy: Chrome cannot log in to a SOCKS5 proxy` | Chrome takes no username and password on SOCKS5. Use the provider's `http://user:pass@host:port` address (URL-encode special characters), or a SOCKS5 proxy that allows your IP address. |
 | A job `failed` | Its `Error` says why: the web UI shows it under the job name, and `curl http://localhost:8080/api/v1/jobs/<id>` returns it. `scripts/scrape.py` prints it, and retries once after 60 s unless a retry cannot help. `Chrome cannot start … error while loading shared libraries`: run the `apt-get install` line in the message. `No Chrome, Chromium, Edge or Brave found`: run `python3 scripts/engine.py start`, which downloads one. `unusual-traffic page`: Google is rate-limiting your IP. The engine already waited and retried the keyword (`Waited and retried N time(s)`) and kept the rows found before that; wait, or add proxies. An error with `ERR_PROXY`, `ERR_SOCKS` or `ERR_TUNNEL`: the proxy is wrong or down. `proxy login refused: the proxy answered 407 to its username and password`: the proxy's username or password is wrong; `scripts/scrape.py` does not retry it. `the engine stopped while this job ran`: the engine crashed or was killed during this job more than 3 times; the rows it found are kept. |
 | `The engine says: stopped at max_time` | The job ran out of time and kept the rows it had. Raise `--max-time` (seconds, default 600) or lower `--depth`. |

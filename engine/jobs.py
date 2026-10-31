@@ -95,16 +95,12 @@ def validate(body):
     elif not isinstance(country, str) or not LANG.fullmatch(country):
         raise ValueError("invalid country: a 2-letter country code such as us or de")
     lat, lon = body.get("lat"), body.get("lon")
-    if lat in (None, "") or lon in (None, ""):
+    if (lat in (None, "")) != (lon in (None, "")):
         raise ValueError("missing geo coordinates")
-    try:
-        if isinstance(lat, bool) or isinstance(lon, bool):
-            raise ValueError
-        flat, flon = float(lat), float(lon)
-    except (TypeError, ValueError):
-        raise ValueError("invalid geo coordinates") from None
-    if not (math.isfinite(flat) and math.isfinite(flon) and -90 <= flat <= 90 and -180 <= flon <= 180):
-        raise ValueError("invalid geo coordinates")
+    if lat in (None, ""):  # neither, as the old engine allowed: Google places the search by the keyword's words
+        lat = lon = ""
+    else:
+        _coords(lat, lon)
     if body.get("max_time") in (None, 0):
         raise ValueError("missing max time")
     data = {"keywords": [k.strip() for k in kws], "lang": lang.lower(), "country": country.lower(),
@@ -118,6 +114,18 @@ def validate(body):
             "reviews_max": _int(body, "reviews_max", 0, 0, REVIEWS_MAX, "reviews_max"),
             "proxies": _proxies(body.get("proxies"))}
     return name.strip(), data
+
+
+def _coords(lat, lon):
+    """ValueError("invalid geo coordinates") unless lat/lon are a point on Earth."""
+    try:
+        if isinstance(lat, bool) or isinstance(lon, bool):
+            raise ValueError
+        flat, flon = float(lat), float(lon)
+    except (TypeError, ValueError):
+        raise ValueError("invalid geo coordinates") from None
+    if not (math.isfinite(flat) and math.isfinite(flon) and -90 <= flat <= 90 and -180 <= flon <= 180):
+        raise ValueError("invalid geo coordinates")
 
 
 def _proxies(v):
@@ -586,7 +594,7 @@ class Worker(threading.Thread):
                     break
                 cur.update(i=i, kw=kws[i])
                 proxy = pick(i)
-                url = maps.search_url(kws[i], d["lat"], d["lon"], d["zoom"], d["lang"], d.get("country", ""))
+                url = maps.search_url(kws[i], d["lat"] or None, d["lon"] or None, d["zoom"], d["lang"], d.get("country", ""))
                 t0 = time.monotonic()
                 try:
                     places, reason, stats = self._collect(proxy, url, d["depth"], left, stop, on_batch)

@@ -857,9 +857,10 @@ def main():
     ap.add_argument("--json", action="store_true", help="write JSON instead of the default CSV")
     ap.add_argument("--full", action="store_true", help="keep ALL raw columns (default: lean lead fields)")
     ap.add_argument("--fields", help="comma-separated columns to keep (overrides the default lead set)")
-    ap.add_argument("--socials", action="store_true",
-                    help="also find Instagram, Facebook, LinkedIn, TikTok, YouTube and X links on each website "
-                         "(0 LLM tokens; slower)")
+    ap.add_argument("--no-socials", dest="socials", action="store_false", default=True,
+                    help="skip the social profiles (Instagram, Facebook, LinkedIn, TikTok, YouTube and X links on "
+                         "each website), which are on by default and cost 0 LLM tokens")
+    ap.add_argument("--socials", dest="socials", action="store_true", help=argparse.SUPPRESS)  # the old opt-in
     ap.add_argument("--tech", action="store_true",
                     help="also detect Meta Pixel, Google Ads tag, analytics, Bing, LinkedIn and TikTok "
                          "pixels, site platform and mobile support on each website, and sort by an "

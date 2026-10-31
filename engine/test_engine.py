@@ -144,7 +144,9 @@ class Validate(unittest.TestCase):
         self.assertEqual(self.err(name="x", keywords=["a"]), "missing lang")
         self.assertEqual(self.err(name="x", keywords=["a"], lang="eng"), "invalid lang")
         self.assertEqual(self.err(name="x", keywords=["a"], lang="en\n"), "invalid lang")
-        self.assertEqual(self.err(name="x", keywords=["a"], lang="en"), "missing geo coordinates")
+        self.assertEqual(self.err(name="x", keywords=["a"], lang="en", lat="1"), "missing geo coordinates")
+        self.assertEqual(self.err(name="x", keywords=["a"], lang="en", lon="2"), "missing geo coordinates")
+        self.assertEqual(self.err(name="x", keywords=["a"], lang="en"), "missing max time")  # neither: allowed
         self.assertEqual(self.err(name="x", keywords=["a"], lang="en", lat="1", lon="2"), "missing max time")
 
     def test_bad_values(self):
@@ -493,7 +495,7 @@ class Api(Server):
         self.assertNotRegex(body.decode(), r"\{[a-z_]+\}")  # every placeholder filled
         code, body, _ = self.call("GET", "/api/openapi.json")
         self.assertEqual(json.loads(body)["paths"]["/api/v1/jobs"]["post"]["requestBody"]["content"]["application/json"]
-                         ["schema"]["required"], ["name", "keywords", "lang", "lat", "lon", "max_time"])
+                         ["schema"]["required"], ["name", "keywords", "lang", "max_time"])
 
 
 class ApiKey(Server):
@@ -1020,6 +1022,17 @@ def batch_details():
     return e
 
 
+class NoCoordinates(Fakes):
+    def test_a_job_without_coordinates_searches_by_its_words(self):
+        RESULTS["cafes in Austin"] = ([place(1)], "end-of-list")
+        urls = []
+        maps.collect = lambda page, url, **kw: urls.append(url) or fake_collect(page, url, **kw)
+        jid, job = self.run_one(lat="", lon="")
+        self.assertEqual((job["Status"], len(self.rows(jid))), ("ok", 1))
+        self.assertEqual(urls, ["https://www.google.com/maps/search/cafes%20in%20Austin?hl=en"])
+        self.assertEqual((job["Data"]["lat"], job["Data"]["lon"]), ("", ""))
+
+
 class BatchDetails(Fakes):
     def test_old_engine_columns_from_the_batch(self):
         out = details.parse_entity(batch_details())
@@ -1213,10 +1226,20 @@ class ApiP3(Server):
         self.assertIn("<code>reviews_max</code>", page)
         spec = json.loads(self.call("GET", "/api/openapi.json")[1])
         self.assertEqual(spec["paths"]["/api/v1/jobs"]["post"]["requestBody"]["content"]["application/json"]
-                         ["schema"]["required"], ["name", "keywords", "lang", "lat", "lon", "max_time"])
+                         ["schema"]["required"], ["name", "keywords", "lang", "max_time"])
         ui = self.call("GET", "/")[1].decode()
         self.assertIn('id="country"', ui)
         self.assertIn('list="kwlist"', ui)
+        front = ui.split("<details>")[0]  # what a beginner sees before opening a section
+        self.assertIn('<input type="checkbox" id="email" checked>', front)
+        self.assertIn('<input type="checkbox" id="socials" checked>', front)  # socials on by default
+        for el in ('id="coords"', 'id="depth"', 'id="lang"', 'id="max_time"', 'id="proxies"', 'id="reviews"'):
+            self.assertNotIn(el, front)
+            self.assertIn(el, ui)
+        self.assertEqual(ui.count("<details>"), 3)  # location and language, advanced options, proxies
+        self.assertNotIn("lobstr.io</a>", ui)
+        self.assertIn("socials: $('socials').checked", ui)
+        self.assertIn("if (proxies.length) body.proxies = proxies", ui)
         self.assertIn(serve.CATEGORIES, ui)  # loaded by the browser from GitHub, pinned to a commit
         self.assertRegex(serve.CATEGORIES, r"/[0-9a-f]{40}/")
         script = re.search(r"<script nonce=[^>]+>(.*)</script>", ui, re.S).group(1)
