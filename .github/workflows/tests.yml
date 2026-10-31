@@ -15,11 +15,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # test_update.sh needs the full history
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: python scripts/test_scrape.py
       - run: bash -n scripts/scrape.sh
+      - run: bash scripts/test_update.sh
+        shell: bash
       - run: python -c "import json; json.load(open('.claude/settings.json'))"
   fresh-install:
     runs-on: ubuntu-latest

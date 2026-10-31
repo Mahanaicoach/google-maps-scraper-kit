@@ -337,7 +337,8 @@ google-maps-scraper-kit/
 │   ├── scrape.py           Python CLI: single, batch, geocoding, socials, CSV
 │   ├── scrape.sh           bash CLI: single query
 │   ├── update.sh           one-command update of a clone or fork
-│   └── test_scrape.py      offline tests, no network: python3 scripts/test_scrape.py
+│   ├── test_scrape.py      offline tests, no network: python3 scripts/test_scrape.py
+│   └── test_update.sh      checks update.sh, no network: bash scripts/test_update.sh
 ├── docs/                   guides and recipes
 ├── examples/               sample job body and batch keyword list
 ├── .claude/
