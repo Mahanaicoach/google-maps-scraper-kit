@@ -193,7 +193,7 @@ def place_key(p):
 
 # What Excel or Sheets would run as a formula (a phone number is not), also behind quotes the guard
 # added, so "'=x" scraped as is gets one more and unguarding stays exact. scripts/scrape.py has the same.
-FORMULA = re.compile(r"'*(?:[=@\t\r]|[+-](?![\d\s().-]*$))")
+FORMULA = re.compile(r"'*(?:[=@\t\r]|[+-](?![\d\s().-]*(?:(?i:ext\.?|x)\s*\d+)?$))")  # "+1 … ext. 12" is a phone too
 
 
 def csv_safe(v):
@@ -461,7 +461,9 @@ def public(job):
         stage = "done"
     return dict(job, Data=dict(d, proxies=[mask(x) for x in d.get("proxies") or []]),
                 Progress={"keywords_done": p.get("done", 0), "keywords_total": total, "places": p.get("places", 0),
-                          "percent": 100 if job["Status"] == "ok" else p.get("percent", 0), "stage": stage})
+                          "percent": 100 if job["Status"] == "ok" else p.get("percent", 0), "stage": stage,
+                          **({"reviews_done": p.get("reviews_done", 0), "reviews_total": p["reviews_total"]}
+                             if p.get("reviews_total") else {})})
 
 
 # ── Worker ──
@@ -787,11 +789,11 @@ class Worker(threading.Thread):
                         notes.append(f"reviews read for {k} of {len(todo)} places: Google's unusual-traffic page")
                     break
                 got = details.parse_place(body or "", d["reviews_max"])
-                for k, v in got.items():
-                    if k in ("user_reviews", "reviews_per_rating") or not r.get(k):
-                        r[k] = str(v)
+                for key, v in got.items():
+                    if key in ("user_reviews", "reviews_per_rating") or not r.get(key):
+                        r[key] = str(v)
                 n += "user_reviews" in got
-                save()  # elapsed time, for a resume after a crash
+                save(reviews_done=k + 1, reviews_total=len(todo))  # progress, and elapsed time for a resume
         except (CDPError, OSError) as e:  # Chrome or the proxy went away: the reviews so far are kept
             if notes is not None:
                 notes.append(f"the reviews pass stopped early: {e}")
@@ -823,6 +825,11 @@ SKIP_HANDLE = {"", "home", "pages", "people", "help", "about", "policies", "poli
                "settings", "sharer", "tr", "profile.php", "plugins", "dialog", "intent", "login", "share.php",
                "permalink.php", "p", "reel", "reels", "explore", "stories", "tv", "watch", "events", "groups",
                "marketplace", "gaming", "photo", "hashtag", "search", "share", "i"}
+# Website builders and booking or delivery platforms link their own profiles from the sites they host:
+# those are not the business's. Kept the same in engine/jobs.py and scripts/scrape.py (a test checks).
+SKIP_HANDLE |= {"squarespace", "wix", "wixsite", "shopify", "wordpress", "wordpressdotcom", "godaddy", "weebly",
+                "webflow", "hubspot", "mailchimp", "yelp", "tripadvisor", "opentable", "doordash", "ubereats", "grubhub",
+                "toasttab", "squareup"}
 DOH = "https://dns.google/resolve?"  # Google's public DNS over HTTPS: no key, no account
 
 

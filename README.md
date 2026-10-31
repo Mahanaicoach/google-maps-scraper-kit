@@ -34,29 +34,7 @@ drive it for you in plain English.
 | Compare it with Apify, Outscraper and chat AIs | [How it compares](#how-it-compares) |
 | Follow a worked recipe for dentists, roofers or restaurants | [Guides and recipes](docs/README.md) |
 
-## Sponsored by
-
-<sub>Paid placements: these companies pay to appear here, and their links carry referral tracking.</sub>
-
-### [Swiftproxy](https://www.swiftproxy.net/?ref=googlemapsscraperkit) - Residential proxies for Google Maps scraping
-
-<a href="https://www.swiftproxy.net/?ref=googlemapsscraperkit"><img src="assets/sponsors/swiftproxy.webp" alt="Swiftproxy: outreach-ready residential IPs for Google Maps lead generation" width="600"></a>
-
-90M+ residential IPs across 220+ locations, rotating or static, over HTTP(S) and SOCKS5, so big
-Google Maps and multi-city jobs keep running. Use code `PROXY90` for 10% off.
-[**Try Swiftproxy →**](https://www.swiftproxy.net/?ref=googlemapsscraperkit)
-
----
-
-### [SerpApi](https://serpapi.com/maps-scraper-kit-github) - Google Maps API in JSON and Markdown
-
-<a href="https://serpapi.com/maps-scraper-kit-github"><img src="assets/sponsors/serpapi.png" alt="SerpApi: complete Maps API, available in JSON and Markdown" width="600"></a>
-
-Access Google Maps listings, reviews, directions, and other public search data with SerpApi's Google
-Maps API, delivered as clean, structured JSON and Markdown.
-[**Try SerpApi →**](https://serpapi.com/maps-scraper-kit-github)
-
-<p align="center"><sub><a href="https://github.com/sponsors/Mahanaicoach">Become a sponsor</a> · Sponsors also appear in the sponsor box of every installed copy's web UI, read from <a href="assets/sponsors/sponsors.json">assets/sponsors/sponsors.json</a>.</sub></p>
+<sub>Sponsored by [Swiftproxy](https://www.swiftproxy.net/?ref=googlemapsscraperkit) and [SerpApi](https://serpapi.com/maps-scraper-kit-github). Paid placements; details [below](#sponsored-by).</sub>
 
 ---
 
@@ -76,12 +54,16 @@ python3 scripts/engine.py start
 python3 scripts/scrape.py "coffee shops in Austin TX" 30.2672 -97.7431 --depth 2
 ```
 
+**Port 8080 taken?** Run `cp .env.example .env`, set `SCRAPER_PORT=8081` (any free port) in it, and start again.
+Then use that port wherever these docs say 8080.
+
 On Windows, type `py` in place of `python3`. Stop the engine with `python3 scripts/engine.py stop`.
 
 **Prefer Docker?** Replace the third line with `docker compose up -d`, with
-[Docker Desktop](https://www.docker.com/products/docker-desktop) installed and open. The first run
-builds the engine image, about a minute. It is the same engine on the same port, so every other
-command stays the same.
+[Docker Desktop](https://www.docker.com/products/docker-desktop) installed and open. If the native
+engine is running, stop it first (`python3 scripts/engine.py stop`). The two keep separate job lists,
+so jobs started in one do not show in the other. The first run builds the engine image, about a
+minute. It is the same engine on the same port, so every other command stays the same.
 
 Prefer clicking? http://localhost:8080 has a form; it returns the engine's raw CSV or JSON.
 Already running another copy of the kit on this machine? Set `SCRAPER_PORT` in `.env` first
@@ -116,10 +98,36 @@ The social columns `instagram`, `facebook`, `linkedin`, `tiktok`, `youtube` and 
 lead fields by default. `--no-socials` drops them. `--tech` adds
 `fb_pixel`, `google_ads_tag`, `analytics`, `bing_ads`, `linkedin_insight`, `tiktok_pixel`, `cms`,
 `mobile_friendly` and `intent_score`, and sorts the hottest leads first. `--verify-emails` adds
-`email_host`. `--full` keeps every raw column, including coordinates, place IDs, all categories, price
-range and whether the place is open now.
+`email_host`. `--full` keeps every raw column, including coordinates, place IDs, all categories, the
+week's opening hours and whether the place is open now.
 
 Full walkthrough, platform notes and troubleshooting: [SETUP.md](SETUP.md).
+
+---
+
+## Sponsored by
+
+<sub>Paid placements: these companies pay to appear here, and their links carry referral tracking.</sub>
+
+### [Swiftproxy](https://www.swiftproxy.net/?ref=googlemapsscraperkit) - Residential proxies for Google Maps scraping
+
+<a href="https://www.swiftproxy.net/?ref=googlemapsscraperkit"><img src="assets/sponsors/swiftproxy.webp" alt="Swiftproxy: outreach-ready residential IPs for Google Maps lead generation" width="600"></a>
+
+90M+ residential IPs across 220+ locations, rotating or static, over HTTP(S) and SOCKS5, so big
+Google Maps and multi-city jobs keep running. Use code `PROXY90` for 10% off.
+[**Try Swiftproxy →**](https://www.swiftproxy.net/?ref=googlemapsscraperkit)
+
+---
+
+### [SerpApi](https://serpapi.com/maps-scraper-kit-github) - Google Maps API in JSON and Markdown
+
+<a href="https://serpapi.com/maps-scraper-kit-github"><img src="assets/sponsors/serpapi.png" alt="SerpApi: complete Maps API, available in JSON and Markdown" width="600"></a>
+
+Access Google Maps listings, reviews, directions, and other public search data with SerpApi's Google
+Maps API, delivered as clean, structured JSON and Markdown.
+[**Try SerpApi →**](https://serpapi.com/maps-scraper-kit-github)
+
+<p align="center"><sub><a href="https://github.com/sponsors/Mahanaicoach">Become a sponsor</a> · Sponsors also appear in the sponsor box of every installed copy's web UI, read from <a href="assets/sponsors/sponsors.json">assets/sponsors/sponsors.json</a>.</sub></p>
 
 ---
 
@@ -221,14 +229,23 @@ One keyword per line. One job. One CSV.
   Your Google account is not affected. See [Responsible use](#responsible-use).
 - **The web UI is a simple form for beginners.** Up front are "What to search" (one keyword per line,
   with the city named in each), an optional business-type box, and two options that are on by
-  default: "Emails" and "Social profiles", under "Collect". Three collapsed sections hold the rest: "Location
+  default: "Emails" and "Social profiles", under "Collect". Pick a business type and the page adds
+  `<Type> in ` to "What to search" (for example `Bakery in `) and puts the cursor there, so you type
+  the city. Enter in the business-type box adds the line and never starts a search. A search line
+  with no place (no " in ", " near " or comma) and no map centre gets a warning first; a second press
+  of "Start anyway" runs it. Three collapsed sections hold the rest: "Location
   and language", "Advanced options" and "Proxies". The job list shows each job's status with a
-  progress bar, and CSV, JSON and Delete buttons. It downloads the raw CSV or JSON, and its email and
+  progress bar (a review stage reads "reading reviews 7 of 20"), its times in your local time, and
+  CSV, JSON and Delete buttons. Downloads are named after the search, for example
+  `bakery-in-portland-or-c063a815.csv`. It downloads the raw CSV or JSON, and its email and
   social options read homepages only, so the scripts find more emails and return the clean lead
   fields. The page loads
   two static files from GitHub (`raw.githubusercontent.com`), with no tracking: the sponsor box's
   `assets/sponsors/sponsors.json` from this repo (cached for a day), and the business category list
   behind its "Add a business type" box (cached for 30 days). Scraped data stays on your machine.
+- **Service-area businesses often have no address.** Plumbers, cleaners and other mobile services
+  often hide their street address on Google, so `address` is empty for them. The city and the phone
+  usually remain.
 - **No SOCKS5 login.** Chrome cannot log in to a SOCKS5 proxy, so the engine refuses a SOCKS5 proxy
   with a username and password (422). Use the provider's `http://user:pass@host:port` address, or a
   SOCKS5 proxy that allows your IP address.

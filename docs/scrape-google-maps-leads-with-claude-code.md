@@ -38,7 +38,7 @@ Or use a slash command in Claude Code:
 
 ## What the agent does
 
-1. Runs a health check on the engine at `localhost:8080`, and starts it with `python3 scripts/engine.py start` (or `docker compose up -d` if you run Docker) if it is down.
+1. Runs `python3 scripts/engine.py status`, which prints the engine's URL (`localhost:8080` unless you changed `SCRAPER_PORT`) only when the kit's own engine answers, and starts it with `python3 scripts/engine.py start` (or `docker compose up -d` if you run Docker) if it is down.
 2. Builds the job with the required `max_time`, plus `lat` and `lon` to centre the map (they are optional: with neither, Google places the search by the city in the keyword), with emails and social profiles on by default. It skips the social profiles only if you say you do not want them.
 3. Polls the job in the background until it finishes.
 4. Downloads the CSV.

@@ -168,8 +168,10 @@ def trim_log():
 
 def busy(port):
     hint = f"netstat -ano | findstr :{port}" if os.name == "nt" else f"lsof -nP -iTCP:{port} -sTCP:LISTEN"
-    sys.exit(f"✗ Port {port} is in use. Is the kit's older Docker engine running? Stop it with `docker compose stop`,\n"
-             f"  or set SCRAPER_PORT in .env to a free port. To see what holds it: {hint}")
+    sys.exit(f"✗ Port {port} is in use. Is the kit's Docker engine or an older copy running? Stop it with\n"
+             f"  `docker compose stop`. Or use another port: `cp .env.example .env` (if there is no .env yet), set\n"
+             f"  SCRAPER_PORT=8081 in .env, start again, and use that port wherever the docs say 8080.\n"
+             f"  To see what holds {port}: {hint}")
 
 
 def chrome(download):

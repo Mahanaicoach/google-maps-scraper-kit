@@ -92,14 +92,19 @@ The first run builds the engine image from the `Dockerfile`: Python plus Debian'
 300 MB to download and 1.2 GB on disk, about a minute. Later starts take seconds, and the engine
 restarts with Docker. Check it with `docker compose ps`.
 
+Switching from A? Stop the native engine first (`python3 scripts/engine.py stop`). The two keep
+separate job lists, so jobs started in one do not show in the other.
+
 **Then check it**, either way:
 
 ```bash
 curl http://localhost:8080/api/v1/jobs  # should print null (no jobs yet) or a JSON list of jobs
 ```
 
-If `curl` prints `null` or a JSON list, the engine is live. It also serves a web UI and API docs in the
-browser:
+If `curl` prints `null` or a JSON list, the engine is live. `curl` trusts any program on that port, so
+to be sure it is the kit's engine, run `python3 scripts/engine.py status`: it prints
+`✓ Running on http://localhost:<port>` only when the kit's own engine answers. The engine also serves a
+web UI and API docs in the browser:
 - Web UI: **http://localhost:8080**
 - API docs: **http://localhost:8080/api/docs** (a plain page; the OpenAPI JSON is at
   http://localhost:8080/api/openapi.json). Neither needs the API key.
@@ -107,18 +112,23 @@ browser:
 The page has a form. Up front is "What to search": one keyword per line, with the city named in each
 ("coffee shops in Austin TX"). Below it are an optional "Add a business type" box and two checkboxes
 that are on by default, "Emails" and "Social profiles", under "Collect". Both read each business's homepage.
-Three collapsed sections hold the rest:
+Pick a business type and the page adds `<Type> in ` to "What to search" (for example `Bakery in `) and
+puts the cursor there, so you type the city. Pressing Enter in the business type box adds the line and
+never starts a search. A search line with no place (no " in ", " near " or comma) and no map centre
+gets a warning first; a second press of "Start anyway" runs it. Three collapsed sections hold the rest:
 - **Location and language:** an optional map centre pasted as `30.2672, -97.7431`, zoom, language and
   country.
 - **Advanced options:** depth, time limit, reviews per place (0 to 5) and an MX check of email domains.
 - **Proxies:** one per line. `http://` and `https://` work with or without `user:pass`; `socks5://`
   works without a login.
 
-The job list shows each job's status with a progress bar, and CSV, JSON and Delete buttons. A job's
-error, if any, shows under its name. The business type box suggests Google's business category names
-(4,053, US English); pick one and it is added as a keyword line. Your browser loads that list from
-GitHub and keeps it for 30 days. The page downloads the engine's raw rows, the rows so far while a
-job works. The scripts give you the cleaned 8 lead fields and find more emails.
+The job list shows each job's status with a progress bar, and CSV, JSON and Delete buttons. Job times
+show in your local time, and a review stage reads "reading reviews 7 of 20". A job's error, if any,
+shows under its name. The business type box suggests Google's business category names (4,053, US
+English). Your browser loads that list from GitHub and keeps it for 30 days. The page downloads the
+engine's raw rows, the rows so far while a job works, in a file named after the search (for example
+`bakery-in-portland-or-c063a815.csv`). The scripts give you the cleaned 8 lead fields and find more
+emails.
 
 > **Rate limits and the law.** The engine sends real requests to Google Maps. Light use is fine. Big
 > jobs back to back, high `depth`, many keywords or scheduled runs without proxies can get your IP
@@ -166,7 +176,8 @@ python3 scripts/scrape.py "plumbers in Phoenix AZ" --city "Phoenix, AZ" --grid 3
 
 **Scraping another country?** `--lang` sets the interface language (category names, hours text),
 and `--country` the 2-letter country Google ranks and formats results for (default: the country of
-your IP address): `--lang de --country de`.
+your IP address): `--lang de --country de`. Phones come as Google shows them in that market:
+international `+1 …` in the US, national `030 …` in Germany.
 
 ### Review counts, hours and reviews
 
@@ -262,14 +273,20 @@ Without Docker:
 python3 scripts/engine.py stop   # jobs and results stay in .engine/data
 ```
 To remove everything the engine kept (jobs, results, its log and a downloaded Chrome), stop it and
-delete the `.engine` folder.
+delete the `.engine` folder. To uninstall the native engine completely, run
+`python3 scripts/engine.py stop`, then delete the kit folder. Its jobs live in `.engine/` inside it,
+and so does a downloaded Chrome for Testing.
 
 With Docker:
 ```bash
 docker compose stop      # pause (keeps data + image)
 docker compose down      # stop + remove container (keeps the data volume)
 docker compose down -v   # ALSO delete the jobs and results volume (full reset)
+docker compose down -v --rmi local   # full uninstall: also delete the ~1.2 GB engine image
 ```
+
+`down -v` leaves the engine image on disk. For a full uninstall run `docker compose down -v --rmi local`,
+then delete the kit folder.
 
 Results pile up. Delete old jobs with the web UI's Delete button (it asks you to confirm), or:
 ```bash
@@ -283,11 +300,11 @@ curl -X DELETE http://localhost:8080/api/v1/jobs/<job-id>
 | Symptom | Fix |
 |---|---|
 | `curl: connection refused` on :8080, or `Scraper not reachable` | The engine is not running. `python3 scripts/engine.py start` (or `docker compose up -d`), then `python3 scripts/engine.py status`. |
-| `✗ Port 8080 is in use` from `engine.py start` | Something else holds the port, often kit 1.x's Docker engine. Stop it (`docker compose stop` in that copy's folder), or set `SCRAPER_PORT=8081` in `.env` and start again. |
+| `✗ Port 8080 is in use` from `engine.py start` | Something else holds the port, often kit 1.x's Docker engine. Stop it (`docker compose stop` in that copy's folder), or run `cp .env.example .env` (skip it if you already have a `.env`), set `SCRAPER_PORT=8081` in it and start again. |
 | `Cannot connect to the Docker daemon` / `docker: command not found` | Docker Desktop is not running (or not installed). Open Docker Desktop, wait until its whale icon stops animating, then run `docker compose up -d` again. Or use the engine without Docker (§2 A). |
 | `Empty reply from server` or `Connection reset` right after `docker compose up -d` | The engine is still starting, a few seconds. The scripts wait for it; in the browser, reload the page. |
 | `Permission denied` running `./scripts/scrape.sh` | The file lost its execute bit (a ZIP download does that). Run `bash scripts/scrape.sh …` instead. |
-| `port is already allocated` / something else already uses 8080 | Just updated from kit 1.x and an old container still holds it? Run `docker compose down --remove-orphans`, then `docker compose up -d`, in the kit folder. Otherwise set `SCRAPER_PORT=8081` in `.env`, then start the engine again (`python3 scripts/engine.py restart` or `docker compose up -d`). The engine, Compose and both scripts read the same file, so nothing else needs editing. With Docker the port inside the container stays 8080 (do not change the right-hand side of the mapping). If your `.env` still has a `SCRAPER_BASE_URL` line, delete it or update its port: it overrides `SCRAPER_PORT`. The slash commands and the skill show `localhost:8080` in their examples, so tell Claude the port you picked; its one pre-approved `curl` command, the health check, is pinned to 8080 too, so add `Bash(curl -s http://localhost:8081/api/v1/jobs)` to `.claude/settings.json` if you want it to stop asking. **A second copy of the kit on the same machine** (a fork next to the original, a test clone): change `SCRAPER_PORT` in its `.env`. Without Docker that is all, because each copy keeps its own `.engine/` folder. With Docker, also set `COMPOSE_PROJECT_NAME` to a name nobody else uses (`docker compose ls` lists them), as `.env.example` shows; with the default name, `docker compose up -d` takes over the other copy's container. |
+| `port is already allocated`, or Docker Desktop's `ports are not available: ... address already in use`, or something else already uses 8080 | Just updated from kit 1.x and an old container still holds it? Run `docker compose down --remove-orphans`, then `docker compose up -d`, in the kit folder. Otherwise run `cp .env.example .env` (skip it if you already have a `.env`), set `SCRAPER_PORT=8081` in it, then start the engine again (`python3 scripts/engine.py restart` or `docker compose up -d`). The engine, Compose and both scripts read the same file, so nothing else needs editing. With Docker the port inside the container stays 8080 (do not change the right-hand side of the mapping). If your `.env` still has a `SCRAPER_BASE_URL` line, delete it or update its port: it overrides `SCRAPER_PORT`. The slash commands and the skill show `localhost:8080` in their examples. Claude first runs `python3 scripts/engine.py status`, which reads the port from `.env`, is pre-approved on any port and prints the URL to use. Only the one pre-approved `curl` health check (for a skill installed without `scripts/`) is pinned to 8080; add `Bash(curl -s http://localhost:8081/api/v1/jobs)` to `.claude/settings.json` if you rely on it. **A second copy of the kit on the same machine** (a fork next to the original, a test clone): change `SCRAPER_PORT` in its `.env`. Without Docker that is all, because each copy keeps its own `.engine/` folder. With Docker, also set `COMPOSE_PROJECT_NAME` to a name nobody else uses (`docker compose ls` lists them), as `.env.example` shows; with the default name, `docker compose up -d` takes over the other copy's container. |
 | `422 missing max time` | Job body needs `max_time` (in **seconds**, e.g. `300`). |
 | `422 missing geo coordinates` | Only one of `lat` and `lon` was sent. Send both, as **strings** (e.g. `"30.2672"`), or neither. With neither, Google places the search by the place named in the keyword ("coffee shops in Austin TX"). |
 | `422 missing name` / `422 missing lang` | Job body needs `name` (any label) and `lang` (`"en"`). Four fields are required: `name`, `keywords`, `lang`, `max_time`. Send `lat` and `lon` together or not at all; both are recommended because they centre the map precisely. |
@@ -329,19 +346,20 @@ What changed inside the columns (their names and order are the same):
 - `user_reviews` and `reviews_per_rating` are filled only on request (`--reviews N`, or `reviews_max`
   in the job body), and a review holds `Rating`, `When` and `Description`: no reviewer name, photo
   or profile link.
-- `about` holds the accessibility group Google sends with each listing. Its other groups (payments,
-  service options) load only on a place's About tab, which the engine does not open, so
+- `about` holds what Google sends with each listing: usually only the accessibility group, and
+  sometimes more (payments, parking). The engine does not open a place's About tab, so
   `credit_cards_accepted` is usually empty.
 - `plus_code` is the 10-digit global code computed from the coordinates (for example `8FVC2222+22`);
   1.x had Google's short code and the town's name. Both point to the same spot.
 - `link` is Google's documented place URL (`https://www.google.com/maps/search/?api=1&query=…&query_place_id=…`)
   instead of a `/maps/place/…` URL.
 - `status` is the open state (`Open · Closes 9 PM`); 1.x often held a short editorial line there.
-- `order_online` lists ordering sites only; table-booking links are in `reservations`, where 1.x
-  sometimes listed them twice.
+- `order_online` holds the listing's order or booking links (for dentists, appointment booking).
+  Table bookings are in `reservations`, where 1.x sometimes listed them twice.
 - `owner` stays empty: it named the Google account behind a listing, often a person.
   `popular_times`, `street_view_url` and `user_reviews_extended` stay empty too; Google sends no
-  popular times to either engine at the moment.
+  popular times to either engine at the moment. So do `price_range` and `menu`: Google's search
+  results carry no price range or menu link at the moment.
 - In the CSV download and the script's CSV file, a cell that a spreadsheet would run as a formula (it
   starts with `=`, `+`, `-`, `@` or a tab and is not a phone number) starts with `'`. `?format=json`
   has the text as scraped, and `scripts/scrape.py` removes the `'` when it reads a CSV back
@@ -360,4 +378,5 @@ The skill holds the full rules. These are the essentials:
   retried through the next one.
 - Never commit result files. They are git-ignored for you.
 - Changed something? `python3 scripts/test_scrape.py` and `python3 engine/test_engine.py` run the
-  offline checks in seconds, with no engine, no network and no Chrome.
+  offline checks, with no engine, no network and no Chrome. `scripts/test_scrape.py` takes seconds and
+  `engine/test_engine.py` about one to two minutes.

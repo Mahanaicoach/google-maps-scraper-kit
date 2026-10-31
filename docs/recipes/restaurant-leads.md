@@ -29,7 +29,7 @@ For a whole city past the ~120 per search cap, add `--grid 3`. It splits the cit
 
 ## Step 3: Add price range for qualification
 
-`--full` keeps all raw columns, including `price_range` and `status` (open or closed now). Weekly opening hours work [headless](../../SETUP.md#review-counts-hours-and-reviews) when Google supplies them:
+Google's search results carry no price range at the moment, so `price_range` comes back empty. Qualify with `status` (open or closed now), `open_hours` and `reservations` (table-booking links) instead. `--full` keeps all raw columns, including these three. Weekly opening hours work [headless](../../SETUP.md#review-counts-hours-and-reviews) when Google supplies them:
 
 ```bash
 python3 scripts/scrape.py "restaurants in Austin TX" --city "Austin, TX" --full
@@ -39,31 +39,32 @@ To keep the file lean, pick your own columns with `--fields`:
 
 ```bash
 python3 scripts/scrape.py "restaurants in Austin TX" --city "Austin, TX" \
-  --fields "title,phone,emails,website,category,price_range,review_rating"
+  --fields "title,phone,emails,website,category,status,open_hours,reservations,review_rating"
 ```
 
 ## Example output
 
 Illustrative rows only:
 
-| title | phone | emails | category | price_range | review_rating |
-|---|---|---|---|---|---|
-| Example Kitchen | +1 512-555-0101 | hello@example.com | Restaurant | $$ | 4.6 |
-| Sample Slice | +1 512-555-0102 | orders@example.org | Pizza restaurant | $ | 4.4 |
-| Demo Coffee House | +1 512-555-0103 |  | Cafe | $ | 4.7 |
+| title | phone | emails | category | status | reservations | review_rating |
+|---|---|---|---|---|---|---|
+| Example Kitchen | +1 512-555-0101 | hello@example.com | Restaurant | Open · Closes 10 PM | example.com/book | 4.6 |
+| Sample Slice | +1 512-555-0102 | orders@example.org | Pizza restaurant | Open · Closes 11 PM |  | 4.4 |
+| Demo Coffee House | +1 512-555-0103 |  | Cafe | Closed · Opens 7 AM |  | 4.7 |
 
 ## Columns that matter for restaurant outreach
 
 - `category`: splits restaurants, cafes and pizza places so you can tailor each message.
-- `price_range`: a quick read on the kind of venue. Needs `--full` or `--fields`.
 - `status`: whether the venue is open right now, so you can time a call. Needs `--full` or `--fields`.
+- `open_hours`: the week's opening hours, when Google supplies them. Needs `--full` or `--fields`.
+- `reservations`: table-booking links. A listing with one takes bookings online. Needs `--full` or `--fields`.
 - `review_rating`: a signal of reputation. `review_count` works [headless](../../SETUP.md#review-counts-hours-and-reviews) and supports `--min-reviews` filtering.
 - `phone`, `emails` and `website`: the contact channels.
 
 ## What to expect
 
 - Emails appear only when a business publishes one on its website. Many venues will have an empty cell.
-- Not every listing has a price range, so that cell can be empty too.
+- `price_range` and `menu` stay empty: Google's search results carry no price range or menu link at the moment. Not every listing has `reservations` either.
 - A grid or many keywords is a large job. Run one job at a time and add proxies for repeated runs.
 - Heavy use without proxies can get your IP temporarily rate-limited by Google for minutes to hours.
 - Phones and emails are personal data, so read [Responsible use](../../README.md#responsible-use) before outreach.

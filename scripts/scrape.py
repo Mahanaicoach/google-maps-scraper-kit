@@ -191,7 +191,7 @@ def dedupe(rows, exclude=()):
 
 # What Excel or Sheets would run as a formula (a phone number is not), also behind quotes the guard
 # added, so "'=x" scraped as is gets one more and unguard() stays exact. engine/jobs.py has the same.
-FORMULA = re.compile(r"'*(?:[=@\t\r]|[+-](?![\d\s().-]*$))")
+FORMULA = re.compile(r"'*(?:[=@\t\r]|[+-](?![\d\s().-]*(?:(?i:ext\.?|x)\s*\d+)?$))")  # "+1 … ext. 12" is a phone too
 
 
 def csv_safe(v):
@@ -290,7 +290,8 @@ def progress_text(job):
     if not isinstance(p, dict) or not p.get("keywords_total"):
         return ""
     total = p["keywords_total"]
-    where = {"reviews": "reading reviews", "websites": "checking websites"}.get(
+    reviews = f"reading reviews {p['reviews_done']}/{p['reviews_total']}" if p.get("reviews_total") else "reading reviews"
+    where = {"reviews": reviews, "websites": "checking websites"}.get(
         p.get("stage"), f"keyword {min(p.get('keywords_done', 0) + 1, total)}/{total}")
     return f", {where}, {p.get('places', 0)} places, {p.get('percent', 0)}%"
 
@@ -416,6 +417,11 @@ _SKIP_HANDLE = {"", "home", "pages", "people", "help", "about", "policies", "pol
                 "plugins", "dialog", "intent", "login", "share.php", "permalink.php",
                 "p", "reel", "reels", "explore", "stories", "tv", "watch", "events",
                 "groups", "marketplace", "gaming", "photo", "hashtag", "search", "share", "i"}
+# Website builders and booking or delivery platforms link their own profiles from the sites they host:
+# those are not the business's. Kept the same in engine/jobs.py and scripts/scrape.py (a test checks).
+_SKIP_HANDLE |= {"squarespace", "wix", "wixsite", "shopify", "wordpress", "wordpressdotcom", "godaddy", "weebly",
+                 "webflow", "hubspot", "mailchimp", "yelp", "tripadvisor", "opentable", "doordash", "ubereats", "grubhub",
+                 "toasttab", "squareup"}
 
 def _is_public_ip(ip):
     try:
@@ -850,7 +856,7 @@ def main():
                          "engine, plus a short grace (default: 600)")
     ap.add_argument("--reviews", type=int, default=0, metavar="N",
                     help="also read up to N reviews per place (1-5, no reviewer names) and its star "
-                         "histogram, from each place's panel: one more page load per place, about 2 s "
+                         "histogram, from each place's panel: one more page load per place, about 2-4 s "
                          "(raise --max-time for many places); adds user_reviews and reviews_per_rating")
     ap.add_argument("--out", default=None, help="output file path (default: results-<id>.csv). "
                     "The extension picks the format: .csv (default) or .json")
@@ -1006,7 +1012,8 @@ def main():
         print(f"⚠ Nothing left: the filters and --exclude dropped all {before} rows. Loosen them and rerun; "
               f"the file below has only a header.")
     else:
-        print(f"✓ Done — {len(rows)} businesses (fields: {', '.join(fields)}).")
+        extra = f", then {', '.join(SOCIAL_FIELDS)}" if a.socials and not a.full else ""  # added after the crawl
+        print(f"✓ Done — {len(rows)} businesses (fields: {', '.join(fields)}{extra}).")
     if skipped:
         print(f"⚠ Incomplete: {skipped} of {ncells} tiles or places failed or stopped early, so parts of the "
               f"area are missing. Rerun later.")

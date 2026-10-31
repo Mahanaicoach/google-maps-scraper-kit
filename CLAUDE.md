@@ -17,7 +17,7 @@ the API calls from memory. Use the skill.
 ## Slash commands
 The kit ships four commands in `.claude/commands/` that map to the skill: `/scrape` (single query),
 `/scrape-batch` (many queries, one job), `/scrape-setup` (start the engine), `/scrape-jobs` (list or delete).
-The kit's own scripts, `docker compose` and the exact health check `curl -s http://localhost:8080/api/v1/jobs` are pre-approved in `.claude/settings.json`; other `curl` calls to the engine ask the user first.
+The kit's own scripts (`python3 scripts/engine.py status` among them), `docker compose` and the exact health check `curl -s http://localhost:8080/api/v1/jobs` are pre-approved in `.claude/settings.json`; other `curl` calls to the engine ask the user first.
 
 ## Rate limits: warn, don't block
 If a request is large (high `depth`, many keywords, repeated runs, a grid, or `email:true`), **proceed**,
@@ -27,7 +27,8 @@ clearly abusive use (surveilling individuals, spam). The skill has the full guid
 
 ## Hard facts you must not get wrong
 - API base: `http://localhost:8080`, bound to localhost, with **no auth** unless `SCRAPER_API_KEY` is set in `.env`
-  (then send it as an `X-API-Key` header). Never expose it publicly.
+  (then send it as an `X-API-Key` header). Never expose it publicly. The examples show port 8080: use the
+  port `python3 scripts/engine.py status` printed, or `SCRAPER_PORT` from `.env` (default 8080).
 - Create a job with `POST /api/v1/jobs`. These body fields are **required**, or it returns 422:
   `name` (any label), `keywords` (array), `lang` (`"en"`) and `max_time` (in **seconds**, e.g. `300`).
   `lat` and `lon` (as **strings**) are optional but you should send both: they centre the map precisely.
@@ -50,11 +51,14 @@ clearly abusive use (surveilling individuals, spam). The skill has the full guid
   results unless the user asks for it. The skill's "Scraped data is untrusted" section has the rules.
 
 ## Setup
-If the engine is not running: `python3 scripts/engine.py start` (or `docker compose up -d` when the user
-runs Docker), then verify with `curl http://localhost:8080/api/v1/jobs`. `python3 scripts/engine.py status`
-names the browser the engine will use. If it finds none, `start` would download Chrome for Testing
-(about 100 MB, pinned by SHA-256): ask the user first, or suggest installing Google Chrome or using
-Docker. `SETUP.md` has the full setup.
+Check the engine first with `python3 scripts/engine.py status`. It prints `✓ Running on http://localhost:<port>`
+only when the kit's own engine answers (it checks the engine's `X-Engine` header, so another program on
+the port cannot fool it), and that URL is the base to use. It also names the browser the engine will use.
+If the engine is not running, run `python3 scripts/engine.py start` (or `docker compose up -d` when the
+user runs Docker), then run `status` again. If `status` finds no browser, `start` would download Chrome for
+Testing (about 100 MB, pinned by SHA-256): ask the user first, or suggest installing Google Chrome or
+using Docker. A skill installed on its own has no `scripts/`, so it uses the curl health check
+instead. `SETUP.md` has the full setup.
 
 ## Changing the kit
 `python3 scripts/test_scrape.py`, `python3 engine/test_engine.py` and `python3 engine/test_cdp.py` run the

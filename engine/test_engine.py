@@ -454,6 +454,8 @@ class Api(Server):
         self.store.append(jid, [jobs.to_row(place(1), "k")], jobs.fields({}))
         code, body, r = self.call("GET", f"/api/v1/jobs/{jid}/download")
         self.assertEqual((code, r.getheader("Content-Type")), (200, "text/csv; charset=utf-8"))
+        self.assertEqual(r.getheader("Content-Disposition"), f'attachment; filename="t-{jid[:8]}.csv"')  # after the search
+        self.assertEqual(serve.file_name({"Name": "Bäckerei in München!"}, "c063a815-x"), "backerei-in-munchen-c063a815")
         self.assertEqual(self.call("GET", f"/download?id={jid}")[1], body)
         self.assertEqual(len(json.loads(self.call("GET", "/api/v1/jobs")[1])), 1)
         self.assertEqual(self.call("DELETE", f"/api/v1/jobs/{jid}")[0], 200)
@@ -1091,6 +1093,8 @@ class BatchDetails(Fakes):
         finally:
             maps.place_panel, details.parse_place = saved
         r = self.rows(jid)[0]
+        self.assertEqual({k: job["Progress"].get(k) for k in ("reviews_done", "reviews_total")},
+                         {"reviews_done": 1, "reviews_total": 1})  # "reading reviews 1 of 1" while it runs
         self.assertEqual((r["about"], r["credit_cards_accepted"], r["complete_address"], r["user_reviews"]),
                          ('[{"id": "accessibility"}]', "Visa", '{"city": "A"}', "[]"))
         body = ")]}'\n" + json.dumps([None] * 6 + [batch_details()])
@@ -1185,6 +1189,8 @@ class Websites(unittest.TestCase):
         self.assertEqual(jobs.SOCIALS, scrape.SOCIAL_FIELDS)
         self.assertEqual(jobs.SKIP_HANDLE, scrape._SKIP_HANDLE)
         self.assertEqual(jobs.FORMULA.pattern, scrape.FORMULA.pattern)  # the download and the file quote alike
+        site = '<a href="https://instagram.com/squarespace">built with</a> <a href="https://instagram.com/realcafe">us</a>'
+        self.assertEqual(jobs.find_socials(site)["instagram"], "https://instagram.com/realcafe")  # not the builder's own
 
 
 class ApiP3(Server):
@@ -1214,7 +1220,8 @@ class ApiP3(Server):
                          '=HYPERLINK("http://x")')
         self.assertEqual(self.store.read_rows(jid)[1]["title"], '=HYPERLINK("http://x")')
         for s, want in (("@SUM(1)", "'@SUM(1)"), ("-2+3", "'-2+3"), ("\tx", "'\tx"), ("+44 20 7946 0958", "+44 20 7946 0958"),
-                        ("Joe's", "Joe's"), ("-", "-"), (None, ""), ("'-x", "''-x"), ("'plain", "'plain")):
+                        ("Joe's", "Joe's"), ("-", "-"), (None, ""), ("'-x", "''-x"), ("'plain", "'plain"),
+                        ("+1 512-555-0100 ext. 12", "+1 512-555-0100 ext. 12"), ("+1 512-555-0100 x12", "+1 512-555-0100 x12")):
             self.assertEqual(jobs.csv_safe(s), want)
         code, body, r = self.call("GET", "/api/docs")
         page, csp = body.decode(), r.getheader("Content-Security-Policy")
@@ -1240,6 +1247,15 @@ class ApiP3(Server):
         self.assertNotIn("lobstr.io</a>", ui)
         self.assertIn("socials: $('socials').checked", ui)
         self.assertIn("if (proxies.length) body.proxies = proxies", ui)
+        # newcomer test: Enter in the type box never submits; a picked type waits for its city; a search
+        # with no place warns once; downloads are named after the search; local times; a favicon
+        self.assertIn("if (ev.key === 'Enter') {{ ev.preventDefault(); pick(); }}".replace("{{", "{").replace("}}", "}"), ui)
+        self.assertIn("v + ' in '", ui)
+        self.assertIn("Start anyway", ui)
+        self.assertIn("a.download = fileName(j) + '.' + fmt", ui)
+        self.assertIn("toLocaleString", ui)
+        self.assertIn('<link rel="icon" href="data:image/svg+xml,', ui)
+        self.assertIn('placeholder="e.g. coffee shops in Austin TX"', ui)
         # as gosom: a star button, and a sponsor box that can be closed; paid sponsors in it only when
         # sponsors.json lists one Mahan marked "ui": true, https links only, four at most
         self.assertIn('Star on GitHub</a>', ui)

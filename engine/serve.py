@@ -15,7 +15,7 @@ Google Maps, for email or socials jobs to the businesses' own websites, and for 
 to Google's public DNS (dns.google), nothing else.
 Standard library only.
 """
-import argparse, csv, hmac, html, io, json, os, re, secrets, signal, socket, socketserver, sys, threading
+import argparse, csv, hmac, html, io, json, os, re, secrets, signal, socket, socketserver, sys, threading, unicodedata
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -49,6 +49,14 @@ JOB_PATH = re.compile(r"^/api/v1/jobs/([0-9a-f-]{36})(/download)?$")
 JOB_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _log_lock = threading.Lock()
 _REPLIED = object()  # body() answered the request itself (a bad body)
+
+
+def file_name(job, jid):
+    """"bakery-in-portland-or-c063a815": the job's search, then the start of its id; the web UI names
+    its downloads the same way (fileName in PAGE)."""
+    s = unicodedata.normalize("NFKD", (job or {}).get("Name") or "")
+    s = "".join(c for c in s if not unicodedata.combining(c)).lower()
+    return (re.sub(r"[^a-z0-9]+", "-", s).strip("-")[:60] or "results") + "-" + jid[:8]
 
 
 def log(msg):
@@ -151,6 +159,7 @@ def docs_page(nonce):
 PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Google Maps Scraper Kit</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 24 24%27%3E%3Cpath fill=%27%230b7a5b%27 d=%27M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7zm0 9.5a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5z%27/%3E%3C/svg%3E">
 <style nonce="{nonce}">
 :root {{ color-scheme: light dark; --paper: #f5f3ee; --sheet: #fffdf8; --ink: #17191c; --soft: #5b5f66; --rule: #dcd8ce;
   --go: #0b7a5b; --go-ink: #fff; --ring: #2f8f73; --bad: #b42318; --tag: #8a5a00; --alt: #3d5a80; --star: #f1c21b; --heart: #ea4aaa;
@@ -273,10 +282,10 @@ progress {{ display: block; width: 100%; max-width: 200px; height: 6px; margin-t
   <div class="search"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/>
     <circle cx="12" cy="9.5" r="2.5"/></svg>
-    <textarea id="keywords" rows="2" required placeholder="coffee shops in Austin TX"></textarea></div>
+    <textarea id="keywords" rows="2" required placeholder="e.g. coffee shops in Austin TX"></textarea></div>
   <p class="hint soft">One search per line. Name the city, as you would in Google Maps.</p>
   <label class="sr" for="kwpick">Add a business type</label>
-  <input id="kwpick" list="kwlist" autocomplete="off" placeholder="+ Add a business type: dentist, roofing contractor…">
+  <input id="kwpick" list="kwlist" autocomplete="off" placeholder="+ Add a business type, e.g. dentist or roofing contractor">
   <datalist id="kwlist"></datalist>
   <fieldset class="collect"><legend>Collect</legend>
     <label class="chip"><input type="checkbox" id="email" checked> Emails</label>
@@ -284,24 +293,24 @@ progress {{ display: block; width: 100%; max-width: 200px; height: 6px; margin-t
   </fieldset>
   <details><summary>Location and language</summary><div class="body">
     <label class="wide" for="coords"><span>Map centre <span class="soft">optional</span></span>
-      <input id="coords" inputmode="decimal" autocomplete="off" placeholder="30.2672, -97.7431">
+      <input id="coords" inputmode="decimal" autocomplete="off" placeholder="e.g. 30.2672, -97.7431">
       <span class="soft">Right-click a spot in Google Maps, click the numbers to copy them, paste here. Left empty,
       Google uses the city in your search.</span></label>
     <label for="zoom">Zoom<input id="zoom" type="number" min="1" max="21" value="15"></label>
     <label for="lang">Language<input id="lang" value="en" maxlength="2" pattern="[A-Za-z]{{2}}"></label>
-    <label for="country"><span>Country <span class="soft">optional</span></span><input id="country" maxlength="2" pattern="[A-Za-z]{{2}}" placeholder="us"></label>
+    <label for="country"><span>Country <span class="soft">optional</span></span><input id="country" maxlength="2" pattern="[A-Za-z]{{2}}" placeholder="e.g. us"></label>
   </div></details>
   <details><summary>Advanced options</summary><div class="body">
     <label for="depth">Depth<input id="depth" type="number" min="1" max="1000" value="5">
       <span class="soft">About 20 places each.</span></label>
     <label for="max_time">Time limit, seconds<input id="max_time" type="number" min="1" max="86400" value="600"></label>
     <label for="reviews">Reviews per place<input id="reviews" type="number" min="0" max="5" value="0">
-      <span class="soft">0 to 5; about 2 s more per place.</span></label>
+      <span class="soft">0 to 5; about 2-4 s more per place.</span></label>
     <label class="chip wide"><input type="checkbox" id="verify"> Check each email's domain (MX record) and drop the ones that do not exist</label>
   </div></details>
   <details><summary>Proxies</summary><div class="body">
     <label class="wide" for="proxies">One per line
-      <textarea id="proxies" rows="3" autocomplete="off" placeholder="http://user:pass@proxy.example.com:8000"></textarea>
+      <textarea id="proxies" rows="3" autocomplete="off" placeholder="e.g. http://user:pass@proxy.example.com:8000"></textarea>
       <span class="soft">http:// or https://, with or without user:pass; socks5:// without a login. Searches take turns,
       and one Google refuses goes through the next. Passwords show as ***.</span></label>
   </div></details>
@@ -309,7 +318,7 @@ progress {{ display: block; width: 100%; max-width: 200px; height: 6px; margin-t
   <label id="keybox" for="key" hidden>API key (SCRAPER_API_KEY)<input id="key" type="password" autocomplete="off"></label>
 </form></section>
 <section aria-labelledby="h-jobs"><h2 id="h-jobs">Jobs</h2>
-<div class="scroll"><table><thead><tr><th>Search</th><th>Created, UTC</th><th>Status</th><th>Results</th></tr></thead>
+<div class="scroll"><table><thead><tr><th>Search</th><th>Created</th><th>Status</th><th>Results</th></tr></thead>
 <tbody id="jobs"></tbody></table></div></section>
 </main>
 <script nonce="{nonce}">
@@ -331,7 +340,12 @@ async function download(j, fmt) {{
   const r = await api('GET', '/api/v1/jobs/' + j.ID + '/download' + (fmt === 'json' ? '?format=json' : ''));
   if (!r.ok) return say('No results yet for this job.', 'bad');
   const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob());
-  a.download = 'results-' + j.ID.slice(0, 8) + '.' + fmt; document.body.appendChild(a); a.click(); a.remove();
+  a.download = fileName(j) + '.' + fmt; document.body.appendChild(a); a.click(); a.remove();
+}}
+function fileName(j) {{  // "bakery-in-portland-or-c063a815": after the search, plus the job id's start
+  const s = (j.Name || '').normalize('NFKD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+  return (s || 'results') + '-' + j.ID.slice(0, 8);
 }}
 const LABEL = {{pending: 'waiting', working: 'working', ok: 'done', failed: 'failed'}};
 function progress(j) {{
@@ -339,7 +353,8 @@ function progress(j) {{
   if (j.Status === 'pending') return p.keywords_done ? name + ' (resumes at keyword ' + (p.keywords_done + 1) + ')' : name;
   if (j.Status !== 'working') return name + (p.places ? ' · ' + p.places + ' places' : '');
   const stage = {{search: 'keyword ' + Math.min(p.keywords_done + 1, p.keywords_total) + ' of ' + p.keywords_total,
-    reviews: 'reading reviews', websites: 'checking websites'}}[p.stage] || p.stage || '';
+    reviews: 'reading reviews' + (p.reviews_total ? ' ' + p.reviews_done + ' of ' + p.reviews_total : ''),
+    websites: 'checking websites'}}[p.stage] || p.stage || '';
   return name + ' · ' + stage + ' · ' + (p.places || 0) + ' places';
 }}
 async function remove(j) {{
@@ -353,7 +368,8 @@ async function load() {{
     for (const j of list) {{
       const tr = document.createElement('tr');
       const name = cell(tr, j.Name); if (j.Error) {{ const s = document.createElement('div'); s.className = 'note'; s.textContent = j.Error; name.appendChild(s); }}
-      cell(tr, j.Date.replace('T', ' ').replace('+00:00', '').slice(0, 16), 'when');
+      const when = new Date(j.Date);  // shown in this computer's time zone
+      cell(tr, isNaN(when) ? j.Date : when.toLocaleString([], {{dateStyle: 'medium', timeStyle: 'short'}}), 'when');
       const st = cell(tr, ''), s = document.createElement('div');
       const [word, ...more] = progress(j).split(' · ');
       s.className = 'state ' + j.Status; s.textContent = word; st.appendChild(s);
@@ -383,7 +399,13 @@ $('f').addEventListener('submit', async ev => {{
     email: $('email').checked, socials: $('socials').checked, verify_emails: $('verify').checked,
     reviews_max: +$('reviews').value || 0}};
   if (proxies.length) body.proxies = proxies;
-  const go = $('go'); go.disabled = true; go.textContent = 'Starting…';
+  const go = $('go'), bare = m ? [] : keywords.filter(k => !/\\b(in|near)\\s+\\S|,/i.test(k));
+  if (bare.length && go.dataset.anyway !== '1') {{  // Google would search around this computer's location
+    go.dataset.anyway = '1'; go.textContent = 'Start anyway';
+    return say('No city in: ' + bare.slice(0, 3).map(k => '"' + k + '"').join(', ') + (bare.length > 3 ? '…' : '')
+      + '. Google would search near this computer. Add a city (dentist in Denver CO), set a map centre, or press Start anyway.', 'bad');
+  }}
+  delete go.dataset.anyway; go.disabled = true; go.textContent = 'Starting…';
   try {{
     const r = await api('POST', '/api/v1/jobs', body), d = await r.json();
     if (r.ok) say('Started. It runs in the background, and the list below updates by itself.', 'ok');
@@ -393,10 +415,16 @@ $('f').addEventListener('submit', async ev => {{
   finally {{ go.disabled = false; go.textContent = 'Start scraping'; }}
 }});
 load(); setInterval(load, 3000);
-$('kwpick').addEventListener('change', () => {{  // a picked business type becomes a keyword line
+function pick() {{  // a picked business type becomes a keyword line that waits for its city: "Bakery in "
   const v = $('kwpick').value.trim(); if (!v) return;
-  const k = $('keywords'); k.value = (k.value.trim() ? k.value.trim() + '\\n' : '') + v; $('kwpick').value = '';
-}});
+  const k = $('keywords'); k.value = (k.value.trim() ? k.value.trim() + '\\n' : '') + v + ' in ';
+  $('kwpick').value = ''; k.focus(); k.setSelectionRange(k.value.length, k.value.length); unwarn();
+  say('Type the city after "' + v + ' in".', '');
+}}
+function unwarn() {{ const go = $('go'); if (go.dataset.anyway) {{ delete go.dataset.anyway; go.textContent = 'Start scraping'; }} }}
+$('kwpick').addEventListener('change', pick);
+$('kwpick').addEventListener('keydown', ev => {{ if (ev.key === 'Enter') {{ ev.preventDefault(); pick(); }} }});
+$('keywords').addEventListener('input', unwarn); $('coords').addEventListener('input', unwarn);
 (function () {{  // keyword ideas: Google's business category names, cached for 30 days, as text only
   const key = 'gmskit-categories', month = 30 * 86400000;
   function fill(names) {{
@@ -531,17 +559,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def download(self, jid, query=""):
         data = self.server.store.read_csv(jid) if JOB_ID.match(jid or "") else None
+        name = file_name(self.server.store.get(jid) if data is not None else None, jid or "")
         if data is None:
             return self.fail(404, "no results for this job (yet)")
         fmt = urllib.parse.parse_qs(query).get("format", ["csv"])[0]
         if fmt == "json":  # the same rows, every value a string, as in the CSV
             rows = list(csv.DictReader(io.StringIO(data.decode("utf-8", "replace"))))
             return self.reply(200, json.dumps(rows, ensure_ascii=False).encode(), "application/json; charset=utf-8",
-                              [("Content-Disposition", f'attachment; filename="{jid}.json"')])
+                              [("Content-Disposition", f'attachment; filename="{name}.json"')])
         if fmt != "csv":
             return self.fail(400, "format must be csv or json")
         self.reply(200, jobs.guard_csv(data), "text/csv; charset=utf-8",  # a spreadsheet opens it: no formulas
-                   [("Content-Disposition", f'attachment; filename="{jid}.csv"')])
+                   [("Content-Disposition", f'attachment; filename="{name}.csv"')])
 
     def do_GET(self):
         if not self.guard():

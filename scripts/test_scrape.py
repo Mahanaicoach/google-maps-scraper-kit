@@ -722,6 +722,15 @@ class Reviews(unittest.TestCase):
             self.assertEqual(next(csv.reader(f)), ["title", "user_reviews", "reviews_per_rating"])
 
 
+class ReviewsProgress(unittest.TestCase):
+    def test_reviews_count_shows(self):
+        job = {"Progress": {"keywords_total": 1, "keywords_done": 1, "places": 20, "percent": 100, "stage": "reviews",
+                            "reviews_done": 7, "reviews_total": 20}}
+        self.assertEqual(scrape.progress_text(job), ", reading reviews 7/20, 20 places, 100%")
+        del job["Progress"]["reviews_total"]
+        self.assertEqual(scrape.progress_text(job), ", reading reviews, 20 places, 100%")
+
+
 class SocialsByDefault(unittest.TestCase):
     def scrape_with(self, *extra):
         out = os.path.join(tempfile.mkdtemp(), "leads.csv")
