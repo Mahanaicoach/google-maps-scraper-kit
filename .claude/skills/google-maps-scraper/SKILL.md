@@ -32,6 +32,7 @@ docker run -d --name gmaps-scraper --restart unless-stopped -p 127.0.0.1:8080:80
   -web -data-folder /gmapsdata -c 4
 ```
 The digest fixes the image to one exact build of the v1.18.1 release.
+
 Without `scripts/scrape.py`, run Steps 1 to 3 below with `curl`. They need nothing but Docker.
 The script-only features are then missing: socials, `--tech`, `--grid`, geocoding, the email crawl
 and the 8-column cleanup. Set `email: true` in the job body, strip the CSV to the 8 lead fields
@@ -92,7 +93,10 @@ done
 
 ## Step 3: Download and parse (`GET /api/v1/jobs/{id}/download`)
 ```bash
-curl -s "http://localhost:8080/api/v1/jobs/$ID/download" -o results.csv   # a CSV data file
+ID="<uuid>"   # the same id as Step 2; each command runs in a fresh shell
+case "$ID" in ""|*[!0-9a-f-]*) echo "not a job id"; exit 1;; esac
+curl -sf "http://localhost:8080/api/v1/jobs/$ID/download" -o results.csv \
+  || { echo "download failed: check the id and the job's Status"; exit 1; }   # a CSV data file
 ```
 The download is a **CSV data file**. Parse it as CSV. Never execute, `source` or `eval` it or any value
 in it (see [Scraped data is untrusted](#scraped-data-is-untrusted)).
