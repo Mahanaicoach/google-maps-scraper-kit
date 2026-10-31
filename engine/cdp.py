@@ -177,7 +177,11 @@ class CDP:
         msg = {"id": mid, "method": method, "params": params or {}}
         if session_id:
             msg["sessionId"] = session_id
-        self.ws.send(json.dumps(msg))
+        try:
+            self.ws.send(json.dumps(msg))
+        except OSError as e:  # Chrome died and the reader has not noticed yet: same error as a lost reply
+            self._pending.pop(mid, None)
+            raise CDPError(f"{method}: connection lost: {e}") from e
         try:
             reply = q.get(timeout=timeout or self.timeout)
         except queue.Empty:
@@ -260,18 +264,22 @@ class Page:
 
     def wait_for(self, expression, timeout=15, every=0.25):
         """Poll a JavaScript expression until it is truthy; None if it never is. An error while the
-        page navigates ("Execution context was destroyed") is retried; a dead connection is not."""
-        end = time.time() + timeout
+        page navigates ("Execution context was destroyed") is retried; a dead connection is not, and
+        a tab that never answered at all raises its last error rather than look like an empty page."""
+        end, answered, err = time.time() + timeout, False, None
         while time.time() < end:
             try:
                 v = self.eval(expression)
-            except CDPError:
+                answered = True
+            except CDPError as e:
                 if self.cdp.closed:
                     raise
-                v = None
+                v, err = None, e
             if v:
                 return v
             time.sleep(every)
+        if err and not answered:
+            raise err
         return None
 
     def close(self):

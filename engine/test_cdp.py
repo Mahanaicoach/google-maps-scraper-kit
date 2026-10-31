@@ -127,6 +127,28 @@ class WebSocketAndCDP(unittest.TestCase):
             self.c.wait_event("Page.frameNavigated", "S1", timeout=5)  # subscribed after the death
         self.assertLess(time.time() - t, 2)
 
+    def test_broken_socket_is_a_cdp_error(self):
+        self.c.ws.sock.close()  # as if Chrome died a moment before the reader noticed
+        with self.assertRaisesRegex(cdp.CDPError, "connection lost"):
+            self.c.send("X.y")
+        self.assertEqual(self.c._pending, {})
+
+    def test_wait_for(self):
+        class Tab(cdp.Page):
+            def __init__(self, answers):
+                self.cdp, self.answers = self.c, list(answers)
+            def eval(self, expression, timeout=None):
+                a = self.answers.pop(0) if self.answers else None
+                if isinstance(a, Exception):
+                    raise a
+                return a
+        Tab.c = self.c
+        gone = cdp.CDPError("Execution context was destroyed")
+        self.assertEqual(Tab([gone, None, 7]).wait_for("x", timeout=2, every=0.01), 7)  # through a navigation
+        with self.assertRaisesRegex(cdp.CDPError, "Session with given id not found"):
+            Tab([cdp.CDPError("Session with given id not found")] * 500).wait_for("x", timeout=0.2, every=0.01)
+        self.assertIsNone(Tab([None] * 500).wait_for("x", timeout=0.2, every=0.01))
+
     def test_quiet_browser_keeps_the_reader(self):
         c = cdp.CDP(f"ws://127.0.0.1:{FakeDevTools().port}/devtools/browser/y", timeout=0.5)
         time.sleep(1)  # longer than the command timeout with no frame at all
