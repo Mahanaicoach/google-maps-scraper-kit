@@ -32,6 +32,8 @@ class FakeBrowser:
     """Stands in for browser.Browser: no process; kill() makes the next collect fail like a dead Chrome."""
     made = []
 
+    path = "/usr/bin/google-chrome"
+
     def __init__(self, **kw):
         self.kw, self.cdp, self.killed, self.contexts = kw, FakeCDP(), threading.Event(), []
         FakeBrowser.made.append(self)
@@ -974,14 +976,17 @@ class Websites(unittest.TestCase):
             r = unittest.mock.MagicMock()
             r.__enter__.return_value = io.BytesIO(json.dumps(answer).encode())
             return unittest.mock.patch.object(jobs._OPENER, "open", return_value=r)
-        jobs.mx_host.cache_clear()
+        jobs._MX.clear()
         with doh({"Status": 3}):
             self.assertEqual(jobs.mx_host("a.test"), "nxdomain")
         with doh({"Status": 0, "Answer": [{"type": 15, "data": "1 aspmx.l.google.com."}]}):
             self.assertEqual(jobs.mx_host("b.test"), "google_workspace")
         with doh({"Status": 0}):
             self.assertEqual(jobs.mx_host("c.test"), "none")
-        jobs.mx_host.cache_clear()
+        with doh({"Status": 2}):  # SERVFAIL: no verdict, and not kept for the next job
+            self.assertEqual(jobs.mx_host("d.test"), "")
+        self.assertNotIn("d.test", jobs._MX)
+        jobs._MX.clear()
 
     def test_same_social_patterns_as_scrape(self):
         sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts"))
@@ -1081,11 +1086,11 @@ class LoopOne(Fakes):
 
     def test_resume_after_the_reviews_keeps_them(self):
         RESULTS["cafes in Austin"] = ([place(1, website="https://a.com"), place(2)], "end-of-list")
-        def reviews(rows, d, deadline, stop, proxies, save=None):
+        def reviews(rows, d, deadline, stop, proxies, save=None, notes=None):
             for r in rows:
                 r["user_reviews"] = '[{"Rating": 5}]'
             return len(rows)
-        self.worker.add_reviews = reviews
+        self.worker.add_reviews, self.worker.headless = reviews, False  # window mode
         stopping = lambda *a, **k: self.worker.shutdown() or 0  # the engine stops during the website pass
         with unittest.mock.patch.object(jobs, "add_site_data", side_effect=stopping):
             jid, job = self.run_one(reviews_max=1, email=True)
@@ -1125,7 +1130,8 @@ class LoopOne(Fakes):
             raise CDPError(jobs.LOGIN_REFUSED)
         maps.collect = collect
         _, job = self.run_one(keywords=["a", "b", "c"], proxies=["http://u:bad@h:1"])
-        self.assertEqual((job["Status"], job["Error"], len(SEARCHED)), ("failed", jobs.LOGIN_REFUSED, 1))
+        self.assertEqual((job["Status"], len(SEARCHED)), ("failed", 1))
+        self.assertEqual(job["Error"], jobs.LOGIN_REFUSED + "; 2 keyword(s) after it were not searched")
 
     def test_shutdown_before_the_job_starts(self):
         name, data = jobs.validate(GOOD)
@@ -1149,6 +1155,98 @@ class LoopOne(Fakes):
         finally:
             s.close()
         self.assertEqual(self.store.get(jid)["Status"], "working")
+
+
+class LoopTwo(Fakes):
+    """Audit loop 2: Chrome dying on its own, dead proxies, headless reviews, masks, notes."""
+
+    def setUp(self):
+        super().setUp()
+        self.saved_waits = (jobs.BACKOFF, jobs.ROTATE_WAIT)
+        jobs.BACKOFF, jobs.ROTATE_WAIT = (0.05, 0.05), 0.01
+
+    def tearDown(self):
+        jobs.BACKOFF, jobs.ROTATE_WAIT = self.saved_waits
+        super().tearDown()
+
+    def test_chrome_that_dies_is_started_again(self):
+        def collect(page, url, **kw):
+            SEARCHED.append(url.split("/search/")[1].split("/")[0])
+            if len(SEARCHED) == 2:  # Chrome crashes during the second keyword
+                FakeBrowser.made[-1].cdp.closed = OSError("gone")
+                raise CDPError("connection lost: gone")
+            return [place(len(SEARCHED))], "end-of-list", {"batches": 1, "dom_links": 0}
+        maps.collect = collect
+        jid, job = self.run_one(keywords=["a", "b", "c"])
+        self.assertEqual((job["Status"], job["Error"]), ("ok", ""))
+        self.assertEqual((SEARCHED, len(FakeBrowser.made)), (["a", "b", "b", "c"], 2))
+        self.assertEqual(len(self.rows(jid)), 3)
+
+    def test_chrome_that_keeps_dying_says_what_was_not_searched(self):
+        def collect(page, url, **kw):
+            FakeBrowser.made[-1].cdp.closed = OSError("gone")
+            raise CDPError("connection lost: gone")
+        maps.collect = collect
+        _, job = self.run_one(keywords=["a", "b", "c"])
+        self.assertEqual(job["Status"], "failed")
+        self.assertIn("2 keyword(s) after it were not searched", job["Error"])
+        self.assertEqual(len(FakeBrowser.made), 1 + jobs.RELAUNCHES)
+
+    def test_a_dead_proxy_is_skipped_after_it_fails(self):
+        calls = []
+        def collect(page, url, **kw):
+            calls.append(FakeBrowser.made[-1].contexts[-1])
+            if "dead" in calls[-1]:
+                raise CDPError("navigate https://x: net::ERR_PROXY_CONNECTION_FAILED")
+            return [], "end-of-list", {"batches": 1, "dom_links": 0}
+        maps.collect = collect
+        _, job = self.run_one(keywords=["a", "b", "c", "d"], proxies=["http://dead:1", "http://ok:2"])
+        self.assertEqual((job["Status"], calls), ("ok", ["http://dead:1"] + ["http://ok:2"] * 4))
+
+    def test_headless_skips_the_reviews_pass(self):
+        RESULTS["cafes in Austin"] = ([place(1)], "end-of-list")
+        self.worker.add_reviews = lambda *a, **k: self.fail("no reviews pass in Google's limited view")
+        _, job = self.run_one(reviews_max=2)
+        self.assertEqual(job["Status"], "ok")
+        self.assertIn("no reviews: Google's limited view", job["Error"])
+
+    def test_errors_survive_a_restart_mid_search(self):
+        name, data = jobs.validate(dict(GOOD, keywords=["a", "b", "c"]))
+        jid = self.store.create(name, data)
+        self.store.claim()
+        self.store.set_progress(jid, {"done": 1, "total": 3, "stage": "search", "failed": 1,
+                                      "last_error": "navigate x: net::ERR_NAME_NOT_RESOLVED"})
+        self.store.recover()
+        maps.collect = lambda page, url, **kw: ([place(2)], "end-of-list", {"batches": 1, "dom_links": 0})
+        self.worker.run_job(self.store.claim())
+        self.assertIn("1 keyword(s) failed: navigate x: net::ERR_NAME_NOT_RESOLVED", self.store.get(jid)["Error"])
+
+    def test_late_website_pass_is_not_a_max_time_stop(self):
+        RESULTS["cafes in Austin"] = ([place(1, website="https://a.com")], "end-of-list")
+        def slow_pass(rows, seconds, **kw):
+            time.sleep(1.2)  # runs past the job's 1 s max_time
+            return 0
+        with unittest.mock.patch.object(jobs, "add_site_data", side_effect=slow_pass):
+            _, job = self.run_one(email=True, max_time=1)
+        self.assertEqual((job["Status"], job["Error"]), ("ok", ""))
+
+    def test_masks_and_deep_json(self):
+        self.assertEqual(jobs.mask("http://TOKEN123@h:80"), "http://***@h:80")
+        self.assertEqual(jobs.mask("http://u:p@h:80"), "http://u:***@h:80")
+        self.assertEqual(jobs.mask("http://h:80"), "http://h:80")
+        servers = serve.make_servers(0, self.store, self.worker)
+        port = servers[0].server_address[1]
+        for srv in servers:
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            c.request("POST", "/api/v1/jobs", b"[" * 100000, {"Host": "localhost"})
+            self.assertEqual(c.getresponse().status, 400)
+            c.close()
+        finally:
+            for srv in servers:
+                srv.shutdown()
+                srv.server_close()
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)

@@ -11,6 +11,7 @@ services:
     build: .
     restart: unless-stopped
     init: true  # reaps Chromium's helper processes, which the engine would leave as zombies as PID 1
+    stop_grace_period: 20s  # time for the engine to pause its job, so it resumes on the next start
     environment:
       # Blank by default. When set in .env, the engine wants it as an X-API-Key header.
       SCRAPER_API_KEY: ${SCRAPER_API_KEY:-}

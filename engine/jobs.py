@@ -11,7 +11,7 @@ waits and retries a bounded number of times (through the next proxy when there i
 stops with a clear Error. A watchdog stops Chrome when a job overruns its max_time, so no job can
 stick on "working". Standard library only.
 """
-import concurrent.futures, csv, functools, html, http.client, io, ipaddress, json, math, os, re, socket
+import concurrent.futures, csv, html, http.client, io, ipaddress, json, math, os, re, socket
 import sqlite3, threading, time, urllib.parse, urllib.request, uuid
 from datetime import datetime, timezone
 
@@ -44,6 +44,8 @@ LOGIN_REFUSED = "proxy login refused: the proxy answered 407 to its username and
 # Chrome's errors for a proxy that failed, and ours. Matched as written: an error also holds the
 # search URL, so a keyword such as "tunnel car wash" must not read as a proxy error.
 PROXY_FAILED = re.compile(r"\bERR_(?:PROXY|SOCKS|TUNNEL)_|proxy login refused")
+TIMED_OUT = re.compile(r"\bERR_(?:CONNECTION_)?TIMED_OUT\b")  # through a proxy: maybe the proxy, so try the next
+RELAUNCHES = 2        # times a job starts Chrome again after it died on its own (a crash, out of memory)
 REVIEWS_MAX = 5       # the reviews a place panel shows first; more would need its review list
 
 
@@ -136,12 +138,14 @@ def _proxies(v):
 
 
 def mask(proxy):
-    """A proxy URL with its password replaced by ***: what the API, the web UI and the log show."""
+    """A proxy URL with its password replaced by *** (or its username, when that is the only
+    secret, as some providers do): what the API and the web UI show."""
     u = urllib.parse.urlsplit(proxy)
-    if not u.password:
+    if not (u.username or u.password):
         return proxy
-    return urllib.parse.urlunsplit(u._replace(netloc=u.netloc.rpartition("@")[0].partition(":")[0] + ":***@"
-                                               + u.netloc.rpartition("@")[2]))
+    user, host = u.netloc.rpartition("@")[0], u.netloc.rpartition("@")[2]
+    shown = user.partition(":")[0] + ":***" if u.password else "***"
+    return urllib.parse.urlunsplit(u._replace(netloc=f"{shown}@{host}"))
 
 
 def locale(d):
@@ -436,6 +440,13 @@ class Worker(threading.Thread):
         # What an earlier run of this job saw, for its final note (a job resumed after its search).
         errors = [p["last_error"]] * p.get("failed", 0) if p.get("last_error") else []
         notes, blocked, retries, rot, refused = [], p.get("blocked", False), p.get("retried", 0), 0, set()
+        bad, relaunched, timed_out = set(), 0, {"yes": p.get("timed_out", False)}  # bad: proxies that failed
+
+        def pick(i):  # the keyword's proxy in turn, past the ones that failed (all failed: in turn anyway)
+            if not proxies:
+                return None
+            turn = [proxies[(i + rot + k) % len(proxies)] for k in range(len(proxies))]
+            return next((x for x in turn if x not in bad), turn[0])
         cur = {"i": done, "kw": ""}
         if done or p.get("resumes"):
             self.log(f"job {jid} resumed at keyword {done + 1}/{len(kws)} with {len(rows)} places, {budget:.0f} s left")
@@ -459,6 +470,7 @@ class Worker(threading.Thread):
             save(percent=int(100 * (cur["i"] + min(batches / d["depth"], 1)) / len(kws)))
 
         def watchdog():  # Chrome hung or the job overran: kill Chrome, and every CDP call fails at once
+            timed_out["yes"] = True
             stop.set()
             b = self._browser
             if b:
@@ -469,15 +481,19 @@ class Worker(threading.Thread):
         timer.start()
         try:
             save(stage=stage, done=done, total=len(kws))
+            if stage == "search" and done < len(kws) and budget <= 0:
+                timed_out["yes"] = True  # resumed with no time left: the other keywords stay unsearched
             if ((stage == "search" and done < len(kws)) or reviews) and budget > 0 and not stop.is_set():
                 self._browser = browser.Browser(lang=locale(d), headless=self.headless)
             i = done
             while stage == "search" and i < len(kws) and self._browser:
                 left = deadline - time.monotonic()
+                if left <= 0:
+                    timed_out["yes"] = True
                 if stop.is_set() or left <= 0:
                     break
                 cur.update(i=i, kw=kws[i])
-                proxy = proxies[(i + rot) % len(proxies)] if proxies else None
+                proxy = pick(i)
                 url = maps.search_url(kws[i], d["lat"], d["lon"], d["zoom"], d["lang"], d.get("country", ""))
                 t0 = time.monotonic()
                 try:
@@ -485,9 +501,17 @@ class Worker(threading.Thread):
                 except (CDPError, OSError) as e:
                     if str(e) == LOGIN_REFUSED:
                         refused.add(proxy)
-                    if (PROXY_FAILED.search(str(e)) and len(proxies) > 1 and retries < len(BACKOFF)
-                            and len(refused) < len(set(proxies)) and not self._browser.cdp.closed
-                            and not stop.is_set()):
+                    if PROXY_FAILED.search(str(e)):
+                        bad.add(proxy)
+                    if self._browser.cdp.closed and not stop.is_set() and relaunched < RELAUNCHES:
+                        relaunched += 1  # Chrome died on its own: a new one takes the same keyword
+                        self.log(f"job {jid} keyword {i + 1}/{len(kws)}: Chrome stopped ({e}); starting it again")
+                        self._browser.close()
+                        self._browser = browser.Browser(lang=locale(d), headless=self.headless)
+                        continue
+                    if ((PROXY_FAILED.search(str(e)) or TIMED_OUT.search(str(e))) and len(proxies) > 1
+                            and retries < len(BACKOFF) and len(refused) < len(set(proxies))
+                            and not self._browser.cdp.closed and not stop.is_set()):
                         retries, rot = retries + 1, rot + 1
                         self.log(f"job {jid} keyword {i + 1}/{len(kws)}: the proxy failed; retry {retries}/"
                                  f"{len(BACKOFF)} through the next proxy")
@@ -496,8 +520,11 @@ class Worker(threading.Thread):
                     self.log(f"job {jid} keyword {i + 1}/{len(kws)}: error: {e}")
                     # Chrome is gone, or no proxy takes the job's login: the other keywords would fail too
                     if self._browser.cdp.closed or (refused and len(refused) >= len(set(proxies))):
+                        if not stop.is_set() and len(kws) - i > 1:
+                            errors[-1] += f"; {len(kws) - i - 1} keyword(s) after it were not searched"
                         break
                     i, retries = i + 1, 0
+                    save(failed=len(errors), last_error=errors[-1])
                     continue
                 on_batch(places, stats["batches"])  # places no batch carried (one place, the DOM fallback)
                 if stop.is_set():  # deleted, or the engine is exiting: this keyword did not finish
@@ -518,28 +545,39 @@ class Worker(threading.Thread):
                     self.log(f"job {jid} keyword {i + 1}/{len(kws)}: Google's unusual-traffic page; stopping")
                     break
                 retries = 0
+                if reason == "timeout":
+                    timed_out["yes"] = True
                 size = self.store.append(jid, [], cols)
                 if size is None:
                     break  # deleted
-                save(done=i + 1, bytes=size, percent=int(100 * (i + 1) / len(kws)))
+                if reason.startswith("error: "):
+                    errors.append(reason[7:])
+                save(done=i + 1, bytes=size, percent=int(100 * (i + 1) / len(kws)), failed=len(errors),
+                     last_error=errors[-1] if errors else "")
                 self.log(f"job {jid} keyword {i + 1}/{len(kws)}: {len(places)} places, {len(rows)} in all, "
                          f"{stats['batches']} batches, {time.monotonic() - t0:.1f} s ({reason})")
-                if reason.startswith("error: "):  # Chrome failed mid-scroll; the places before it are kept
-                    errors.append(reason[7:])
-                    if self._browser.cdp.closed:
+                if reason.startswith("error: ") and self._browser.cdp.closed:  # Chrome failed mid-scroll;
+                    if stop.is_set() or relaunched >= RELAUNCHES:                # the places before it are kept
+                        if not stop.is_set() and len(kws) - i > 1:
+                            errors[-1] += f"; {len(kws) - i - 1} keyword(s) after it were not searched"
                         break
+                    relaunched += 1
+                    self._browser.close()
+                    self._browser = browser.Browser(lang=locale(d), headless=self.headless)
                 i += 1
             if stage == "search" and not stop.is_set():  # the search is over, for good: never search again
                 stage = "reviews" if reviews else "websites"
                 save(stage=stage, bytes=self.store.append(jid, [], cols), blocked=blocked, retried=retries,
-                     failed=len(errors), last_error=errors[-1] if errors else "")
-            if stage == "reviews" and rows and self._browser and not (stop.is_set() or blocked):
-                n = self.add_reviews(rows, d, deadline, stop, proxies, save)
+                     failed=len(errors), last_error=errors[-1] if errors else "", timed_out=timed_out["yes"])
+            windowed = self._browser and not (self.headless or browser.always_headless(self._browser.path))
+            if stage == "reviews" and rows and not windowed:  # the limited view has no reviews: do not try
+                notes.append("no reviews: Google's limited view, which a headless Chrome gets, shows none; "
+                             "set SCRAPER_HEADLESS=0, with an installed Chrome, to run it as a window")
+            elif stage == "reviews" and rows and self._browser and not (stop.is_set() or blocked):
+                n = self.add_reviews(rows, d, deadline, stop, [x for x in proxies if x not in bad] or proxies,
+                                     save, notes)
                 self.store.rewrite(jid, rows, cols)  # keep the reviews if the engine stops during the next pass
                 self.log(f"job {jid}: reviews for {n}/{sum(1 for r in rows if r.get('place_id'))} places")
-                if not n and (self.headless or browser.always_headless(self._browser.path)):
-                    notes.append("no reviews: Google's limited view, which a headless Chrome gets, shows none; "
-                                 "set SCRAPER_HEADLESS=0, with an installed Chrome, to run it as a window")
             if stage == "reviews" and not stop.is_set():
                 stage = "websites"
                 save(stage=stage)
@@ -569,7 +607,7 @@ class Worker(threading.Thread):
         p.update(stage="done", elapsed=round(used + time.monotonic() - started, 1), places=len(rows))
         if rows or not (errors or blocked):
             head = ""
-            if time.monotonic() >= deadline or (stop.is_set() and not errors):
+            if timed_out["yes"]:  # the search ran out of time (a website pass that runs late does not count)
                 head = "stopped at max_time; the rows found so far are kept"
             if errors:
                 head = f"{len(errors)} keyword(s) failed: {errors[-1]}"
@@ -611,7 +649,7 @@ class Worker(threading.Thread):
             if ctx and not self._browser.cdp.closed:
                 self._browser.dispose(ctx)
 
-    def add_reviews(self, rows, d, deadline, stop, proxies, save=lambda: None):
+    def add_reviews(self, rows, d, deadline, stop, proxies, save=lambda: None, notes=None):
         """Review count, stars histogram and up to reviews_max reviews per place, from each place's
         panel (the result batches carry no review texts): one page load per place, until the
         deadline. The number of places that got reviews."""
@@ -640,8 +678,9 @@ class Worker(threading.Thread):
                         r[k] = str(v)
                 n += "user_reviews" in got
                 save()  # elapsed time, for a resume after a crash
-        except (CDPError, OSError):
-            pass  # Chrome went away: the reviews so far are kept
+        except (CDPError, OSError) as e:  # Chrome or the proxy went away: the reviews so far are kept
+            if notes is not None:
+                notes.append(f"the reviews pass stopped early: {e}")
         finally:
             if auth:
                 auth.close()
@@ -767,24 +806,32 @@ def find_socials(text):
     return out
 
 
-@functools.lru_cache(maxsize=4096)
+_MX = {}  # domain -> answer; a failed lookup is not kept, so the next job asks again
+
+
 def mx_host(domain):
     """'nxdomain' when the domain does not exist, 'none' when it has no MX record, else who runs its
     mail: 'google_workspace', 'microsoft_365' or 'other'; '' when the lookup failed. Like scrape.py."""
+    if domain in _MX:
+        return _MX[domain]
     try:
         with _OPENER.open(urllib.request.Request(DOH + urllib.parse.urlencode({"name": domain, "type": "MX"}),
                                                  headers={"User-Agent": UA}), timeout=8) as r:
             ans = json.load(r)
     except Exception:  # noqa: BLE001 - no answer is not a verdict
         return ""
-    if ans.get("Status") == 3:
-        return "nxdomain"
     mx = " ".join(a.get("data", "") for a in ans.get("Answer") or [] if a.get("type") == 15).lower()
-    if not mx:
-        return "none" if ans.get("Status") == 0 else ""
-    if "google.com" in mx or "googlemail.com" in mx:
-        return "google_workspace"
-    return "microsoft_365" if "outlook.com" in mx else "other"
+    if ans.get("Status") == 3:
+        host = "nxdomain"
+    elif not mx:
+        host = "none" if ans.get("Status") == 0 else ""
+    elif "google.com" in mx or "googlemail.com" in mx:
+        host = "google_workspace"
+    else:
+        host = "microsoft_365" if "outlook.com" in mx else "other"
+    if host:
+        _MX[domain] = host
+    return host
 
 
 def find_emails(text, site=""):

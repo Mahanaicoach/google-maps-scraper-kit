@@ -370,7 +370,7 @@ class Handler(BaseHTTPRequestHandler):
             return _REPLIED
         try:
             return json.loads(self.rfile.read(n) or b"null")
-        except ValueError:  # bad JSON or bad UTF-8
+        except (ValueError, RecursionError):  # bad JSON, bad UTF-8, or nested too deep to parse
             self.fail(400, "the body is not valid JSON")
             return _REPLIED
 

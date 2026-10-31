@@ -122,10 +122,12 @@ def kill(pid):
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
         return True
     try:
-        os.killpg(pid, signal.SIGTERM)  # the engine leads its own process group, Chrome included
+        # The engine alone: it pauses its job (which resumes on the next start) and closes its own
+        # Chrome. A Chrome that got the signal too would end the job before the engine could pause it.
+        os.kill(pid, signal.SIGTERM)
     except (ProcessLookupError, PermissionError):
         return True
-    for _ in range(50):
+    for _ in range(150):  # the engine leads its own process group, Chrome included
         try:
             os.killpg(pid, 0)
         except (ProcessLookupError, PermissionError):
