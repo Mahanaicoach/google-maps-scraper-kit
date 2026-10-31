@@ -28,11 +28,35 @@ fi
 git remote get-url upstream >/dev/null 2>&1 || git remote add upstream "$UPSTREAM"
 git fetch --quiet upstream "$BRANCH"
 
+# The kit's history may be rewritten once to tidy commit credits: every commit gets a new id but
+# keeps exactly the same files. A clone of the old history (it contains the old first commit)
+# whose files match a kit version moves across to the new history; nothing on disk changes.
+OLD_ROOT="fa805c6973ed63caefaceb35d2545d0d682c47aa"
+MOVED=""
 if ! git merge-base HEAD "upstream/$BRANCH" >/dev/null; then
-  echo "This copy shares no history with the original (it was made with 'Use this template',"
-  echo "or it is a shallow clone), so git can't merge updates into it."
-  echo "See what changed: https://github.com/Mahanaicoach/google-maps-scraper-kit/commits/$BRANCH"
-  exit 1
+  if git merge-base --is-ancestor "$OLD_ROOT" HEAD 2>/dev/null; then
+    TREE="$(git rev-parse 'HEAD^{tree}')"
+    MATCH="$(git log --format='%H %T' "upstream/$BRANCH" | awk -v t="$TREE" '$2 == t && !m { m = $1 } END { print m }')"
+    if [ -z "$MATCH" ]; then
+      echo "The kit's history was rewritten on GitHub, and this copy has your own changes, so it"
+      echo "can't move across by itself. Nothing was changed. Clone the kit again, then copy your"
+      echo "changes into it: git clone $UPSTREAM"
+      exit 1
+    fi
+    git branch -f kit-old-history HEAD
+    git reset --quiet --hard "$MATCH"
+    MOVED=1
+    echo "The kit's history was rewritten on GitHub; this copy moved across (your files are unchanged)."
+    echo "The old history is kept in the branch kit-old-history."
+    if ! git remote get-url origin 2>/dev/null | grep -qi "mahanaicoach/google-maps-scraper-kit"; then
+      echo "Your fork on GitHub still has the old history. Update it with: git push --force origin HEAD:$BRANCH"
+    fi
+  else
+    echo "This copy shares no history with the original (it was made with 'Use this template',"
+    echo "or it is a shallow clone), so git can't merge updates into it."
+    echo "See what changed: https://github.com/Mahanaicoach/google-maps-scraper-kit/commits/$BRANCH"
+    exit 1
+  fi
 fi
 
 BEFORE="$(git rev-parse HEAD)"
@@ -49,7 +73,7 @@ if [ "$BEFORE" = "$(git rev-parse HEAD)" ]; then
 else
   echo "Updated. What's new:"
   git log --oneline --no-merges -n 20 "$BEFORE..HEAD"
-  if ! git remote get-url origin 2>/dev/null | grep -qi "mahanaicoach/google-maps-scraper-kit"; then
+  if [ -z "$MOVED" ] && ! git remote get-url origin 2>/dev/null | grep -qi "mahanaicoach/google-maps-scraper-kit"; then
     echo "Your fork on GitHub is still on the old version. Run 'git push' to update it too."
   fi
 fi
