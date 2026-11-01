@@ -113,8 +113,6 @@ Full walkthrough, platform notes and troubleshooting: [SETUP.md](SETUP.md).
 
 ## Sponsored by
 
-<sub>Paid placements: these companies pay to appear here, and their links carry referral tracking.</sub>
-
 ### [Swiftproxy](https://www.swiftproxy.net/?ref=googlemapsscraperkit) - Residential proxies for Google Maps scraping
 
 <a href="https://www.swiftproxy.net/?ref=googlemapsscraperkit"><img src="assets/sponsors/swiftproxy.webp" alt="Swiftproxy: outreach-ready residential IPs for Google Maps lead generation" width="600"></a>
