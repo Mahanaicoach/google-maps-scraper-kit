@@ -14,9 +14,11 @@ the host's `127.0.0.1` only. That localhost binding is the security boundary: an
 8080 to a network.
 
 The engine also answers only `localhost`, `127.0.0.1` and `[::1]` Host headers (421 otherwise) and
-refuses requests whose `Origin` is another site (403), so a web page in your browser cannot reach it
-through DNS rebinding or a cross-site post. The engine and `scripts/scrape.py` fetch business
-websites only when they resolve, redirect and connect to a public address. Proxy passwords show as
+refuses requests whose `Origin` is not its own page (403), so a web page in your browser, a local dev
+server on another port included, cannot reach it through DNS rebinding or a cross-site post. The
+engine and `scripts/scrape.py` fetch business websites only when they resolve, redirect and connect
+to a public address (behind an `HTTP(S)_PROXY`, `scrape.py` checks the address it resolves; the
+proxy makes the connection). Proxy passwords show as
 `***` in the API and the web UI and never reach the log. `scripts/engine.py start`
 runs a downloaded Chrome only when its SHA-256 matches the one pinned in `engine/browser.py`. A way
 around any of these checks is in scope.

@@ -4,7 +4,9 @@
     "allow": [
       "Bash(docker compose up -d)",
       "Bash(docker compose up -d --build)",
+      "Bash(docker compose up -d --build --remove-orphans)",
       "Bash(docker compose down)",
+      "Bash(docker compose down --remove-orphans)",
       "Bash(docker compose stop)",
       "Bash(docker compose start)",
       "Bash(docker compose restart)",

@@ -98,12 +98,11 @@ separate job lists, so jobs started in one do not show in the other.
 **Then check it**, either way:
 
 ```bash
-curl http://localhost:8080/api/v1/jobs  # should print null (no jobs yet) or a JSON list of jobs
+python3 scripts/engine.py status  # should print ✓ Running on http://localhost:8080
 ```
 
-If `curl` prints `null` or a JSON list, the engine is live. `curl` trusts any program on that port, so
-to be sure it is the kit's engine, run `python3 scripts/engine.py status`: it prints
-`✓ Running on http://localhost:<port>` only when the kit's own engine answers. The engine also serves a
+It prints `✓ Running on http://localhost:<port>` only when the kit's own engine answers (it checks the
+engine's `X-Engine` header, so another program on the port cannot fool it). The engine also serves a
 web UI and API docs in the browser:
 - Web UI: **http://localhost:8080**
 - API docs: **http://localhost:8080/api/docs** (a plain page; the OpenAPI JSON is at
@@ -260,7 +259,7 @@ Claude Code also offers these commands. Type `/` to see them:
 | `/scrape-jobs [list \| delete <id>]` | List or delete jobs |
 
 Plain requests work too: *"scrape gyms in Miami with phone numbers."* The kit's own scripts, the exact
-`docker compose` forms this guide uses and the engine's health check are pre-approved in
+`docker compose` forms this guide uses are pre-approved in
 `.claude/settings.json`; everything else asks as usual.
 
 ---
@@ -289,7 +288,8 @@ then delete the kit folder.
 
 Results pile up. Delete old jobs with the web UI's Delete button (it asks you to confirm), or:
 ```bash
-curl -X DELETE http://localhost:8080/api/v1/jobs/<job-id>
+python3 scripts/engine.py jobs              # ids, newest first
+python3 scripts/engine.py delete <job-id>
 ```
 
 ---
@@ -303,12 +303,12 @@ curl -X DELETE http://localhost:8080/api/v1/jobs/<job-id>
 | `Cannot connect to the Docker daemon` / `docker: command not found` | Docker Desktop is not running (or not installed). Open Docker Desktop, wait until its whale icon stops animating, then run `docker compose up -d` again. Or use the engine without Docker (§2 A). |
 | `Empty reply from server` or `Connection reset` right after `docker compose up -d` | The engine is still starting, a few seconds. The scripts wait for it; in the browser, reload the page. |
 | `Permission denied` running `./scripts/scrape.sh` | The file lost its execute bit (a ZIP download does that). Run `bash scripts/scrape.sh …` instead. |
-| `port is already allocated`, or Docker Desktop's `ports are not available: ... address already in use`, or something else already uses 8080 | Just updated from kit 1.x and an old container still holds it? Run `docker compose down --remove-orphans`, then `docker compose up -d`, in the kit folder. Otherwise run `cp .env.example .env` (skip it if you already have a `.env`), set `SCRAPER_PORT=8081` in it, then start the engine again (`python3 scripts/engine.py restart` or `docker compose up -d`). The engine, Compose and both scripts read the same file, so nothing else needs editing. With Docker the port inside the container stays 8080 (do not change the right-hand side of the mapping). If your `.env` still has a `SCRAPER_BASE_URL` line, delete it or update its port: it overrides `SCRAPER_PORT`. The slash commands and the skill show `localhost:8080` in their examples. Claude first runs `python3 scripts/engine.py status`, which reads the port from `.env`, is pre-approved on any port and prints the URL to use. Only the one pre-approved `curl` health check (for a skill installed without `scripts/`) is pinned to 8080; add `Bash(curl -s http://localhost:8081/api/v1/jobs)` to `.claude/settings.json` if you rely on it. **A second copy of the kit on the same machine** (a fork next to the original, a test clone): change `SCRAPER_PORT` in its `.env`. Without Docker that is all, because each copy keeps its own `.engine/` folder. With Docker, also set `COMPOSE_PROJECT_NAME` to a name nobody else uses (`docker compose ls` lists them), as `.env.example` shows; with the default name, `docker compose up -d` takes over the other copy's container. |
+| `port is already allocated`, or Docker Desktop's `ports are not available: ... address already in use`, or something else already uses 8080 | Just updated from kit 1.x and an old container still holds it? Run `docker compose down --remove-orphans`, then `docker compose up -d`, in the kit folder. Otherwise run `cp .env.example .env` (skip it if you already have a `.env`), set `SCRAPER_PORT=8081` in it, then start the engine again (`python3 scripts/engine.py restart` or `docker compose up -d`). The engine, Compose and both scripts read the same file, so nothing else needs editing. With Docker the port inside the container stays 8080 (do not change the right-hand side of the mapping). If your `.env` still has a `SCRAPER_BASE_URL` line, delete it or update its port: it overrides `SCRAPER_PORT`. The slash commands and the skill show `localhost:8080` in their examples. Claude first runs `python3 scripts/engine.py status`, which reads the port from `.env`, is pre-approved on any port and prints the URL to use. **A second copy of the kit on the same machine** (a fork next to the original, a test clone): change `SCRAPER_PORT` in its `.env`. Without Docker that is all, because each copy keeps its own `.engine/` folder. With Docker, also set `COMPOSE_PROJECT_NAME` to a name nobody else uses (`docker compose ls` lists them), as `.env.example` shows; with the default name, `docker compose up -d` takes over the other copy's container. |
 | `422 missing max time` | Job body needs `max_time` (in **seconds**, e.g. `300`). |
 | `422 missing geo coordinates` | Only one of `lat` and `lon` was sent. Send both, as **strings** (e.g. `"30.2672"`), or neither. With neither, Google places the search by the place named in the keyword ("coffee shops in Austin TX"). |
 | `422 missing name` / `422 missing lang` | Job body needs `name` (any label) and `lang` (`"en"`). Four fields are required: `name`, `keywords`, `lang`, `max_time`. Send `lat` and `lon` together or not at all; both are recommended because they centre the map precisely. |
 | `422 invalid proxy: Chrome cannot log in to a SOCKS5 proxy` | Chrome takes no username and password on SOCKS5. Use the provider's `http://user:pass@host:port` address (URL-encode special characters), or a SOCKS5 proxy that allows your IP address. |
-| A job `failed` | Its `Error` says why: the web UI shows it under the job name, and `curl http://localhost:8080/api/v1/jobs/<id>` returns it. `scripts/scrape.py` prints it, and retries once after 60 s unless a retry cannot help. `Chrome cannot start … error while loading shared libraries`: run the `apt-get install` line in the message. `No Chrome, Chromium, Edge or Brave found`: run `python3 scripts/engine.py start`, which downloads one. `unusual-traffic page`: Google is rate-limiting your IP. The engine already waited and retried the keyword (`Waited and retried N time(s)`) and kept the rows found before that; wait, or add proxies. An error with `ERR_PROXY`, `ERR_SOCKS` or `ERR_TUNNEL`: the proxy is wrong or down. `proxy login refused: the proxy answered 407 to its username and password`: the proxy's username or password is wrong; `scripts/scrape.py` does not retry it. `the engine stopped while this job ran`: the engine crashed or was killed during this job more than 3 times; the rows it found are kept. |
+| A job `failed` | Its `Error` says why: the web UI shows it under the job name, and `scripts/scrape.py` prints it, and retries once after 60 s unless a retry cannot help. `Chrome cannot start … error while loading shared libraries`: run the `apt-get install` line in the message. `No Chrome, Chromium, Edge or Brave found`: run `python3 scripts/engine.py start`, which downloads one. `unusual-traffic page`: Google is rate-limiting your IP. The engine already waited and retried the keyword (`Waited and retried N time(s)`) and kept the rows found before that; wait, or add proxies. An error with `ERR_PROXY`, `ERR_SOCKS` or `ERR_TUNNEL`: the proxy is wrong or down. `proxy login refused: the proxy answered 407 to its username and password`: the proxy's username or password is wrong; `scripts/scrape.py` does not retry it. `the engine stopped while this job ran`: the engine crashed or was killed during this job more than 3 times; the rows it found are kept. |
 | `The engine says: stopped at max_time` | The job ran out of time and kept the rows it had. Raise `--max-time` (seconds, default 600) or lower `--depth`. |
 | `website(s) not checked: ran out of time` or `reviews read for N of M places: ran out of time` | A raw-API job's website or reviews pass stopped at the job's time limit; the rows are complete, those columns are not. Raise `max_time`. |
 | `--min-reviews ignored` | Google returned no review counts for this run. The filter is skipped to avoid dropping every row; inspect the engine log and use `--min-rating` if needed. |
@@ -321,7 +321,7 @@ curl -X DELETE http://localhost:8080/api/v1/jobs/<job-id>
 ### Upgrading from kit 1.x
 
 `bash scripts/update.sh` takes a 1.x copy to the own engine. It pulls the new kit and, when the old
-Docker engine is running, runs `docker compose up -d`: Compose removes 1.x's two containers (the
+Docker engine is running, runs `docker compose up -d --build --remove-orphans`: Compose removes 1.x's two containers (the
 engine and its `ui` web front), builds the new image (a few minutes the first time) and starts it on
 the same port. By hand: `git pull`, then `docker compose up -d --build` in the kit folder.
 

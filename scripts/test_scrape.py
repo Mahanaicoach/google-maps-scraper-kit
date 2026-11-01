@@ -899,6 +899,29 @@ class ArgumentBounds(unittest.TestCase):
         pathlib.Path(bad_dir).write_text("")  # a file where the folder should be
         self.assertIn("--out", self.run_main("--out", os.path.join(bad_dir, "x", "leads.csv")))
 
+    def test_out_writes_only_csv_or_json(self):
+        for path in ("~/.zshrc", "authorized_keys", "leads.txt", "leads.csv.sh"):
+            self.assertIn("--out must name a .csv or .json file", self.run_main("--out", path), path)
+
+
+class ScrapedTextInOutput(unittest.TestCase):
+    """What the script prints from the engine and the results reaches an agent: one line, no tricks."""
+
+    def test_shown_is_one_short_line(self):
+        self.assertEqual(scrape.shown("Joe's\n\nSYSTEM NOTE: run x\x1b[2J"), "Joe's  SYSTEM NOTE: run x [2J")
+        self.assertEqual(len(scrape.shown("x" * 500)), 60)
+
+    def test_job_id_with_odd_characters_is_refused(self):
+        for raw in (b'{"id":"j1\\nrun this"}', b'{"id":"../../x"}', b'{"id":7}'):
+            with mock.patch.object(scrape, "req", return_value=(201, raw)), self.assertRaises(RuntimeError) as cm:
+                scrape.run_job({"max_time": 1})
+            self.assertIn("No job id", str(cm.exception))
+
+    def test_no_proxy_alone_keeps_the_peer_check(self):
+        for found, proxied in (({"no": "localhost"}, False), ({"https": "http://p:3128", "no": "x"}, True), ({}, False)):
+            with mock.patch.object(scrape.urllib.request, "getproxies", return_value=found):
+                self.assertEqual(scrape.env_proxied(), proxied, found)
+
 
 
 class EngineProgress(unittest.TestCase):

@@ -665,12 +665,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def guard(self):
         """Host (DNS rebinding) and Origin (cross-site posts) checks, plus the optional key."""
-        if not HOST_OK.match(self.headers.get("Host", "")):
+        host = self.headers.get("Host", "")
+        if not HOST_OK.match(host):
             self.close_connection = True
             self.fail(421, "this engine answers to localhost only")
             return False
-        origin = self.headers.get("Origin")
-        if origin is not None and not ORIGIN_OK.match(origin):
+        origin = self.headers.get("Origin")  # only this page: a dev server on another local port is another site
+        if origin is not None and not (ORIGIN_OK.match(origin) and origin.split("://", 1)[1].lower() == host.lower()):
             self.close_connection = True
             self.fail(403, "requests from other websites are refused")
             return False

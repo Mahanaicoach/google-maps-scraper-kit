@@ -5,6 +5,8 @@
     python3 scripts/engine.py status
     python3 scripts/engine.py restart
     python3 scripts/engine.py stop
+    python3 scripts/engine.py jobs       # id, status, date, name, newest first
+    python3 scripts/engine.py delete <id>
 
 Standard library only. The engine (engine/serve.py) serves http://localhost:8080 (SCRAPER_PORT in
 .env), the same engine and API that `docker compose up -d` runs in a container. It drives an

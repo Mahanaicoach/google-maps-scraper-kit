@@ -43,7 +43,7 @@ Or use a slash command in Claude Code:
 3. Keeps the 8 lead fields (name, phone, email, website, category, address, rating and review count), then the six social columns: Instagram, Facebook, LinkedIn, TikTok, YouTube and X.
 4. Saves the file, then presents a short table and the CSV path instead of dumping every row into chat.
 
-The kit's own scripts, the exact `docker compose` forms SETUP.md uses and the engine's health check are pre-approved in `.claude/settings.json`; everything else asks as usual.
+The kit's own scripts, the exact `docker compose` forms SETUP.md uses are pre-approved in `.claude/settings.json`; everything else asks as usual.
 
 ## Example output
 

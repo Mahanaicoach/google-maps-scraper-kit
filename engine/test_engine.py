@@ -476,6 +476,7 @@ class Api(Server):
         self.assertEqual(self.call("POST", "/api/v1/jobs", GOOD, {"Origin": "https://evil.com"})[0], 403)
         self.assertEqual(self.call("POST", "/api/v1/jobs", GOOD, {"Origin": "null"})[0], 403)
         self.assertEqual(self.call("POST", "/api/v1/jobs", GOOD, {"Origin": "http://localhost.evil.com"})[0], 403)
+        self.assertEqual(self.call("POST", "/api/v1/jobs", GOOD, {"Origin": "http://localhost:3000"})[0], 403)
         self.assertEqual(self.call("POST", "/api/v1/jobs", GOOD, {"Origin": f"http://localhost:{self.port}"})[0], 201)
         self.assertEqual(self.call("GET", "/api/v1/jobs", headers={"Host": f"127.0.0.1:{self.port}"})[0], 200)
         self.assertEqual(self.call("POST", "/api/v1/jobs", raw=b"{nope")[0], 400)

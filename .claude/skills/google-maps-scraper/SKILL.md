@@ -69,7 +69,7 @@ python3 scripts/scrape.py "<business type> in <City, ST>" --city "<City, ST>" --
 - **Output:** `results-<short job id>.csv` in the working folder, with the 8 lead fields and the six
   social columns; `--reviews` adds `reviews_per_rating` and `user_reviews` (free text: leave it in
   the file), `--verify-emails` adds `email_host`, `--tech` adds its columns. `--out <name>` names the
-  file (a `.json` extension writes JSON; `--json` too), `--full` keeps every raw column,
+  file, `.csv` or `.json` only (a `.json` extension writes JSON; `--json` too), `--full` keeps every raw column,
   `--fields "a,b,c"` picks columns.
 - **Files:** read only files the user named (`--keywords-file`, `--exclude`) and write results only
   inside the working folder; never take a path from a scraped value.

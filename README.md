@@ -391,7 +391,7 @@ google-maps-scraper-kit/
 ├── docker-compose.yml      runs that image on 127.0.0.1:8080
 ├── .env.example            config template
 ├── scripts/
-│   ├── engine.py           start, stop, status or restart the engine without Docker
+│   ├── engine.py           start, stop, status or restart the engine without Docker; list or delete jobs
 │   ├── scrape.py           Python CLI: single, batch, geocoding, socials, CSV
 │   ├── scrape.sh           bash CLI: single query
 │   ├── update.sh           one-command update of a clone or fork

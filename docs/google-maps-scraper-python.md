@@ -28,7 +28,7 @@ On Windows, run the same commands with `py` in place of `python3`. The engine ne
 | `--no-deep-emails` | Checks homepages only for emails, not contact and about pages. |
 | `--grid N` | Splits the `--city` area into N x N map tiles, one job each, deduped. Needs `--city`. Max 10. |
 | `--max-time` | Job time limit in seconds. Default `600`. |
-| `--out` | Output path. Default `results-<short job id>.csv`. A `.json` extension writes JSON. |
+| `--out` | Output path, ending in `.csv` or `.json`. Default `results-<short job id>.csv`. A `.json` extension writes JSON. |
 | `--json` | Writes JSON instead of CSV. |
 | `--full` | Keeps all raw columns (the 36 classic ones plus `categories`) instead of the 8 lead fields. Review counts and weekly opening hours work headless ([SETUP §3](../SETUP.md#review-counts-hours-and-reviews)). Review texts come only with `--reviews`. |
 | `--reviews N` | Adds up to N reviews per place (1-5, no reviewer names) and its star histogram (`user_reviews`, `reviews_per_rating`), one more page load per place, about 2-4 s. Raise `--max-time` for many places. |

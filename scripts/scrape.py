@@ -251,6 +251,12 @@ def load_rows(path):
 FAILED_RETRY_WAIT = 60     # seconds before the one retry of a "failed" job (usually a passing error)
 
 
+def shown(v, n=60):
+    """Third-party text (a scraped value, the engine's Error) as one printable line of at most n
+    characters, for what the script prints into an agent's context."""
+    return "".join(c if c.isprintable() else " " for c in str(v))[:n]
+
+
 class JobFailed(RuntimeError):
     pass
 
@@ -338,7 +344,7 @@ def _run_job_once(body):
     except OSError as e:
         raise RuntimeError(f"✗ Could not reach the engine at {BASE} to create the job ({e}).")
     job_id = json.loads(raw).get("id")
-    if not job_id:
+    if not isinstance(job_id, str) or not re.fullmatch(r"[A-Za-z0-9-]{1,64}", job_id):  # it goes into URLs and file names
         raise RuntimeError("✗ No job id returned.")
     print(f"  job id: {job_id}")
     CURRENT_JOB = job_id
@@ -365,7 +371,7 @@ def _poll(body, job_id):
         _, raw = _get(f"/api/v1/jobs/{job_id}", ENGINE_RESTART_TRIES)
         job = json.loads(raw)
         # Error: why the job failed, or why an "ok" job stopped early (max_time, a Google block).
-        status, error = job.get("Status"), str(job.get("Error") or "")
+        status, error = job.get("Status"), shown(job.get("Error") or "", 600)
         progress = progress_text(job) if status in ("working", "pending") else ""
         print(f"\r  status: {str(status):<10} (attempt {i + 1}{progress})", end="", flush=True)
         if status == "ok":
@@ -395,10 +401,9 @@ def _poll(body, job_id):
     if not rows:
         raise RuntimeError(
             f"\n✗ Gave up waiting after ~{attempts * POLL_EVERY // 60} min with no rows yet (status "
-            f"\"{status}\"). The engine keeps the job, so check it later:\n"
-            f"    curl {BASE}/api/v1/jobs/{job_id}\n"
-            f"  and once its Status is \"ok\", download the CSV with\n"
-            f"    curl -o results.csv {BASE}/api/v1/jobs/{job_id}/download")
+            f"\"{status}\"). The engine keeps the job, so check it later with\n"
+            f"    python3 scripts/engine.py jobs\n"
+            f"  and once it is \"ok\", download its CSV from the web UI at {BASE}")
     raise Partial(f"\n⚠ Job still \"{status}\" after ~{attempts * POLL_EVERY // 60} min; keeping the {len(rows)} "
                   f"rows it has written. It keeps running in the engine: {BASE}/api/v1/jobs/{job_id}", job_id, rows)
 
@@ -592,9 +597,14 @@ class _PublicRedirectsOnly(urllib.request.HTTPRedirectHandler):
             return None  # urllib then raises HTTPError, which _fetch_html turns into ""
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
+
 # Behind a proxy from the environment only the resolve-time check applies (see _PublicPeer); the
 # hard stop applies either way.
-_PROXIED = bool(urllib.request.getproxies())
+def env_proxied():
+    return any(k != "no" for k in urllib.request.getproxies())  # NO_PROXY alone is no proxy
+
+
+_PROXIED = env_proxied()
 _OPENER = urllib.request.build_opener(_PublicRedirectsOnly, _PublicHTTPHandler, _PublicHTTPSHandler)
 
 def _fetch_html(url, timeout=10):
@@ -1022,6 +1032,8 @@ def main():
         sys.exit("✗ --has-email needs the email crawl: drop --no-email.")
     if a.city and (a.lat or a.lon):
         print("ℹ --city given, so the lat/lon arguments are ignored.")
+    if a.out and os.path.splitext(a.out)[1].lower() not in (".csv", ".json"):  # never a .zshrc or a key file
+        sys.exit("✗ --out must name a .csv or .json file.")
     if a.out and os.path.dirname(a.out):  # fail now, not after the scrape, if the folder is unusable
         try:
             os.makedirs(os.path.dirname(a.out), exist_ok=True)
@@ -1193,9 +1205,9 @@ def main():
     for w in dict.fromkeys(WARNINGS):
         print(f"⚠ {w}")
     print(f"  saved → {os.path.abspath(out)}  (opens in Excel or Google Sheets)")
-    for r in results[:5]:
-        tail = f" | IG:{r.get('instagram','') or '—'}" if a.socials else f" | {r.get('website','')}"
-        print(f"  • {r.get('title','')} | {r.get('phone','')} | {r.get('emails','')}{tail}")
+    for r in results[:5]:  # scraped text: one short printable line per field, never a line of its own
+        tail = f" | IG:{shown(r.get('instagram','')) or '—'}" if a.socials else f" | {shown(r.get('website',''))}"
+        print(f"  • {shown(r.get('title',''))} | {shown(r.get('phone',''))} | {shown(r.get('emails',''))}{tail}")
     if blocked:  # a non-zero exit, so an agent or a scheduled run knows the scrape was cut short
         sys.exit("⚠ Incomplete: Google is rate-limiting this IP, so the scrape stopped; the file has the "
                  "rows found before that. Wait (minutes to hours) or add proxies, then rerun with "
@@ -1216,10 +1228,9 @@ def interrupted():
             w.writerows([{k: csv_safe(r.get(k, "")) for k in LEAD} for r in SALVAGE["rows"]])
         saved = f"the {len(SALVAGE['rows'])} rows found so far are in {path} (lead fields, websites not crawled)."
     if CURRENT_JOB:
-        key = " (with the X-API-Key header from .env)" if KEY else ""
         return (f"\n✗ Stopped; {saved} Job {CURRENT_JOB} keeps running in the engine. "
-                f"Cancel it in the web UI at {BASE}, or with:\n    curl -X DELETE {BASE}/api/v1/jobs/{CURRENT_JOB}{key}")
-    return f"\n✗ Stopped; {saved} Jobs: {BASE}/api/v1/jobs"
+                f"Cancel it in the web UI at {BASE}, or with:\n    python3 scripts/engine.py delete {CURRENT_JOB}")
+    return f"\n✗ Stopped; {saved} Jobs: python3 scripts/engine.py jobs"
 
 
 if __name__ == "__main__":
