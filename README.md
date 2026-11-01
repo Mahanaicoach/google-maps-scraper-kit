@@ -13,7 +13,7 @@
   <img alt="No API keys" src="https://img.shields.io/badge/API%20keys-none-334155?style=flat-square">
 </p>
 
-<p align="center"><sub>Last verified working: 2026-10-31 with the kit's own engine on macOS, Linux (amd64 and arm64), Windows and Docker.</sub></p>
+<p align="center"><sub>Last verified working: 2026-11-01 with the kit's own engine on macOS, Linux (amd64 and arm64), Windows and Docker.</sub></p>
 
 **A free, open-source Google Maps scraper for lead generation that runs on your own machine.**
 Name a business type and a city. Get back an outreach-ready CSV with name, phone, email, website,
