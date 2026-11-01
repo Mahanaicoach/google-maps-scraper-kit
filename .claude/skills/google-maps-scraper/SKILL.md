@@ -32,7 +32,8 @@ python3 scripts/engine.py status
 It prints `✓ Running on http://localhost:<port>` only when the kit's own engine answers (it checks the
 engine's `X-Engine` header), so another program on that port cannot fool it. When the engine is not
 running it prints `✗ Not running` and exits 1; that is expected. It also names the Chrome, Chromium,
-Edge or Brave the engine will drive. Only when it names one, start the engine with
+Edge or Brave the engine will drive. If it prints a `↑ Kit vX.Y.Z is out` line, tell the user once and carry
+on; run `bash scripts/update.sh` only when the user asks. Only when it names one, start the engine with
 `python3 scripts/engine.py start`, or run `docker compose up -d` if the user runs it in Docker, then run
 `status` again. If it finds no browser, do not start it: ask the user to install Google Chrome, or to
 use Docker. Setup help: `SETUP.md` in the kit folder.

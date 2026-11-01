@@ -34,6 +34,10 @@ REPO = "https://github.com/Mahanaicoach/google-maps-scraper-kit"
 # The web UI's sponsor box: the browser reads this static file from GitHub (cached a day, no
 # tracking), so the sponsors it lists change without anyone updating their copy of the kit.
 SPONSORS = "https://raw.githubusercontent.com/Mahanaicoach/google-maps-scraper-kit/master/assets/sponsors/sponsors.json"
+# The web UI's update notice: the browser asks GitHub for the kit's latest release once a day (a
+# public JSON endpoint, nothing about the user in the request) and shows a line when it is newer
+# than this copy. Nothing updates itself: the line says to run scripts/update.sh.
+RELEASES = "https://api.github.com/repos/Mahanaicoach/google-maps-scraper-kit/releases/latest"
 # The web UI's What and Where boxes offer only these, so nobody searches for a business type or a
 # place that does not exist: presets/business-types.json (hand-picked; add a niche there) and
 # presets/cities.tsv.gz (GeoNames cities1000, CC BY 4.0: name, region, country code, lat, lon, biggest first).
@@ -259,6 +263,8 @@ a {{ color: inherit; text-underline-offset: 3px; }} a:hover {{ color: var(--go);
 h1 {{ margin: 0; font: 600 1.6rem/1.2 var(--serif); letter-spacing: -.01em; }}
 .top nav {{ display: flex; gap: 16px; font-size: .9rem; color: var(--soft); }}
 .mono {{ font-family: var(--mono); font-size: .85em; }} .soft {{ color: var(--soft); font-size: .875rem; }}
+.update {{ margin-top: 14px; padding: 10px 14px; border: 1px solid var(--rule); border-radius: 10px; background: var(--sheet); font-size: .9rem; }}
+.update code {{ font-size: .85rem; }}
 .stars {{ display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding-top: 16px; color: var(--soft); font-size: .9rem; }}
 .gh {{ display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px 14px; border-radius: 8px;
   color: var(--paper); background: var(--ink); font-size: .9rem; font-weight: 600; text-decoration: none; transition: filter .15s; }}
@@ -368,6 +374,9 @@ progress {{ display: block; width: 100%; max-width: 200px; height: 6px; margin-t
 </style></head><body><main>
 <header class="top"><h1>Google Maps Scraper Kit</h1>
 <nav><span class="mono">v{version}</span><a href="/api/docs">API docs</a></nav></header>
+<div class="update" id="update" role="status" hidden><b>Kit v<span id="up-v"></span> is out</b> (this copy is v{version}).
+  <a id="up-link" href="{repo}/releases/latest" target="_blank" rel="noopener">What changed</a> &middot;
+  update with <code>bash scripts/update.sh</code>, or <code>docker compose up -d --build</code> in Docker.</div>
 <div class="stars"><a class="gh" href="{repo}" target="_blank" rel="noopener"><span class="star"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2.5l2.9 6 6.6.8-4.9 4.6 1.3 6.6L12 17.2l-5.9 3.3 1.3-6.6L2.5 9.3l6.6-.8z"/></svg></span>Star on GitHub</a>
   <span>Useful? A star helps other people find this free kit.</span></div>
 <aside class="sponsors" id="sponsors" aria-label="Sponsors"><button type="button" class="sp-close" id="sp-close"
@@ -616,6 +625,27 @@ $('f').addEventListener('submit', async ev => {{
   finally {{ go.disabled = false; go.textContent = 'Start scraping'; load(); }}
 }});
 load(); setInterval(load, 3000);
+(function () {{  // update notice: GitHub's latest release once a day, shown only when it is newer than this copy
+  const key = 'gmskit-update', day = 86400000, mine = '{version}';
+  const num = v => (String(v).replace(/^v/, '').split('.').slice(0, 3).map(x => parseInt(x, 10) || 0));
+  const newer = (a, b) => {{ const x = num(a), y = num(b); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i]; return false; }};
+  function show(tag) {{
+    if (!/^v?\d+\.\d+\.\d+/.test(tag || '') || !newer(tag, mine)) return;
+    $('up-v').textContent = String(tag).replace(/^v/, '').slice(0, 20);
+    $('up-link').href = '{repo}/releases/tag/' + encodeURIComponent(tag);
+    $('update').hidden = false;
+  }}
+  try {{
+    const c = JSON.parse(localStorage.getItem(key) || 'null');
+    if (c && Date.now() - c.t < day) return show(c.tag);
+  }} catch (e) {{}}
+  fetch('{releases}', {{cache: 'no-store', credentials: 'omit', headers: {{Accept: 'application/vnd.github+json'}}}})
+    .then(r => r.ok ? r.json() : null).then(d => {{
+      if (!d || typeof d.tag_name !== 'string') return;
+      show(d.tag_name);
+      try {{ localStorage.setItem(key, JSON.stringify({{t: Date.now(), tag: d.tag_name}})); }} catch (e) {{}}
+    }}).catch(() => {{}});
+}})();
 (function () {{  // sponsor tiles: only the entries Mahan marks "ui": true in sponsors.json, as text, https links only
   const box = $('sponsors'), grid = $('sp-grid'), key = 'gmskit-sponsors', day = 86400000;
   $('sp-close').addEventListener('click', () => {{ box.hidden = true; }});  // as gosom: hidden until the page reloads
@@ -774,10 +804,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/":
             nonce = secrets.token_urlsafe(16)
             csp = (f"default-src 'none'; script-src 'nonce-{nonce}'; style-src 'nonce-{nonce}'; "
-                   "connect-src 'self' https://raw.githubusercontent.com; img-src 'self' data:; "
+                   "connect-src 'self' https://raw.githubusercontent.com https://api.github.com; img-src 'self' data:; "
                    "form-action 'self'; base-uri 'none'; "
                    "frame-ancestors 'none'")
-            page = PAGE.format(nonce=nonce, version=VERSION, repo=REPO, sponsors=SPONSORS, types=TYPES_JS,
+            page = PAGE.format(nonce=nonce, version=VERSION, repo=REPO, sponsors=SPONSORS, releases=RELEASES, types=TYPES_JS,
                                categories=CATEGORIES).encode()
             return self.reply(200, page, "text/html; charset=utf-8", [("Content-Security-Policy", csp)])
         self.fail(404, "not found")

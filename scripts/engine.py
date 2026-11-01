@@ -35,6 +35,11 @@ LOG_KEEP = 2_000_000  # bytes of engine.log kept across starts
 MARK = "gmskit-engine/"
 _NO_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # HTTP_PROXY must not catch localhost
 PY = "py" if os.name == "nt" else "python3"  # what the user types; the README says `py` on Windows
+# `status` tells the user when a newer kit is released: one request a day to GitHub's public releases
+# endpoint (nothing about the user in it), cached here. It only prints; scripts/update.sh updates.
+RELEASES = "https://api.github.com/repos/Mahanaicoach/google-maps-scraper-kit/releases/latest"
+RELEASE_PAGE = "https://github.com/Mahanaicoach/google-maps-scraper-kit/releases/latest"
+UPDATE_CACHE = os.path.join(HOME, "update-check.json")
 
 
 def public_port():
@@ -320,6 +325,7 @@ def status():
     if seen == "ours":
         st = read_state() or {}
         print(f"✓ Running on http://localhost:{port}" + (f"  (browser: {st['chrome']})" if st.get("chrome") else ""))
+        update_hint()
     elif seen == "other":
         print(f"ℹ Port {port} answers, but not as this kit's engine (the kit's older Docker engine, probably).")
         sys.exit(1)
@@ -327,7 +333,65 @@ def status():
         found = browser.find_chrome()
         print(f"✗ Not running. Start it with: {PY} scripts/engine.py start\n  Browser: " + (found or
               "none found, so start would download Chrome for Testing (about 100 MB, pinned by SHA-256)"))
+        update_hint()
         sys.exit(1)
+
+
+def local_version():
+    """This copy's engine version, read from engine/serve.py without importing it."""
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine", "serve.py")
+    try:
+        with open(path, encoding="utf-8") as f:
+            m = re.search(r'^VERSION = "([^"]+)"', f.read(), re.M)
+        return m.group(1) if m else ""
+    except OSError:
+        return ""
+
+
+def newer(latest, current):
+    """True when `latest` (a tag like v2.3.0) is above `current` on its first three numbers."""
+    def num(v):
+        out = []
+        for x in re.sub(r"^v", "", str(v)).split(".")[:3]:
+            m = re.match(r"\d+", x)
+            out.append(int(m.group()) if m else 0)
+        return out + [0] * (3 - len(out))
+    return num(latest) > num(current)
+
+
+def latest_release(now=None):
+    """The latest release tag, from the day's cache or one 3 s request to GitHub; "" when unknown."""
+    now = time.time() if now is None else now
+    try:
+        with open(UPDATE_CACHE, encoding="utf-8") as f:
+            c = json.load(f)
+        if now - float(c.get("t", 0)) < 86400:
+            return str(c.get("tag", ""))
+    except (OSError, ValueError, TypeError):
+        pass
+    try:
+        req = urllib.request.Request(RELEASES, headers={"Accept": "application/vnd.github+json",
+                                                        "User-Agent": "google-maps-scraper-kit"})
+        with urllib.request.urlopen(req, timeout=3) as r:
+            tag = str(json.load(r).get("tag_name", ""))
+    except Exception:  # noqa: BLE001 - offline, rate-limited, odd answer: no notice this time
+        return ""
+    try:
+        os.makedirs(HOME, exist_ok=True)
+        with open(UPDATE_CACHE, "w", encoding="utf-8") as f:
+            json.dump({"t": now, "tag": tag}, f)
+    except OSError:
+        pass
+    return tag
+
+
+def update_hint():
+    """Print one line when a newer kit is released. Off with SCRAPER_NO_UPDATE_CHECK=1 (environment or .env)."""
+    if os.environ.get("SCRAPER_NO_UPDATE_CHECK", "").strip().lower() in ("1", "true", "yes"):
+        return
+    mine, tag = local_version(), latest_release()
+    if mine and re.match(r"^v?\d+\.\d+\.\d+", tag) and newer(tag, mine):
+        print(f"↑ Kit {tag} is out (this copy is v{mine}). Update: bash scripts/update.sh  ·  {RELEASE_PAGE}")
 
 
 JOB_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
