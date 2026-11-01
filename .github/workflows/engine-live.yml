@@ -1,0 +1,127 @@
+# The kit's own engine against real Google Maps, once per platform and once in Docker: start it the
+# way a user does, run one small scrape through scripts/scrape.py, and require places back. Runs when
+# the engine or the scripts change, or by hand (Actions > engine-live > Run workflow). Headless and in
+# Docker it also requires Google's full view (review counts, reviews), which the user-agent change in
+# engine/browser.py gets. The logs print counts only: scraped names, phones and emails never reach them.
+name: engine-live
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "engine/**"
+      - "scripts/engine.py"
+      - "scripts/scrape.py"
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - ".github/workflows/engine-live.yml"
+      - ".github/live_reviews_check.py"
+permissions:
+  contents: read
+jobs:
+  live:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25  # live steps: scrape, two proxy checks, reviews headless and as a window
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: start the engine (downloads the pinned Chrome only when none is installed)
+        run: python scripts/engine.py start
+      - name: status, guards and web UI
+        run: |
+          python scripts/engine.py status
+          test "$(curl -s http://localhost:8080/api/v1/jobs)" = null
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.com' http://localhost:8080/api/v1/jobs)" = 421
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Origin: https://evil.com' -X POST -d '{}' http://localhost:8080/api/v1/jobs)" = 403
+          curl -s -X POST -d '{}' http://localhost:8080/api/v1/jobs | grep -q 'missing name'
+          curl -s http://localhost:8080/ | grep -q 'github.com/Mahanaicoach/google-maps-scraper-kit'
+          curl -s http://localhost:8080/api/docs | grep -q '<code>reviews_max</code>'
+          if curl -s http://localhost:8080/api/docs | grep -q '<script'; then exit 1; fi  # set -e ignores a "!" line
+          curl -s http://localhost:8080/api/openapi.json | grep -q '"openapi"'
+      - name: scrape (depth 2, no email crawl)
+        run: |
+          start=$(date +%s)
+          python scripts/scrape.py "coffee shops in Austin TX" 30.2672 -97.7431 --depth 2 --no-email --country us --out leads.csv > scrape.log 2>&1 || true
+          echo "seconds=$(( $(date +%s) - start ))"
+          grep -v "^  •" scrape.log | tr '\r' '\n' | grep -v "^  status:" || true
+          python - <<'PY'
+          import csv, sys
+          rows = list(csv.DictReader(open("leads.csv", encoding="utf-8-sig")))
+          fill = {k: sum(1 for r in rows if r.get(k)) for k in ("title", "phone", "website", "address", "review_rating", "review_count")}
+          print(f"places={len(rows)}", fill)
+          sys.exit(0 if rows and fill["review_count"] else 1)
+          PY
+      - name: proxy with a username and password (a local test proxy that answers 407 first)
+        run: |
+          python engine/test_proxy.py 8191 kit 'p@ss:w0rd' > proxy.log 2>&1 &
+          sleep 2
+          python scripts/scrape.py "coffee shops in Austin TX" 30.2672 -97.7431 --depth 1 --no-email --max-time 120 \
+            --proxy 'http://kit:p%40ss%3Aw0rd@127.0.0.1:8191' --out proxied.csv > proxied.log 2>&1 || true
+          grep -v "^  •" proxied.log | tr '\r' '\n' | grep -v "^  status:" || true
+          python scripts/scrape.py "coffee shops in Austin TX" 30.2672 -97.7431 --depth 1 --no-email --max-time 60 \
+            --proxy 'http://kit:wrong@127.0.0.1:8191' --out refused.csv > refused.log 2>&1 || true
+          grep -q "proxy login refused" refused.log
+          if grep -q "w0rd" .engine/engine.log; then echo "a proxy password reached the log"; exit 1; fi
+          python - <<'PY'
+          import csv, json, sys
+          rows = list(csv.DictReader(open("proxied.csv", encoding="utf-8-sig")))
+          counts = json.load(open(".engine/test-proxy.json"))
+          print(f"places={len(rows)}", counts)
+          sys.exit(0 if rows and counts["tunnels"] and counts["refused"] else 1)
+          PY
+      - name: reviews pass, headless
+        run: python .github/live_reviews_check.py headless
+      - name: reviews pass as a window (SCRAPER_HEADLESS=0)
+        # ubuntu-24.04-arm has no Chrome, only the downloaded headless shell, which cannot open a window
+        if: matrix.os != 'ubuntu-24.04-arm'
+        env:
+          SCRAPER_HEADLESS: "0"
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then  # a window needs a display
+            command -v Xvfb >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q xvfb; }
+            Xvfb :99 -screen 0 1280x900x24 > /dev/null 2>&1 &
+            export DISPLAY=:99
+          fi
+          python scripts/engine.py restart
+          python .github/live_reviews_check.py window
+      - name: engine log (counts only)
+        if: always()
+        run: cat .engine/engine.log || true
+      - name: stop
+        if: always()
+        run: python scripts/engine.py stop
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker compose up (builds the engine image), as SETUP.md says
+        run: docker compose up -d --build
+      - name: scrape (depth 2, no email crawl)
+        run: |
+          start=$(date +%s)
+          python3 scripts/scrape.py "coffee shops in Austin TX" 30.2672 -97.7431 --depth 2 --no-email --out leads.csv > scrape.log 2>&1 || true
+          echo "seconds=$(( $(date +%s) - start ))"
+          grep -v "^  •" scrape.log | tr '\r' '\n' | grep -v "^  status:" || true
+          python3 - <<'PY'
+          import csv, sys
+          rows = list(csv.DictReader(open("leads.csv", encoding="utf-8-sig")))
+          fill = {k: sum(1 for r in rows if r.get(k)) for k in ("title", "phone", "website", "address", "review_rating", "review_count")}
+          print(f"places={len(rows)}", fill)
+          sys.exit(0 if rows and fill["review_count"] else 1)
+          PY
+      - name: reviews pass in Docker
+        run: python3 .github/live_reviews_check.py docker
+      - name: engine log (counts only)
+        if: always()
+        run: docker compose logs --no-log-prefix || true
+      - if: always()
+        run: docker compose down -v

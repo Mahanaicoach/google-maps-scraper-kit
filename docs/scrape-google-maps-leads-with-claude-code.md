@@ -1,11 +1,11 @@
 # Scrape Google Maps leads with Claude Code
 
 The Google Maps Scraper Kit lets you scrape Google Maps leads with Claude Code by asking in plain English, and get back a clean table plus a CSV.
-It is free and runs locally: the agent drives a scraping engine in Docker on your machine, with no API key and no SaaS credits.
+It is free and runs locally: the agent drives the kit's own scraping engine on your machine, with no API key and no SaaS credits.
 
 ## Set it up
 
-Install Docker Desktop, then pick one option.
+Install Python 3.9 or newer and Google Chrome (or Chromium, Edge or Brave), then pick one option. Docker Desktop works too, instead of the local Chrome.
 
 Option A: open the kit folder in Claude Code. The skill and four slash commands load automatically.
 
@@ -21,7 +21,7 @@ Option B: install the skill into an agent you already use.
 npx skills add mahanaicoach/google-maps-scraper-kit
 ```
 
-The skill works with Claude Code, Codex, Cursor and any other Agent Skills-compatible tool. The slash commands are Claude Code only.
+The skill works with Claude Code, Codex, Cursor and any other Agent Skills-compatible tool. The slash commands are Claude Code only. The engine ships with the kit, so the agent still needs the kit folder to start it.
 
 ## Ask in plain language
 
@@ -38,15 +38,12 @@ Or use a slash command in Claude Code:
 
 ## What the agent does
 
-1. Runs a health check on the engine at `localhost:8080`, and starts it with `docker compose up -d` if it is down.
-2. Asks once whether you also want Instagram, Facebook and LinkedIn profiles.
-3. Builds the job with the required `max_time`, `lat` and `lon`, with emails on by default.
-4. Polls the job in the background until it finishes.
-5. Downloads the CSV.
-6. Keeps the 8 lead fields: name, phone, email, website, category, address, rating and review count.
-7. Saves the file, then presents a short table and the CSV path instead of dumping every row into chat.
+1. Runs `python3 scripts/engine.py status`, which prints the engine's URL (`localhost:8080` unless you changed `SCRAPER_PORT`) only when the kit's own engine answers, and starts it with `python3 scripts/engine.py start` (or `docker compose up -d` if you run Docker) if it is down.
+2. Runs `python3 scripts/scrape.py "<business type> in <City, ST>" --city "<City, ST>"` as a background command. The script geocodes the city, creates the job, waits for it and collects its rows, with emails and social profiles on by default. It skips the social profiles only if you say you do not want them.
+3. Keeps the 8 lead fields (name, phone, email, website, category, address, rating and review count), then the six social columns: Instagram, Facebook, LinkedIn, TikTok, YouTube and X.
+4. Saves the file, then presents a short table and the CSV path instead of dumping every row into chat.
 
-The kit's local commands and `localhost` calls are pre-approved in `.claude/settings.json`, so Claude Code does not prompt for each one.
+The kit's own scripts, the exact `docker compose` forms SETUP.md uses are pre-approved in `.claude/settings.json`; everything else asks as usual.
 
 ## Example output
 

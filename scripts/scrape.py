@@ -18,13 +18,18 @@ Whole city past Google's ~120 results per search (3 x 3 map tiles, run one at a 
 Check homepages only for emails, not contact and about pages:
     python3 scripts/scrape.py "gyms in Miami FL" --city "Miami, FL" --no-deep-emails
 
+Up to 5 reviews per place and its star histogram (one more page load per place):
+    python3 scripts/scrape.py "dentists in Austin TX" --city "Austin, TX" --reviews 3
+
 Notes:
 - Required by the API: keywords, lat/lon (strings), max_time (SECONDS). This script fills them in.
 - Geocoding uses OpenStreetMap Nominatim (free, no key). It allows ~1 request/sec and requires a
   descriptive User-Agent (set below). Do not loop it aggressively.
 """
-import argparse, csv, functools, io, ipaddress, json, math, os, re, shutil, socket, subprocess, sys, time
+import argparse, csv, functools, io, ipaddress, json, math, os, re, socket, sys, threading, time
 import html as _html, http.client, urllib.request, urllib.parse, urllib.error
+
+csv.field_size_limit(2 ** 31 - 1)  # a long cell (a description) can pass csv's 128 KB default
 from concurrent.futures import ThreadPoolExecutor
 
 # The status lines below use ▶ ✓ ℹ •, and every file this script writes can hold accented business
@@ -37,7 +42,16 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):   # not a reconfigurable stream (pytest capture, a pipe wrapper)
         pass
 
-ENV_KEYS = ("SCRAPER_BASE_URL", "SCRAPER_PORT", "SCRAPER_API_KEY", "SCRAPER_CONTAINER")
+ENV_KEYS = ("SCRAPER_BASE_URL", "SCRAPER_PORT", "SCRAPER_API_KEY")
+
+
+def _env_value(v):
+    """A .env value: quotes stripped, a trailing " # comment" dropped unless it sits inside the quotes
+    (then docker compose keeps it too). Same rule as engine/serve.py."""
+    v = v.strip()
+    if v[:1] in ("\"", "'") and v[0] in v[1:]:
+        return v[1:v.index(v[0], 1)]
+    return v.split(" #", 1)[0].strip()
 
 
 def load_env_file():
@@ -54,9 +68,8 @@ def load_env_file():
                 if line.startswith("export "):  # shell-style .env files
                     line = line[7:]
                 k, sep, v = line.partition("=")
-                k, v = k.strip(), v.split(" #", 1)[0].strip().strip("\"'")  # drop a trailing comment
-                if sep and k in ENV_KEYS:
-                    found[k] = v
+                if sep and k.strip() in ENV_KEYS:
+                    found[k.strip()] = _env_value(v)
     except OSError:
         return
     for k, v in found.items():
@@ -69,30 +82,41 @@ KEY = os.environ.get("SCRAPER_API_KEY", "")
 # The 8 lead fields: what you use to contact and qualify a lead.
 # Everything else (geo coordinates, IDs, hours, images, review blobs) is dropped by default.
 LEAD = ["title", "phone", "emails", "website", "category", "address", "review_rating", "review_count"]
-UA = "google-maps-scraper-kit/1.6 (https://github.com/Mahanaicoach/google-maps-scraper-kit)"
+UA = "google-maps-scraper-kit/2.0 (https://github.com/Mahanaicoach/google-maps-scraper-kit)"
 # Business websites fetched at once by the email crawl, --socials and --tech. They are many
 # different small sites, not Google, so this does not raise the rate-limit risk.
 SITE_WORKERS = 16
 
-POLL_EVERY = 8            # seconds between status checks
-POLL_GRACE = 120          # the engine still has to flush results and flip the status
+POLL_EVERY = 3            # seconds between status checks (the engine is local, a check is cheap)
+POLL_GRACE = 120          # past max_time: the engine's watchdog stops Chrome 90 s after it at the latest
 POLL_CEILING = 7200       # never wait longer than 2h, whatever --max-time asked for
-ENGINE_MIN_RUNTIME = 180  # the engine floors anything below this (runner/webrunner)
-# container_name in docker-compose.yml and SETUP's docker run; the one the script reads the log of
-# and restarts. SCRAPER_CONTAINER in .env for a renamed container or a second stack.
-ENGINE_CONTAINER = os.environ.get("SCRAPER_CONTAINER") or "gmaps-scraper"
+PY = "py" if os.name == "nt" else "python3"  # what the user types; the README says `py` on Windows
+RESTART = f"{PY} scripts/engine.py restart (Docker: docker compose restart)"
+# Messages of a job whose Chrome never started (engine/browser.py). Retrying fails the same way, and
+# Google has nothing to do with it.
+CHROME_START = ("No Chrome", "Chrome cannot start", "Chrome exited at once", "Could not start Chrome",
+                "Chrome did not open its DevTools port", "Could not connect to Chrome's DevTools port")
+BLOCKED = "unusual-traffic page"  # the engine's Error when Google refused this IP
+# Notes of an "ok" job whose rows are complete: only its reviews or website pass hit max_time
+WARN_NOTE = re.compile(r"(?:reviews read for \d+ of \d+ places|\d+ website\(s\) not checked): ran out of time")
+# Chrome's network errors for a proxy that failed. Matched as written: the engine's message also
+# holds the search URL, so a keyword such as "tunnel car wash" must not read as a proxy error.
+PROXY_ERROR = re.compile(r"\bERR_(?:PROXY|SOCKS|TUNNEL)_|proxy login refused")
 
 
 def poll_attempts(max_time):
     """How many status checks to make before giving up on a job.
 
     Derived from the job's own max_time, because that is how long the engine is allowed to
-    work: waiting any less abandons a job that is still running normally. The engine floors
-    max_time at ENGINE_MIN_RUNTIME, so even a tiny --max-time needs that much patience, and
-    POLL_CEILING stops an absurd value from parking the script for a day."""
-    engine_runtime = max(ENGINE_MIN_RUNTIME, int(max_time or 0))
-    budget = min(POLL_CEILING, engine_runtime + POLL_GRACE)
+    work: waiting any less abandons a job that is still running normally. POLL_CEILING stops an
+    absurd value from parking the script for a day."""
+    budget = min(POLL_CEILING, max(1, int(max_time or 0)) + POLL_GRACE)
     return max(1, budget // POLL_EVERY)
+
+
+# HTTP_PROXY from the environment must not catch the engine on this machine (the key would go to the proxy)
+_API = urllib.request.build_opener(urllib.request.ProxyHandler({})) \
+    if urllib.parse.urlparse(BASE).hostname in ("localhost", "127.0.0.1", "::1") else urllib.request.build_opener()
 
 
 def req(method, path, body=None):
@@ -101,7 +125,7 @@ def req(method, path, body=None):
         headers["X-API-Key"] = KEY
     data = json.dumps(body).encode() if body is not None else None
     r = urllib.request.Request(BASE + path, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(r, timeout=60) as resp:
+    with _API.open(r, timeout=60) as resp:
         return resp.status, resp.read()
 
 
@@ -172,234 +196,231 @@ def _keys(r, weak=False):
 
 
 def dedupe(rows, exclude=()):
-    """Keep the first row per place; drop rows already present in `exclude` (an earlier run)."""
-    seen, out = {k for r in exclude for k in _keys(r, weak=True)}, []
+    """Keep the first row per place; drop rows already present in `exclude` (an earlier run). A name
+    key (the t… ones) never joins two rows whose place_ids differ: branches and service-area listings
+    share a name and often a blank address."""
+    seen, out = {}, []
+
+    def add(r, weak):
+        for k in _keys(r, weak):
+            seen.setdefault(k, set()).add(r.get("place_id", ""))
+
+    def known(r, k):
+        ids, pid = seen.get(k), r.get("place_id", "")
+        return ids is not None and (not k.startswith("t") or not pid or "" in ids or pid in ids)
+
+    for r in exclude:
+        add(r, True)
     for r in rows:
-        if not any(k in seen for k in _keys(r, weak=True)):
-            seen.update(_keys(r)); out.append(r)
+        if not any(known(r, k) for k in _keys(r, weak=True)):
+            add(r, False); out.append(r)
     return out
+
+
+# What Excel or Sheets would run as a formula (a phone number is not), also behind quotes the guard
+# added, so "'=x" scraped as is gets one more and unguard() stays exact. engine/jobs.py has the same.
+FORMULA = re.compile(r"'*(?:[=@\t\r]|[+-](?![\d\s().-]*(?:(?i:ext\.?|x)\s*\d+)?$))")  # "+1 … ext. 12" is a phone too
+
+
+def csv_safe(v):
+    """A cell with a leading ' when a spreadsheet would run it as a formula ("=HYPERLINK(...)" in a
+    business name or review); "+1 512-555-0100" is left alone. The engine's CSV download does the same."""
+    s = "" if v is None else str(v)
+    return "'" + s if FORMULA.match(s) else s
+
+
+def unguard(rows):
+    """Undo csv_safe on rows read from a CSV (the engine's download, an earlier file), so filters,
+    --exclude and --json see the scraped text."""
+    for r in rows:
+        for k, v in r.items():
+            if isinstance(v, str) and len(v) > 1 and v[0] == "'" and FORMULA.match(v[1:]):
+                r[k] = v[1:]
+    return rows
 
 
 def load_rows(path):
     """Rows from an earlier results file, .csv or .json."""
     with open(path, encoding="utf-8-sig", newline="") as f:  # -sig: also reads the kit's own CSVs
-        rows = json.load(f) if path.lower().endswith(".json") else list(csv.DictReader(f))
+        rows = json.load(f) if path.lower().endswith(".json") else unguard(list(csv.DictReader(f)))
     if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
         raise ValueError(f"{path} is not a results file (expected a list of rows)")
     return rows
 
 
-def _local_docker():
-    return urllib.parse.urlparse(BASE).hostname in ("localhost", "127.0.0.1", "::1") \
-        and shutil.which("docker") is not None
-
-def engine_run_ended(since):
-    """True if the local engine's log shows a scraper run ending after `since` (UTC, ISO 8601).
-    The scripts run one job at a time, so that is this job's run."""
-    if not _local_docker():
-        return False
-    try:
-        out = subprocess.run(["docker", "logs", "--since", since, ENGINE_CONTAINER],
-                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return out.returncode == 0 and "scrapemate exited" in out.stdout + out.stderr
-
-def engine_error(job_id):
-    """The engine's own reason for a failed job, from the local log: "error scraping job <id>: ...".
-    A proxy typo, for example, otherwise surfaces only as a generic "failed"."""
-    if not _local_docker():
-        return ""
-    try:
-        out = subprocess.run(["docker", "logs", "--since", "15m", ENGINE_CONTAINER],
-                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
-    except (OSError, subprocess.SubprocessError):
-        return ""
-    if out.returncode != 0:
-        return ""
-    for line in reversed((out.stdout + out.stderr).splitlines()):
-        if f"error scraping job {job_id}" in line:
-            return line.split(f"job {job_id}:", 1)[-1].strip()[:200]
-    return ""
-
-def restart_engine():
-    """Restart the local engine and wait until its API answers again. Without the wait, the next
-    grid tile hit the proxy while the engine was still starting and failed with HTTP 502."""
-    if not _local_docker():
-        return False
-    try:
-        if subprocess.run(["docker", "restart", ENGINE_CONTAINER],
-                          capture_output=True, timeout=90).returncode != 0:
-            return False
-    except (OSError, subprocess.SubprocessError):
-        return False
-    for _ in range(30):  # up to a minute; it usually answers within a few seconds
-        try:
-            req("GET", "/api/v1/jobs")
-            return True
-        except Exception:
-            time.sleep(2)
-    return False
-
-def recover_stuck_job(job_id):
-    """Engine v1.18.x can finish a job, rows written, without marking it done, and then holds every
-    later job on "pending" until it restarts (gosom/google-maps-scraper#346). Keep the rows and
-    restart the local engine so the next scrape runs."""
-    rows = download_rows(job_id)
-    print(f"\n⚠ The engine finished this job but did not mark it done (gosom/google-maps-scraper#346); "
-          f"keeping its {len(rows)} rows.")
-    try:  # otherwise it sits in the job list as "working" forever, with no Download button in the web UI
-        req("DELETE", f"/api/v1/jobs/{job_id}")
-        print("  Deleted the stuck job from the engine's list; its rows are in your file.")
-    except Exception:
-        print(f"  Remove it from the job list yourself: curl -X DELETE {BASE}/api/v1/jobs/{job_id}")
-    if restart_engine():
-        print("  Restarted the engine, which would otherwise hold every later job on \"pending\".")
-    else:
-        print("  If the next scrape stays \"pending\", run: docker restart " + ENGINE_CONTAINER)
-    return rows
-
-PENDING_RESTART_AFTER = 6  # polls (~48 s) a new job may sit on "pending" before an idle engine is judged stuck
-FAILED_RETRY_WAIT = 60     # seconds before the one retry of a "failed" job (usually a passing Google block)
+FAILED_RETRY_WAIT = 60     # seconds before the one retry of a "failed" job (usually a passing error)
 
 
-def engine_idle(seconds=45):
-    """True if the local engine logged no scraper activity in the last `seconds`. A job that stays
-    "pending" on an idle engine means an earlier job (web UI, raw API) left it wedged
-    (gosom/google-maps-scraper#346); a busy engine is just finishing another job first."""
-    if not _local_docker():
-        return False
-    try:
-        out = subprocess.run(["docker", "logs", "--since", f"{seconds}s", ENGINE_CONTAINER],
-                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    # A failing `docker logs` (wrong container name, daemon down) must not read as "idle".
-    return out.returncode == 0 and "scrapemate" not in out.stdout + out.stderr
+def shown(v, n=60):
+    """Third-party text (a scraped value, the engine's Error) as one printable line of at most n
+    characters, for what the script prints into an agent's context."""
+    return "".join(c if c.isprintable() else " " for c in str(v))[:n]
 
 
 class JobFailed(RuntimeError):
     pass
 
 
+class Partial(RuntimeError):
+    """A job that ended early with some rows (job_id, rows): the caller keeps them and counts the
+    tile or place as incomplete."""
+    def __init__(self, message, job_id=None, rows=()):
+        super().__init__(message)
+        self.job_id, self.rows = job_id, list(rows)
+
+
+class Blocked(Partial):
+    """Google answered with its unusual-traffic page. More searches from this IP only extend the
+    block, so the grid and city loops stop."""
+
+
+CURRENT_JOB = None  # the job being polled, for the Ctrl-C message
+SALVAGE = {"rows": [], "job": None}  # what Ctrl-C can still save: the rows of the tiles and cities done so far
+WARNINGS = []  # engine notes on "ok" jobs (reviews cut short): printed once more in the final summary
+
+
 def run_job(body):
     """Create one engine job, poll it, download it -> (job_id, raw CSV rows). A job the engine marks
-    "failed" (usually a passing Google block) is retried once after a pause. Raises RuntimeError."""
+    "failed" is retried once after a pause, unless its Error says a retry cannot help (Chrome would
+    not start, the proxy failed, Google refused this IP). Raises RuntimeError."""
     for attempt in (1, 2):
         try:
             return _run_job_once(body)
         except JobFailed as e:
-            reason = e.args[1] if len(e.args) > 1 else engine_error(e.args[0])
-            said = f" The engine says: {reason}." if reason else ""
-            if "proxy" in reason.lower():  # a bad proxy fails the same way every time: do not retry
+            reason = e.args[1].strip().rstrip(".")
+            said = f" The engine says: {reason}." if reason else " The engine gave no reason."
+            if reason.startswith(CHROME_START):
+                raise RuntimeError(f"\n✗ Job failed: the engine could not start Chrome.{said}\n"
+                                   f"  Fix that and scrape again. If it fails the same way, restart the "
+                                   f"engine: {RESTART}")
+            if PROXY_ERROR.search(reason):
                 raise RuntimeError(f"\n✗ Job failed: the proxy did not work.{said}\n"
-                                   "  This engine needs user:pass for socks5 proxies; an http:// proxy works without.")
+                                   "  Check its host, port, username and password (or that it allows your IP "
+                                   "address).")
+            if BLOCKED in reason:
+                raise Blocked(f"\n✗ Job failed.{said}")
             if attempt == 2:
-                raise RuntimeError(f"\n✗ Job failed twice.{said} You may be rate-limited — wait or add proxies.")
-            print(f"\n⚠ Job failed.{said or ' Google may be throttling this IP.'} "
-                  f"Waiting {FAILED_RETRY_WAIT} s, then retrying once…")
+                raise RuntimeError(f"\n✗ Job failed twice.{said}\n  The engine's log has more: "
+                                   ".engine/engine.log (Docker: docker compose logs)")
+            print(f"\n⚠ Job failed.{said} Waiting {FAILED_RETRY_WAIT} s, then retrying once…")
             time.sleep(FAILED_RETRY_WAIT)
 
 
-def _get(path):
-    """GET with three tries: a poll or a download must survive a passing 502 or timeout."""
-    for attempt in range(3):
+def _get(path, tries=3):
+    """GET with retries 3 s apart: a poll or a download must survive a passing 502 or timeout."""
+    for attempt in range(tries):
         try:
             return req("GET", path)
         except urllib.error.HTTPError as e:
-            if e.code < 500 or attempt == 2:
+            if e.code < 500 or attempt == tries - 1:
                 raise
         except OSError:
-            if attempt == 2:
+            if attempt == tries - 1:
                 raise
         time.sleep(3)
 
 
-def _run_job_once(body, restarted=False):
-    since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+def progress_text(job):
+    """", keyword 2/3, 41 places, 50%" from the job's Progress (what this engine reports), or ""."""
+    p = job.get("Progress")
+    if not isinstance(p, dict) or not p.get("keywords_total"):
+        return ""
+    total = p["keywords_total"]
+    reviews = f"reading reviews {p['reviews_done']}/{p['reviews_total']}" if p.get("reviews_total") else "reading reviews"
+    where = {"reviews": reviews, "websites": "checking websites"}.get(
+        p.get("stage"), f"keyword {min(p.get('keywords_done', 0) + 1, total)}/{total}")
+    return f", {where}, {p.get('places', 0)} places, {p.get('percent', 0)}%"
+
+
+ENGINE_RESTART_TRIES = 20  # ~1 min of polls: a restarted engine resumes the job, so wait for it
+
+
+def _run_job_once(body):
+    global CURRENT_JOB
     try:
         _, raw = req("POST", "/api/v1/jobs", body)
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"✗ Create failed: HTTP {e.code} — {e.read().decode()[:200]}")
+    except OSError as e:
+        raise RuntimeError(f"✗ Could not reach the engine at {BASE} to create the job ({e}).")
     job_id = json.loads(raw).get("id")
-    if not job_id:
+    if not isinstance(job_id, str) or not re.fullmatch(r"[A-Za-z0-9-]{1,64}", job_id):  # it goes into URLs and file names
         raise RuntimeError("✗ No job id returned.")
     print(f"  job id: {job_id}")
+    CURRENT_JOB = job_id
+    try:
+        result = _poll(body, job_id)
+    except OSError as e:  # the engine went away (restart, crash) or the job was deleted mid-poll
+        CURRENT_JOB = None
+        raise RuntimeError(f"\n✗ Lost the engine while job {job_id} ran ({e}). When it starts again it resumes "
+                           f"the job from its last finished keyword; its rows: {BASE}/api/v1/jobs/{job_id}/download")
+    except Exception:
+        CURRENT_JOB = None
+        raise
+    # Not a finally: on Ctrl-C (not an Exception) the id must survive for the message in __main__.
+    CURRENT_JOB = None
+    return result
+
+
+def _poll(body, job_id):
 
     attempts = poll_attempts(body.get("max_time"))
     print(f"▶ Polling (up to ~{attempts * POLL_EVERY // 60} min)…")
-    status, ended, pending, n_rows, last_rows = None, 0, 0, None, None
+    status = None
     for i in range(attempts):
-        _, raw = _get(f"/api/v1/jobs/{job_id}")
-        status = json.loads(raw).get("Status")
-        progress = ""
-        if status == "working":  # the engine writes rows as it goes, so the download shows progress
-            try:
-                n_rows = len(download_rows(job_id))
-                progress = f", {n_rows} rows so far"
-            except Exception:
-                pass
+        _, raw = _get(f"/api/v1/jobs/{job_id}", ENGINE_RESTART_TRIES)
+        job = json.loads(raw)
+        # Error: why the job failed, or why an "ok" job stopped early (max_time, a Google block).
+        status, error = job.get("Status"), shown(job.get("Error") or "", 600)
+        progress = progress_text(job) if status in ("working", "pending") else ""
         print(f"\r  status: {str(status):<10} (attempt {i + 1}{progress})", end="", flush=True)
         if status == "ok":
-            print(); break
+            print()
+            if BLOCKED in error:  # the rows before the block are kept; searching on would extend it
+                raise Blocked(f"⚠ The engine says: {error}", job_id, download_rows(job_id))
+            if WARN_NOTE.sub("", error).strip(" ;,."):  # stopped at max_time, or keywords failed: incomplete
+                raise Partial(f"⚠ The engine says: {error}", job_id, download_rows(job_id))
+            if error:  # only the reviews pass ran out of time: the rows are complete, the reviews of the rest are not
+                WARNINGS.append(f"The engine says: {error}. The rows are complete, but the places after that "
+                                f"have no reviews; raise --max-time for the rest.")
+            return job_id, download_rows(job_id)
         if status == "failed":
-            raise JobFailed(job_id)
-        if status == "working" and not n_rows:
-            # A job the engine could not even start (a bad proxy, a driver error) stays "working"
-            # forever with no rows, and holds every later job on "pending". Read the engine's reason,
-            # drop the dead job, restart the engine and report.
-            reason = engine_error(job_id)
-            if reason:
-                try:
-                    req("DELETE", f"/api/v1/jobs/{job_id}")
-                except Exception:
-                    pass
-                restart_engine()
-                raise JobFailed(job_id, reason)
-        # Stuck (gosom#346): the engine log says the run ended and the row count has stopped moving.
-        # The second condition guards against a Docker VM clock that runs ahead of the host.
-        if status == "working" and n_rows == last_rows and engine_run_ended(since):
-            ended += 1
-            if ended > 2:  # the status normally flips within seconds of the run ending
-                return job_id, recover_stuck_job(job_id)
-        last_rows = n_rows
-        if status == "pending":
-            pending += 1
-            if pending % PENDING_RESTART_AFTER == 0 and not restarted and engine_idle():
-                # Delete the pending job first, or the restarted engine runs it as well as the new one.
-                print("\n⚠ The engine has not started this job and shows no activity: an earlier job left it "
-                      "stuck (gosom/google-maps-scraper#346). Restarting the engine and re-creating the job…")
-                try:
-                    req("DELETE", f"/api/v1/jobs/{job_id}")
-                except Exception:
-                    pass
-                if not restart_engine():
-                    raise RuntimeError(f"\n✗ The engine never started this job and could not be restarted. "
-                                       f"Run: docker restart {ENGINE_CONTAINER}")
-                return _run_job_once(body, restarted=True)
+            print()
+            try:  # the engine keeps the rows of a job it was stopped in the middle of
+                rows = download_rows(job_id)
+            except Exception:
+                rows = []
+            if rows:
+                raise Partial(f"⚠ The job failed part way ({error or 'no reason given'}); keeping its "
+                              f"{len(rows)} rows.", job_id, rows)
+            raise JobFailed(job_id, error)
         time.sleep(POLL_EVERY)
-    else:
-        # The engine writes rows as it goes, and v1.18.x can leave a finished job stuck on
-        # "working" (gosom/google-maps-scraper#346), so take whatever is on disk.
-        rows = download_rows(job_id)
-        if not rows:
-            raise RuntimeError(
-                f"\n✗ Gave up waiting after ~{attempts * POLL_EVERY // 60} min with no rows yet. The "
-                f"engine keeps the job, so check it later:\n"
-                f"    curl {BASE}/api/v1/jobs/{job_id}\n"
-                f"  and once its Status is \"ok\", download the CSV with\n"
-                f"    curl -o results.csv {BASE}/api/v1/jobs/{job_id}/download")
-        print(f"\n⚠ Job still \"{status}\" after ~{attempts * POLL_EVERY // 60} min; "
-              f"keeping the {len(rows)} rows it has written. If the next scrape stays \"pending\", "
-              f"restart the engine: docker restart {ENGINE_CONTAINER}")
-        return job_id, rows
+    # Still pending or working: the engine may have run an earlier job first. It keeps this one, so
+    # take whatever it has written.
+    rows = download_rows_or_none(job_id)
+    if not rows:
+        raise RuntimeError(
+            f"\n✗ Gave up waiting after ~{attempts * POLL_EVERY // 60} min with no rows yet (status "
+            f"\"{status}\"). The engine keeps the job, so check it later with\n"
+            f"    python3 scripts/engine.py jobs\n"
+            f"  and once it is \"ok\", download its CSV from the web UI at {BASE}")
+    raise Partial(f"\n⚠ Job still \"{status}\" after ~{attempts * POLL_EVERY // 60} min; keeping the {len(rows)} "
+                  f"rows it has written. It keeps running in the engine: {BASE}/api/v1/jobs/{job_id}", job_id, rows)
 
-    return job_id, download_rows(job_id)
+
+def download_rows_or_none(job_id):
+    """The rows so far, or None when the engine has written none (404 until its first places)."""
+    try:
+        return download_rows(job_id)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise
 
 
 def download_rows(job_id):
     _, raw = _get(f"/api/v1/jobs/{job_id}/download")
-    return list(csv.DictReader(io.StringIO(raw.decode("utf-8", "replace"))))
+    return unguard(list(csv.DictReader(io.StringIO(raw.decode("utf-8", "replace"), newline=""))))
 
 
 def collect_keywords(a):
@@ -433,12 +454,28 @@ _SKIP_HANDLE = {"", "home", "pages", "people", "help", "about", "policies", "pol
                 "plugins", "dialog", "intent", "login", "share.php", "permalink.php",
                 "p", "reel", "reels", "explore", "stories", "tv", "watch", "events",
                 "groups", "marketplace", "gaming", "photo", "hashtag", "search", "share", "i"}
+# Website builders and booking or delivery platforms link their own profiles from the sites they host:
+# those are not the business's. Kept the same in engine/jobs.py and scripts/scrape.py (a test checks).
+_SKIP_HANDLE |= {"squarespace", "wix", "wixsite", "shopify", "wordpress", "wordpressdotcom", "godaddy", "weebly",
+                 "webflow", "hubspot", "mailchimp", "yelp", "tripadvisor", "opentable", "doordash", "ubereats", "grubhub",
+                 "toasttab", "squareup"}
+
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")
 
 def _is_public_ip(ip):
+    """Public, and not an IPv6 form that wraps a private IPv4 (::ffff:10.0.0.1, 64:ff9b::7f00:1
+    through a NAT64, ::127.0.0.1). Same rule as engine/jobs.py."""
     try:
-        return ipaddress.ip_address(ip.split("%")[0]).is_global
+        a = ipaddress.ip_address(ip.split("%")[0])
     except ValueError:
         return False
+    if a.version == 6:
+        inner = a.ipv4_mapped or a.sixtofour
+        if inner is None and (a in _NAT64 or 1 < int(a) < 1 << 32):
+            inner = ipaddress.ip_address(int(a) & 0xFFFFFFFF)
+        if inner is not None:
+            a = inner
+    return a.is_global and not (a.is_multicast or getattr(a, "is_site_local", False))
 
 @functools.lru_cache(maxsize=1024)
 def _is_public_host(host):
@@ -451,10 +488,14 @@ def _is_public_host(host):
         return False
     return bool(infos) and all(_is_public_ip(i[4][0]) for i in infos)
 
+SITE_HARD = 30  # seconds a website request may take in all, then its socket is closed
+_FETCH = threading.local()  # per thread: the hard-stop timer of the connection in progress
+
 def _public_connection(address, *args, **kwargs):
     """socket.create_connection that refuses a private peer. The connect resolves the host again,
     so a DNS answer that changed after _is_public_host (rebinding) is caught here, before a byte
-    of the request is sent."""
+    of the request is sent. The socket also gets a hard deadline: its timeout is per read, so a
+    website that drips a byte at a time would otherwise hold a crawl thread for days."""
     sock = socket.create_connection(address, *args, **kwargs)
     peer = sock.getpeername()[0]
     if not _is_public_ip(peer):
@@ -462,10 +503,76 @@ def _public_connection(address, *args, **kwargs):
         raise OSError(f"refused non-public address {peer}")
     return sock
 
+def _hard_stop(conn):
+    """Arm the fetch's deadline (SITE_HARD s from _fetch_window's start, so redirect hops share it);
+    at the deadline the socket is shut down from a timer thread, which wakes a read blocked on a
+    dripping website. _fetch_window() disarms it."""
+    sock = conn.sock  # taken now: urllib sends Connection: close, so the connection drops its reference
+                      # once the response starts; the response's file keeps this same socket object
+    def kill():
+        try:
+            sock.shutdown(socket.SHUT_RDWR)  # wakes a read blocked in the fetch thread with EOF; the fetch
+        except OSError:  # thread closes the socket itself (close() here would wait on its buffer lock)
+            pass
+    _cancel_hard_stop()
+    left = getattr(_FETCH, "deadline", None)
+    t = threading.Timer(max(0.1, left - time.monotonic()) if left else SITE_HARD, kill)
+    t.daemon = True
+    t.start()
+    _FETCH.timer = t
+
+
+class _fetch_window:
+    """`with _fetch_window():` around one website or DNS request: one SITE_HARD deadline for all its
+    connections (redirect hops too), and the timer disarmed on every exit."""
+    def __enter__(self):
+        _FETCH.deadline = time.monotonic() + SITE_HARD
+
+    def __exit__(self, *exc):
+        _cancel_hard_stop()
+        _FETCH.deadline = None
+
+def _cancel_hard_stop():
+    t = getattr(_FETCH, "timer", None)
+    if t is not None:
+        t.cancel()
+        _FETCH.timer = None
+
+def _read_capped(resp, cap, seconds):
+    """Up to cap bytes of a response, for at most about `seconds`: read1 returns what has arrived
+    (read(n) would block for all n bytes), and a connection the hard stop cut keeps what came."""
+    out, end = bytearray(), time.monotonic() + seconds
+    while len(out) < cap and time.monotonic() < end:
+        try:
+            chunk = resp.read1(min(1 << 14, cap - len(out)))
+        except (OSError, ValueError, http.client.HTTPException):
+            break
+        if not chunk:
+            break
+        out += chunk
+    return bytes(out)
+
+def _ascii_url(url):
+    """The URL with a non-ASCII path or query percent-encoded (http.client refuses to send them raw):
+    a site at /контакты was silently skipped."""
+    try:
+        p = urllib.parse.urlsplit(url)
+        if p.path.isascii() and p.query.isascii():
+            return url
+        return urllib.parse.urlunsplit((p.scheme, p.netloc, urllib.parse.quote(p.path, safe="/%:@&=+$,;~!*'()"),
+                                        urllib.parse.quote(p.query, safe="=&%+/?:@;,!*'()$"), ""))
+    except ValueError:
+        return url
+
 class _PublicPeer:
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._create_connection = _public_connection
+        if not _PROXIED:  # behind a proxy the socket peer is the proxy, often on a private address
+            self._create_connection = _public_connection
+
+    def connect(self):
+        super().connect()
+        _hard_stop(self)
 
 class _PublicHTTPConnection(_PublicPeer, http.client.HTTPConnection):
     pass
@@ -484,16 +591,21 @@ class _PublicHTTPSHandler(urllib.request.HTTPSHandler):
 class _PublicRedirectsOnly(urllib.request.HTTPRedirectHandler):
     """A public site may not redirect the fetch to a private address either."""
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if urllib.parse.urlparse(newurl).scheme not in ("http", "https"):
+            return None  # urllib's ftp handler would connect past the peer check
         if not _is_public_host(urllib.parse.urlparse(newurl).hostname or ""):
             return None  # urllib then raises HTTPError, which _fetch_html turns into ""
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
-# Behind a proxy from the environment the socket peer is the proxy, often on a private address,
-# so only the resolve-time check applies there.
-_HANDLERS = [_PublicRedirectsOnly]
-if not urllib.request.getproxies():
-    _HANDLERS += [_PublicHTTPHandler, _PublicHTTPSHandler]
-_OPENER = urllib.request.build_opener(*_HANDLERS)
+
+# Behind a proxy from the environment only the resolve-time check applies (see _PublicPeer); the
+# hard stop applies either way.
+def env_proxied():
+    return any(k != "no" for k in urllib.request.getproxies())  # NO_PROXY alone is no proxy
+
+
+_PROXIED = env_proxied()
+_OPENER = urllib.request.build_opener(_PublicRedirectsOnly, _PublicHTTPHandler, _PublicHTTPSHandler)
 
 def _fetch_html(url, timeout=10):
     if not url:
@@ -503,10 +615,10 @@ def _fetch_html(url, timeout=10):
     try:
         if not _is_public_host(urllib.parse.urlparse(url).hostname or ""):
             return ""
-        r = urllib.request.Request(url, headers={
+        r = urllib.request.Request(_ascii_url(url), headers={
             "User-Agent": "Mozilla/5.0 (compatible; " + UA + ")", "Accept": "text/html"})
-        with _OPENER.open(r, timeout=timeout) as resp:
-            return resp.read(400_000).decode("utf-8", "replace")
+        with _fetch_window(), _OPENER.open(r, timeout=timeout) as resp:
+            return _read_capped(resp, 400_000, 2 * timeout).decode("utf-8", "replace")
     except Exception:
         return ""
 
@@ -556,7 +668,7 @@ def enrich_sites(results, find, fields, label, workers=None):
 # ── Optional ad and tech signals (--tech): who already spends on marketing ──────
 # Regexes from OpenLeadFinder's website layer. They run on the homepage already fetched above.
 TECH_RE = {
-    "fb_pixel":       re.compile(r"connect\.facebook\.net/[^\"']*fbevents\.js|fbq\(", re.I),
+    "fb_pixel":       re.compile(r"connect\.facebook\.net/[^\"']{0,300}fbevents\.js|fbq\(", re.I),
     "google_ads_tag": re.compile(r"googleadservices\.com|AW-\d{6,}|googleads\.g\.doubleclick\.net", re.I),
     "analytics":      re.compile(r"googletagmanager\.com/gtag|gtag\(|UA-\d{4,}|G-[A-Z0-9]{6,}", re.I),
     "bing_ads":       re.compile(r"bat\.bing\.com|window\.uetq", re.I),
@@ -570,7 +682,7 @@ CMS_RE = [
     ("squarespace", re.compile(r"static1\.squarespace|squarespace\.com", re.I)),
     ("webflow",     re.compile(r"webflow\.com", re.I)),
 ]
-VIEWPORT_RE = re.compile(r"<meta[^>]+name=[\"']viewport[\"']", re.I)
+VIEWPORT_RE = re.compile(r"<meta[^>]{1,500}name=[\"']viewport[\"']", re.I)
 TECH_FIELDS = list(TECH_RE) + ["cms", "mobile_friendly"]
 
 def _find_tech(html):
@@ -608,7 +720,8 @@ def intent_score(r):
 _LOCAL = r"[A-Za-z0-9._%+-]"
 EMAIL_RE = re.compile(rf"(?<!{_LOCAL}){_LOCAL}+@[A-Za-z0-9.-]+\.[A-Za-z]{{2,}}")
 MAILTO_RE = re.compile(r"mailto:([^\"'>\s?]+)", re.I)
-HREF_RE = re.compile(r"<a\s[^>]*?href\s*=\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", re.I | re.S)
+# Bounded quantifiers: a page of repeated "<a " made the unbounded form quadratic (12 s per 100 KB)
+HREF_RE = re.compile(r"<a\s[^>]{0,1000}?href\s*=\s*[\"']([^\"']{1,2000})[\"'][^>]{0,1000}>(.{0,5000}?)</a>", re.I | re.S)
 _JUNK_EXT = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".avif", ".css", ".js")
 _JUNK_DOMAIN = ("example", "sentry", "wixpress", "wix.com", "godaddy", "squarespace", "wordpress",
                 "domain.com", "email.com", "yourdomain", "mysite.com", "schema.org", "w3.org", "sentry.io",
@@ -656,7 +769,14 @@ def is_real_email(e):
     local, _, dom = e.rpartition("@")
     if not EMAIL_RE.fullmatch(e) or e.endswith(_JUNK_EXT):
         return False
-    return local not in _JUNK_LOCAL and not any(j in dom for j in _JUNK_DOMAIN)
+    return local not in _JUNK_LOCAL and not junk_domain(dom)
+
+
+def junk_domain(dom, junk=_JUNK_DOMAIN):
+    """An entry with a dot is a domain and its subdomains, one without is a whole label: sentry.io
+    and user@email.com are junk, sentryinsurance.com and myemail.com are not. engine/jobs.py has the same."""
+    labels = dom.split(".")
+    return any(dom == j or dom.endswith("." + j) if "." in j else j in labels for j in junk)
 
 
 # "name [at] domain [dot] com", "name (at) domain dot com" and friends, adapted from OpenLeadFinder.
@@ -722,7 +842,7 @@ def enrich_emails(results, deep=True, workers=None):
 def _doh_mx(domain):
     """MX lookup over DNS-over-HTTPS (Google's public resolver, no key) -> the JSON answer."""
     url = "https://dns.google/resolve?" + urllib.parse.urlencode({"name": domain, "type": "MX"})
-    with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=8) as r:
+    with _fetch_window(), _OPENER.open(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=8) as r:
         return json.load(r)
 
 @functools.lru_cache(maxsize=1024)
@@ -791,6 +911,11 @@ def scrape_place(a, body, city, keywords):
         print(f"▶ Creating job: {len(keywords)} keyword(s) @ {lat},{lon} depth={a.depth}")
         try:
             job_id, rows = run_job(body)
+        except Blocked:
+            raise
+        except Partial as e:  # its rows count, but the place is incomplete
+            print(str(e))
+            return e.job_id, e.rows, 1, 1
         except RuntimeError as e:
             print(str(e))
             return None, [], 0, 0
@@ -801,14 +926,26 @@ def scrape_place(a, body, city, keywords):
         print(f"▶ Cell {i}/{len(cells)} @ {cell['lat']},{cell['lon']} radius={cell['radius']}m")
         try:
             jid, cell_rows = run_job(dict(body, **cell))
+        except Blocked as e:  # keep what the tiles so far found, inside the city box, and stop
+            e.job_id = job_id or e.job_id
+            e.rows = [r for r in dedupe(rows + e.rows) if in_bbox(r, bbox)]
+            print(f"\n  ⚠ Stopped at cell {i}/{len(cells)}: the cells after it were not searched.")
+            raise
+        except Partial as e:  # its rows count, but the tile is incomplete
+            print(f"\n  ⚠ cell {i}/{len(cells)} incomplete: {str(e).strip()}")
+            skipped += 1
+            job_id, rows = job_id or e.job_id, dedupe(rows + e.rows)
+            SALVAGE["rows"], SALVAGE["job"] = dedupe(SALVAGE["rows"] + rows), SALVAGE["job"] or job_id
+            continue
         except Exception as e:
             print(f"\n  ⚠ cell {i}/{len(cells)} skipped: {str(e).strip()}")
             skipped += 1
             continue
         job_id = job_id or jid
         rows = dedupe(rows + cell_rows)
+        SALVAGE["rows"], SALVAGE["job"] = dedupe(SALVAGE["rows"] + rows), SALVAGE["job"] or job_id  # Ctrl-C keeps these
         print(f"  cell {i}/{len(cells)}: {len(cell_rows)} rows, {len(rows)} unique so far")
-    # radius does not clip results in normal mode, so tiles leak outside the city
+    # the engine does not clip results to the tile, so tiles leak outside the city
     kept = [r for r in rows if in_bbox(r, bbox)]
     print(f"  dropped {len(rows) - len(kept)} rows outside the city box")
     return job_id, kept, skipped, len(cells)
@@ -824,8 +961,9 @@ def main():
     ap.add_argument("--city", action="append",
                     help="city/place to auto-geocode for lat/lon; repeatable, one run per city into one file")
     ap.add_argument("--proxy", action="append", metavar="URL",
-                    help="proxy for the engine, repeatable: http://, https://, socks5:// or socks5h://; "
-                         "this engine needs user:pass@ for socks5; the engine rotates them")
+                    help="proxy for the engine: http://[user:pass@]host:port, https://, socks5:// or "
+                         "socks5h://host:port (no user:pass on SOCKS5); repeatable: the keywords take turns, "
+                         "and a keyword Google refuses is retried through the next one")
     ap.add_argument("--depth", type=int, default=5)
     # The engine passes this to Google as the interface language, which decides the language of
     # the category names it returns (and nudges which listings come back). It has to match the
@@ -836,6 +974,9 @@ def main():
                          "(default: en; use the local language, e.g. pt, es, de)")
     # Emails are ON by default (they're the most valuable lead field): the script crawls each
     # business website after the Maps job. --no-email skips the crawl.
+    ap.add_argument("--country", metavar="XX",
+                    help="country Google ranks and formats results for, 2 letters (default: the country "
+                         "of your IP address; e.g. us, de, br)")
     ap.add_argument("--no-email", dest="email", action="store_false", default=True,
                     help="skip the website crawl for emails (emails are on by default)")
     ap.add_argument("--no-deep-emails", dest="deep_emails", action="store_false",
@@ -846,13 +987,19 @@ def main():
     ap.add_argument("--max-time", type=int, default=600,
                     help="job time limit in SECONDS; the script waits that long for the "
                          "engine, plus a short grace (default: 600)")
+    ap.add_argument("--reviews", type=int, default=0, metavar="N",
+                    help="also read up to N reviews per place (1-5, no reviewer names) and its star "
+                         "histogram, from each place's panel: one more page load per place, about 2-4 s "
+                         "(raise --max-time for many places); adds user_reviews and reviews_per_rating")
     ap.add_argument("--out", default=None, help="output file path (default: results-<id>.csv). "
                     "The extension picks the format: .csv (default) or .json")
     ap.add_argument("--json", action="store_true", help="write JSON instead of the default CSV")
     ap.add_argument("--full", action="store_true", help="keep ALL raw columns (default: lean lead fields)")
     ap.add_argument("--fields", help="comma-separated columns to keep (overrides the default lead set)")
-    ap.add_argument("--socials", action="store_true",
-                    help="also find Instagram/Facebook/LinkedIn from each website (0 LLM tokens; slower)")
+    ap.add_argument("--no-socials", dest="socials", action="store_false", default=True,
+                    help="skip the social profiles (Instagram, Facebook, LinkedIn, TikTok, YouTube and X links on "
+                         "each website), which are on by default and cost 0 LLM tokens")
+    ap.add_argument("--socials", dest="socials", action="store_true", help=argparse.SUPPRESS)  # the old opt-in
     ap.add_argument("--tech", action="store_true",
                     help="also detect Meta Pixel, Google Ads tag, analytics, Bing, LinkedIn and TikTok "
                          "pixels, site platform and mobile support on each website, and sort by an "
@@ -863,7 +1010,8 @@ def main():
                          "(google_workspace, microsoft_365, other, none)")
     f = ap.add_argument_group("filters", "applied before the email crawl, except --has-email")
     f.add_argument("--min-rating", type=float, metavar="X", help="keep rows rated X or higher")
-    f.add_argument("--min-reviews", type=int, metavar="N", help="keep rows with N or more reviews")
+    f.add_argument("--min-reviews", type=int, metavar="N",
+                   help="keep rows with N or more reviews (ignored with a warning if all review counts are missing)")
     f.add_argument("--no-website", action="store_true", help="keep only businesses without a website")
     f.add_argument("--has-phone", action="store_true", help="keep only rows with a phone number")
     f.add_argument("--has-email", action="store_true", help="keep only rows where an email was found")
@@ -878,16 +1026,24 @@ def main():
 
     if len(a.lang) != 2 or not a.lang.isalpha():
         sys.exit(f"✗ --lang must be a 2-letter code (got {a.lang!r}); the engine rejects anything else.")
+    if a.country is not None and (len(a.country) != 2 or not a.country.isalpha()):
+        sys.exit(f"✗ --country must be a 2-letter code (got {a.country!r}), e.g. us or de.")
     if a.depth < 1:
         sys.exit("✗ --depth must be 1 or more.")
     if a.max_time < 1:
-        sys.exit("✗ --max-time must be 1 or more seconds (the engine runs a job for at least 180).")
+        sys.exit("✗ --max-time must be 1 or more seconds.")
+    if not 0 <= a.reviews <= 5:
+        sys.exit("✗ --reviews must be from 0 to 5 (the reviews a place's panel shows first).")
     if a.limit is not None and a.limit < 1:
         sys.exit("✗ --limit must be 1 or more.")
     if a.has_email and not a.email:
         sys.exit("✗ --has-email needs the email crawl: drop --no-email.")
+    if a.has_email and a.fields and not a.full and "emails" not in [c.strip() for c in a.fields.split(",")]:
+        sys.exit("✗ --has-email needs the emails column: add emails to --fields.")
     if a.city and (a.lat or a.lon):
         print("ℹ --city given, so the lat/lon arguments are ignored.")
+    if a.out and os.path.splitext(a.out)[1].lower() not in (".csv", ".json"):  # never a .zshrc or a key file
+        sys.exit("✗ --out must name a .csv or .json file.")
     if a.out and os.path.dirname(a.out):  # fail now, not after the scrape, if the folder is unusable
         try:
             os.makedirs(os.path.dirname(a.out), exist_ok=True)
@@ -913,9 +1069,9 @@ def main():
         print("    Google (clears in minutes–hours; returns empty/failed jobs meanwhile). For big or")
         print("    repeated runs, add proxies. Proceeding…\n")
 
-    # Health check. Right after `docker compose up -d` the proxy answers 502 while the engine starts
-    # (up to a minute), and the README's next line runs at once, so wait for that. Nothing listening at
-    # all (connection refused) means the stack is down: say so after 10 s, not after a minute of dots.
+    # Health check. Right after `docker compose up -d` Docker accepts connections and drops them while
+    # the engine starts (a few seconds), and the README's next line runs at once, so wait for that.
+    # Nothing listening at all (connection refused) means no engine: say so after 10 s, not a minute.
     refused, err = 0, None
     for i in range(30):
         try:
@@ -934,52 +1090,70 @@ def main():
         print("\r  waiting for the engine to start" + "." * (i + 1), end="", flush=True)
         time.sleep(2)
     if err is not None:
-        sys.exit(f"\n✗ Scraper not reachable at {BASE}. Is Docker Desktop open? Start the engine with "
-                 f"'docker compose up -d' in the kit folder, wait 10 seconds, then try again.\n  ({err})")
+        sys.exit(f"\n✗ Scraper not reachable at {BASE}. Start the engine in the kit folder with "
+                 f"'{PY} scripts/engine.py start' (or 'docker compose up -d' with Docker Desktop open), "
+                 f"then try again.\n  ({err})")
     if i:
         print()
 
     body = {"keywords": keywords, "lang": a.lang, "zoom": 15,
             "fast_mode": False, "radius": 10000,
-            # The engine's own email pass visits every website in a browser, one per worker: it took
-            # most of each job and found fewer emails than the crawl below (OpenLeadFinder's
-            # approach), so the engine only reads Google Maps.
+            # The engine's own email pass reads homepages only; the crawl below also reads contact and
+            # about pages and decodes obfuscated addresses, so the engine only reads Google Maps.
             "depth": a.depth, "email": False, "max_time": a.max_time}
+    if a.reviews:
+        body["reviews_max"] = a.reviews
     if a.proxy:
         body["proxies"] = a.proxy
-    job_id, rows, skipped, ncells, failed_places = None, [], 0, 0, 0
+    if a.country:
+        body["country"] = a.country.lower()
+    job_id, rows, skipped, ncells, failed_places, blocked = None, [], 0, 0, 0, False
     for city in cities:  # one place at a time, like the grid tiles
-        jid, place_rows, s, n = scrape_place(a, body, city, keywords)
+        try:
+            jid, place_rows, s, n = scrape_place(a, body, city, keywords)
+        except Blocked as e:
+            print(str(e))
+            job_id, rows, blocked = job_id or e.job_id, dedupe(rows + e.rows), True
+            break
         job_id, skipped, ncells = job_id or jid, skipped + s, ncells + n
         failed_places += jid is None
         rows = dedupe(rows + place_rows)
+        SALVAGE["rows"], SALVAGE["job"] = rows, job_id
     if job_id is None:
         sys.exit("✗ No job finished; the reason is in the ✗ line above.")
     if failed_places:
         print(f"⚠ Incomplete: {failed_places} of {len(cities)} places returned nothing (see the ✗ lines above).")
     for r in rows:
         r["website"] = clean_website(r.get("website", ""))
+    if a.min_reviews and rows and not any(r.get("review_count") for r in rows):
+        # Missing counts read as 0 and would otherwise drop every row.
+        print("⚠ --min-reviews ignored: Google returned no review_count values, so the filter would drop "
+              "every row. --min-rating works.")
+        a.min_reviews = None
     before = len(rows)
     rows = [r for r in dedupe(rows, exclude=excluded) if keep_row(r, a)]
     if len(rows) != before:
         print(f"  filters and --exclude kept {len(rows)} of {before} rows")
     if a.limit and not a.has_email:
         rows = rows[:a.limit]
+    SALVAGE["rows"] = rows  # Ctrl-C in the crawl below keeps the filtered rows, not the raw ones
     if a.full:
         fields = list(rows[0].keys()) if rows else LEAD
     elif a.fields:
         fields = [c.strip() for c in a.fields.split(",") if c.strip()]
     else:
         fields = LEAD
-    if a.has_email and "emails" not in fields:
-        sys.exit("✗ --has-email needs the emails column: add emails to --fields.")
+    if a.reviews and not a.full:  # the page loads were paid for: keep what they read
+        fields = fields + [c for c in ("reviews_per_rating", "user_reviews") if c not in fields]
     if before and not rows:
         print(f"⚠ Nothing left: the filters and --exclude dropped all {before} rows. Loosen them and rerun; "
               f"the file below has only a header.")
     else:
-        print(f"✓ Done — {len(rows)} businesses (fields: {', '.join(fields)}).")
+        extra = f", then {', '.join(SOCIAL_FIELDS)}" if a.socials and not a.full else ""  # added after the crawl
+        print(f"✓ Done — {len(rows)} businesses (fields: {', '.join(fields)}{extra}).")
     if skipped:
-        print(f"⚠ Incomplete: {skipped} of {ncells} tiles failed, so parts of the area are missing. Rerun later.")
+        print(f"⚠ Incomplete: {skipped} of {ncells} tiles or places failed or stopped early, so parts of the "
+              f"area are missing. Rerun later.")
 
     if a.email and "emails" in fields and not a.no_website:  # no website, nothing to crawl
         pages = "homepage, then contact and about pages" if a.deep_emails else "homepage only"
@@ -1029,7 +1203,7 @@ def main():
             with open(path, "w", newline="", encoding="utf-8-sig") as f:
                 w = csv.DictWriter(f, fieldnames=fields)
                 w.writeheader()
-                w.writerows(results)
+                w.writerows([{k: csv_safe(v) for k, v in r.items()} for r in results])
     try:
         write(out)
     except OSError as e:  # the target is locked (open in Excel) or unwritable: never lose a finished scrape
@@ -1037,14 +1211,39 @@ def main():
         print(f"⚠ Could not write {out} ({e.strerror}); writing {fallback} instead.")
         out = fallback
         write(out)
+    for w in dict.fromkeys(WARNINGS):
+        print(f"⚠ {w}")
     print(f"  saved → {os.path.abspath(out)}  (opens in Excel or Google Sheets)")
-    for r in results[:5]:
-        tail = f" | IG:{r.get('instagram','') or '—'}" if a.socials else f" | {r.get('website','')}"
-        print(f"  • {r.get('title','')} | {r.get('phone','')} | {r.get('emails','')}{tail}")
+    for r in results[:5]:  # scraped text: one short printable line per field, never a line of its own
+        tail = f" | IG:{shown(r.get('instagram','')) or '—'}" if a.socials else f" | {shown(r.get('website',''))}"
+        print(f"  • {shown(r.get('title',''))} | {shown(r.get('phone',''))} | {shown(r.get('emails',''))}{tail}")
+    if blocked:  # a non-zero exit, so an agent or a scheduled run knows the scrape was cut short
+        sys.exit("⚠ Incomplete: Google is rate-limiting this IP, so the scrape stopped; the file has the "
+                 "rows found before that. Wait (minutes to hours) or add proxies, then rerun with "
+                 "--exclude on this file to get only the rest.")
+    if skipped or failed_places:  # the ⚠ Incomplete line above says what is missing; exit 0 means complete
+        sys.exit(1)
+
+
+def interrupted():
+    """The Ctrl-C message. A grid or multi-city run stopped between tiles keeps what the finished
+    ones found, in a -partial.csv with the lead fields (the websites were not crawled yet)."""
+    saved = "nothing was saved."
+    if SALVAGE["rows"]:
+        path = f"results-{(SALVAGE['job'] or 'partial')[:8]}-partial.csv"
+        with open(path, "w", newline="", encoding="utf-8-sig") as f:
+            w = csv.DictWriter(f, fieldnames=LEAD)
+            w.writeheader()
+            w.writerows([{k: csv_safe(r.get(k, "")) for k in LEAD} for r in SALVAGE["rows"]])
+        saved = f"the {len(SALVAGE['rows'])} rows found so far are in {path} (lead fields, websites not crawled)."
+    if CURRENT_JOB:
+        return (f"\n✗ Stopped; {saved} Job {CURRENT_JOB} keeps running in the engine. "
+                f"Cancel it in the web UI at {BASE}, or with:\n    python3 scripts/engine.py delete {CURRENT_JOB}")
+    return f"\n✗ Stopped; {saved} Jobs: python3 scripts/engine.py jobs"
 
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        sys.exit(f"\n✗ Stopped. A job already created keeps running in the engine; list jobs at {BASE}/api/v1/jobs")
+        sys.exit(interrupted())

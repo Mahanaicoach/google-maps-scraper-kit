@@ -1,14 +1,14 @@
 {
-  "_comment": "Reference request body for POST /api/v1/jobs. Copy the 'job' object and edit it. Required fields: name, keywords, lang, lat and lon (strings), max_time (seconds). This sample keeps email false, like the kit's scripts, which crawl the websites themselves; set email true only when you call the API directly and want the engine's slower email pass. Set proxies to an array of proxy URLs for large or repeated runs.",
+  "_comment": "Reference request body for POST /api/v1/jobs. Copy the 'job' object and edit it. Required fields: name, keywords, lang, max_time (seconds). lat and lon (strings) go together or not at all. This sample keeps email false, like the kit's scripts, which crawl the websites themselves; set email true only when you call the API directly, and the engine reads each business homepage for emails. Set proxies to an array of proxy URLs for large or repeated runs (http://user:pass@host:port works; SOCKS5 only without user:pass); the keywords take turns, and a keyword Google refuses is retried through the next one.",
   "job": {
     "name": "my scrape",
-    "keywords": ["coffee shops in Austin TX"],
+    "keywords": [
+      "coffee shops in Austin TX"
+    ],
     "lang": "en",
     "zoom": 15,
     "lat": "30.2672",
     "lon": "-97.7431",
-    "fast_mode": false,
-    "radius": 10000,
     "depth": 5,
     "email": false,
     "max_time": 300,
@@ -22,10 +22,25 @@
     "wedding photographers in Nashville TN"
   ],
   "city_coordinates_cheatsheet": {
-    "Austin, TX": ["30.2672", "-97.7431"],
-    "Miami, FL": ["25.7617", "-80.1918"],
-    "Denver, CO": ["39.7392", "-104.9903"],
-    "New York, NY": ["40.7128", "-74.0060"],
-    "Los Angeles, CA": ["34.0522", "-118.2437"]
+    "Austin, TX": [
+      "30.2672",
+      "-97.7431"
+    ],
+    "Miami, FL": [
+      "25.7617",
+      "-80.1918"
+    ],
+    "Denver, CO": [
+      "39.7392",
+      "-104.9903"
+    ],
+    "New York, NY": [
+      "40.7128",
+      "-74.0060"
+    ],
+    "Los Angeles, CA": [
+      "34.0522",
+      "-118.2437"
+    ]
   }
 }

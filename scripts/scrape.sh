@@ -27,4 +27,4 @@ done
 SLUG="$(printf '%s' "$KEYWORD" | tr ' /' '__' | tr -cd 'A-Za-z0-9_-')"
 [ -n "$SLUG" ] || SLUG="$(date +%Y%m%d-%H%M%S)"
 OUT="results-$SLUG.csv"
-exec "$PY" "$(dirname "$0")/scrape.py" "$KEYWORD" "$LAT" "$LON" --depth "$DEPTH" --out "$OUT"
+exec "$PY" "$(dirname "$0")/scrape.py" --depth "$DEPTH" --out "$OUT" -- "$KEYWORD" "$LAT" "$LON"
