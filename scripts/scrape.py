@@ -627,12 +627,23 @@ def _fetch_cached(url):
     """Homepage fetch shared by the email crawl, --socials and --tech (one fetch per site)."""
     return _fetch_html(url, timeout=8)
 
+_BROWSER_BUDGET = None
+_BROWSER_LOCK = threading.Lock()
+
+
 @functools.lru_cache(maxsize=128)
 def _render_site(url):
     """Rendered homepages shared by email and social extraction during this CLI run."""
-    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine"))
-    from website_browser import render
-    return render(url, _is_public_ip)
+    global _BROWSER_BUDGET
+    engine_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine")
+    if engine_dir not in sys.path:
+        sys.path.insert(0, engine_dir)
+    from website_browser import Budget
+    with _BROWSER_LOCK:
+        if _BROWSER_BUDGET is None:
+            _BROWSER_BUDGET = Budget()
+        budget = _BROWSER_BUDGET
+    return budget.fetch(url, _is_public_ip)
 
 
 def _find_socials(html):
@@ -665,21 +676,25 @@ def _each_site(todo, work, label, workers=None):
     print(f"  ({failed} skipped after an error)" if failed else "")
 
 def enrich_sites(results, find, fields, label, workers=None, browser_sites=False):
-    """Merge find(homepage html) into every lead that has a website. Zero LLM tokens."""
-    for r in results:                       # make sure every row has the keys
+    """Finish the HTTP pass before browser retries, so retries never occupy HTTP worker slots."""
+    for r in results:
         for k in fields:
             r.setdefault(k, "")
     def work(r):
         page = _fetch_cached(r["website"])
         found = find(page)
-        if browser_sites and not any(found.values()):
+        if browser_sites:
+            r.setdefault("website_fetch_status", "http" if page else "error")
+        r.update(found)
+    todo = [r for r in results if r.get("website")]
+    _each_site(todo, work, label, workers)
+    if browser_sites:
+        def retry(r):
             rendered = _render_site(r["website"])
             r["website_fetch_status"] = rendered["status"]
-            found = find(page + "\n" + rendered["html"])
-        elif browser_sites:
-            r.setdefault("website_fetch_status", "http")
-        r.update(found)
-    _each_site([r for r in results if r.get("website")], work, label, workers)
+            r.update({k: v for k, v in find(rendered["html"]).items() if v})
+        _each_site([r for r in todo if not any(r.get(k) for k in fields)],
+                   retry, "browser " + label, workers=2)
 
 
 # ── Optional ad and tech signals (--tech): who already spends on marketing ──────
@@ -843,7 +858,7 @@ def contact_links(html, base_url):
     return out[:3]
 
 def enrich_emails(results, deep=True, workers=None, browser_sites=False):
-    """Fill empty `emails` from the homepage, then (deep) up to 3 contact/about pages. Zero LLM tokens."""
+    """Finish all HTTP email lookups before bounded browser retries for still-empty rows."""
     def work(r):
         site = r["website"]
         home = _fetch_cached(site)
@@ -851,21 +866,29 @@ def enrich_emails(results, deep=True, workers=None, browser_sites=False):
         if deep and home and not found:
             pages = "\n".join(_fetch_html(u, timeout=8) for u in contact_links(home, site))
             found = extract_emails(pages, site)
-        if browser_sites and not found:
+        if browser_sites:
+            r.setdefault("website_fetch_status", "http" if home else "error")
+        r["emails"] = ", ".join(found)
+    todo = [r for r in results if r.get("website") and not r.get("emails")]
+    _each_site(todo, work, "emails", workers)
+    if browser_sites:
+        def retry(r):
+            site = r["website"]
             rendered = _render_site(site)
             r["website_fetch_status"] = rendered["status"]
-            rendered_home = rendered["html"]
-            found = extract_emails(rendered_home, site)
-            if deep and rendered_home and not found:
-                for url in contact_links(rendered_home, site):
+            home = rendered["html"]
+            found = extract_emails(home, site)
+            if deep and home and not found:
+                for url in contact_links(home, site):
                     contact = _render_site(url)
+                    if contact["status"] == "budget_exhausted":
+                        r["website_fetch_status"] = "budget_exhausted"
+                        break
                     found = extract_emails(contact["html"], site)
                     if found:
                         break
-        elif browser_sites:
-            r.setdefault("website_fetch_status", "http")
-        r["emails"] = ", ".join(found)
-    _each_site([r for r in results if r.get("website") and not r.get("emails")], work, "emails", workers)
+            r["emails"] = ", ".join(found)
+        _each_site([r for r in todo if not r.get("emails")], retry, "browser emails", workers=2)
 
 
 # ── Optional email domain check (--verify-emails): can the domain receive mail, and who hosts it ──
@@ -982,6 +1005,7 @@ def scrape_place(a, body, city, keywords):
 
 
 def main():
+    global _BROWSER_BUDGET
     ap = argparse.ArgumentParser(description="Scrape Google Maps business listings.")
     ap.add_argument("keyword", nargs="?", help='e.g. "coffee shops in Austin TX"')
     ap.add_argument("lat", nargs="?", help="latitude (optional if --city given)")
@@ -1060,6 +1084,7 @@ def main():
         except RuntimeError as e:
             sys.exit(f"✗ {e}")
         _render_site.cache_clear()
+        _BROWSER_BUDGET = None
 
 
     keywords = collect_keywords(a)

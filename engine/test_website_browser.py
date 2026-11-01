@@ -45,7 +45,35 @@ class PublicProxy(unittest.TestCase):
                 web.check_available()
 
 
+class BrowserBudget(unittest.TestCase):
+    def test_expired_budget_skips_browser_and_caps_each_page(self):
+        with patch.object(web.time, "monotonic", return_value=100) as clock, \
+             patch.object(web, "render", return_value={"html": "ok", "status": "rendered"}) as render:
+            budget = web.Budget(30)
+            budget.fetch("https://fixture-business.test", jobs._public_ip)
+            self.assertEqual(render.call_args.kwargs["timeout"], 20)
+            clock.return_value = 128
+            budget.fetch("https://fixture-business.test/contact", jobs._public_ip)
+            self.assertEqual(render.call_args.kwargs["timeout"], 2)
+            clock.return_value = 131
+            self.assertEqual(budget.fetch("https://fixture-business.test/about", jobs._public_ip)["status"], "budget_exhausted")
+            self.assertEqual(render.call_count, 2)
+
+
 class WebsiteEnrichment(unittest.TestCase):
+    def test_all_http_work_finishes_before_browser_retries(self):
+        rows = [{"website": f"https://fixture-{i}.test", "emails": ""} for i in range(20)]
+        fetched = []
+        def http(url):
+            fetched.append(url)
+            return ""
+        def render(*a, **kw):
+            self.assertEqual(len(fetched), len(rows))
+            return {"html": "", "status": "blocked"}
+        with patch.object(web, "render", side_effect=render) as browser:
+            jobs.add_site_data(rows, 5, browser_sites=True, get=http)
+        self.assertEqual(browser.call_count, len(rows))
+
     def test_engine_retries_empty_http_for_emails_and_socials_once(self):
         html = '<a href="mailto:hello@fixture-business.test">Email</a><a href="https://instagram.com/fixture_business">IG</a>'
         rows = [{'website': 'https://fixture-business.test', 'emails': ''}]

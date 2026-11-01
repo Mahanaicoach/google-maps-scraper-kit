@@ -1090,6 +1090,23 @@ class AuditGuards(unittest.TestCase):
         self.assertEqual(scrape._env_value("'q'"), "q")
 
 class BrowserSites(unittest.TestCase):
+    def setUp(self):
+        scrape._render_site.cache_clear()
+        scrape._BROWSER_BUDGET = None
+
+    def test_http_pass_completes_before_browser_retries(self):
+        rows = [{"website": f"https://fixture-{i}.test", "emails": ""} for i in range(20)]
+        fetched = []
+        def http(url):
+            fetched.append(url)
+            return ""
+        def render(url):
+            self.assertEqual(len(fetched), len(rows))
+            return {"html": "", "status": "blocked"}
+        with mock.patch.object(scrape, "_fetch_cached", side_effect=http), \
+             mock.patch.object(scrape, "_render_site", side_effect=render), redirect_stdout(io.StringIO()):
+            scrape.enrich_emails(rows, browser_sites=True)
+
     def test_cli_flag_keeps_rendered_results_and_status_in_csv(self):
         sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine"))
         import website_browser

@@ -97,7 +97,7 @@ Illustrative rows. The file also has six social columns after these eight (see b
 
 `--browser-sites` enables optional Playwright retries when HTTP finds no emails or social profile
 links. It renders JavaScript and shares the rendered homepage between both passes. Output adds
-`website_fetch_status`: `http`, `rendered`, `blocked`, `timeout` or `error`.
+`website_fetch_status`: `http`, `rendered`, `blocked`, `timeout`, `budget_exhausted` or `error`.
 See [optional setup](SETUP.md#optional-website-rendering-playwright).
 
 The social columns `instagram`, `facebook`, `linkedin`, `tiktok`, `youtube` and `x` come after the eight

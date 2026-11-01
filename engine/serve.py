@@ -28,7 +28,7 @@ for _stream in (sys.stdout, sys.stderr):  # ✓ and accented names on a Windows 
     except (AttributeError, ValueError):
         pass
 
-VERSION = "2.0.1-dev.1"
+VERSION = "2.0.1-dev.2"
 MARK = f"gmskit-engine/{VERSION}"  # X-Engine header: tells scripts/engine.py this engine from others
 REPO = "https://github.com/Mahanaicoach/google-maps-scraper-kit"
 # The web UI's sponsor box: the browser reads this static file from GitHub (cached a day, no

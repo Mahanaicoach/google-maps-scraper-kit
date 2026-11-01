@@ -15,6 +15,21 @@ _SLOTS = threading.BoundedSemaphore(2)
 SETUP = "Install optional rendering with: python3 -m pip install -r requirements-browser.txt"
 
 
+class Budget:
+    """One shared browser-retry allowance, started only when the first retry is needed."""
+    def __init__(self, seconds=30):
+        self.seconds, self.deadline, self.lock = seconds, None, threading.Lock()
+
+    def fetch(self, url, public_ip):
+        with self.lock:
+            if self.deadline is None:
+                self.deadline = time.monotonic() + self.seconds
+            left = self.deadline - time.monotonic()
+        if left <= 0:
+            return {"html": "", "status": "budget_exhausted"}
+        return render(url, public_ip, timeout=min(20, left))
+
+
 def check_available():
     try:
         from playwright.sync_api import sync_playwright  # noqa: F401

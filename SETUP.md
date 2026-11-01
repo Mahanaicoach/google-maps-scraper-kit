@@ -230,9 +230,13 @@ On Windows, use `py -m venv .engine/playwright-venv`, activate with
   virtual environment's Python so it can import Playwright. The API website pass reads homepages.
 - Web UI: select **Render websites (Playwright)**. Missing optional dependencies are reported before
   a job starts. The stock Docker image does not install this optional package.
-- HTTP results are retained. At most two browser retries run concurrently, with a 20-second budget
-  per page. Browsers use fresh contexts, block image/media/font downloads, and close after use.
-- `website_fetch_status` records `http`, `rendered`, `blocked`, `timeout` or `error`. A rendered page
+- HTTP lookups finish before browser retries, so slow retries never occupy HTTP worker slots.
+  At most two browser retries run concurrently. Each page gets at most 20 seconds; the CLI shares
+  a 30-second browser budget between emails, contact pages and socials. The API also caps retries
+  at 30 seconds or its remaining website-pass time, whichever is less. Browser cleanup can add a
+  little overhead. Once exhausted, remaining retries report `budget_exhausted` rather than adding
+  more page waits. Browsers use fresh contexts, block image/media/font downloads, and close after use.
+- `website_fetch_status` records `http`, `rendered`, `blocked`, `timeout`, `budget_exhausted` or `error`. A rendered page
   may contain no published contact information. Authentication, CAPTCHA and access denials can
   remain unavailable; the renderer does not solve them.
 
