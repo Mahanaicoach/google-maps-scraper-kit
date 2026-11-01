@@ -43,8 +43,23 @@ SPONSORS = "https://raw.githubusercontent.com/Mahanaicoach/google-maps-scraper-k
 CATEGORIES = ("https://raw.githubusercontent.com/lobstrio/google-business-categories/"
               "4ee1c4788d07c812a32986177c2a51c28957062f/data/google-business-categories.txt")
 PRESETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "presets")
-with open(os.path.join(PRESETS, "business-types.json"), encoding="utf-8") as _f:
-    TYPES = json.load(_f)
+
+
+def load_types(folder=None):
+    """The What list; [] with one warning when the file is missing or broken, so the API and the scripts
+    still work (only the web UI's What box is empty)."""
+    try:
+        with open(os.path.join(folder or PRESETS, "business-types.json"), encoding="utf-8") as f:
+            types = json.load(f)
+        if not isinstance(types, list):
+            raise ValueError("not a list")
+        return types
+    except (OSError, ValueError) as e:
+        print(f"presets/business-types.json unusable ({e.__class__.__name__}): the What box will be empty", file=sys.stderr)
+        return []
+
+
+TYPES = load_types()
 TYPES_JS = json.dumps(TYPES).replace("</", "<\\/")  # the What list, inlined in the page script
 _cities, _cities_lock = None, threading.Lock()
 ENV_KEYS = ("SCRAPER_PORT", "SCRAPER_API_KEY", "SCRAPER_HEADLESS")
@@ -83,11 +98,14 @@ def cities():
     with _cities_lock:
         if _cities is None:
             rows = []
-            with gzip.open(os.path.join(PRESETS, "cities.tsv.gz"), "rt", encoding="utf-8") as f:
-                for line in f:
-                    name, admin, cc, lat, lon = line.rstrip("\n").split("\t")
-                    label = ", ".join([name] + ([admin] if admin and admin != name else []) + [cc])
-                    rows.append("\t".join((fold(label), label, lat, lon, cc)))
+            try:
+                with gzip.open(os.path.join(PRESETS, "cities.tsv.gz"), "rt", encoding="utf-8") as f:
+                    for line in f:
+                        name, admin, cc, lat, lon = line.rstrip("\n").split("\t")
+                        label = ", ".join([name] + ([admin] if admin and admin != name else []) + [cc])
+                        rows.append("\t".join((fold(label), label, lat, lon, cc)))
+            except (OSError, EOFError, ValueError) as e:  # missing, truncated or odd file: what was read, once
+                log(f"presets/cities.tsv.gz unusable after {len(rows)} cities ({e.__class__.__name__})")
             _cities = rows
     return _cities
 

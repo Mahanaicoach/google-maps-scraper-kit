@@ -1292,6 +1292,22 @@ class Presets(Server):
         self.assertEqual(code, 200)
         return json.loads(body)
 
+    def test_broken_preset_files_do_not_take_the_engine_down(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        self.assertEqual(serve.load_types(tmp), [])  # no file
+        with open(os.path.join(tmp, "business-types.json"), "w") as f:
+            f.write("{not json")
+        self.assertEqual(serve.load_types(tmp), [])
+        with open(os.path.join(tmp, "cities.tsv.gz"), "wb") as f:  # the real file cut short
+            with open(os.path.join(serve.PRESETS, "cities.tsv.gz"), "rb") as g:
+                f.write(g.read(5000))
+        with unittest.mock.patch.object(serve, "PRESETS", tmp), unittest.mock.patch.object(serve, "_cities", None):
+            code, body, _ = self.call("GET", "/api/v1/cities?q=aus")
+            self.assertEqual(code, 200)
+            self.assertIsInstance(json.loads(body), list)
+            self.assertEqual(self.call("GET", "/api/v1/jobs")[0], 200)
+
     def test_where(self):
         top = self.cities("")  # nothing typed: the biggest US cities
         self.assertEqual((len(top), top[0]["label"]), (20, "New York City, New York, US"))

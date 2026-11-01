@@ -82,7 +82,7 @@ KEY = os.environ.get("SCRAPER_API_KEY", "")
 # The 8 lead fields: what you use to contact and qualify a lead.
 # Everything else (geo coordinates, IDs, hours, images, review blobs) is dropped by default.
 LEAD = ["title", "phone", "emails", "website", "category", "address", "review_rating", "review_count"]
-UA = "google-maps-scraper-kit/1.6 (https://github.com/Mahanaicoach/google-maps-scraper-kit)"
+UA = "google-maps-scraper-kit/2.0 (https://github.com/Mahanaicoach/google-maps-scraper-kit)"
 # Business websites fetched at once by the email crawl, --socials and --tech. They are many
 # different small sites, not Google, so this does not raise the rate-limit risk.
 SITE_WORKERS = 16

@@ -381,10 +381,10 @@ class TechSignals(unittest.TestCase):
 class EmailCrawl(unittest.TestCase):
     def test_template_junk_dropped(self):
         # Placeholders and a JSON-escaped prefix seen on real Austin coffee-shop sites.
-        html = ("user@domain.com example@gmail.com hello@funkysolcoffee.com "
-                "\\u003eorders@desnudo.com orders@desnudo.com")
-        self.assertEqual(scrape.extract_emails(html, "funkysolcoffee.com"),
-                         ["hello@funkysolcoffee.com", "orders@desnudo.com"])
+        html = ("user@domain.com example@gmail.com hello@cafe-one.test "
+                "\\u003eorders@bakery-two.test orders@bakery-two.test")
+        self.assertEqual(scrape.extract_emails(html, "cafe-one.test"),
+                         ["hello@cafe-one.test", "orders@bakery-two.test"])
         # Seen in a new-user test run: an image name and a site-builder placeholder.
         self.assertEqual(scrape.extract_emails("hero@2x-1.avif info@mysite.com", "x.com"), [])
 
@@ -421,7 +421,7 @@ class IsRealEmail(unittest.TestCase):
                   "name@company.org", "a@b.wixpress.com", "logo@2x.png",
                   "support@linktr.ee", "help@sites.officite.com"):  # seen in audit runs
             self.assertFalse(scrape.is_real_email(e), e)
-        for e in ("info@acmeplumbing.com", "owner@gmail.com", "hello@funkysol.co.uk"):
+        for e in ("info@acmeplumbing.test", "owner@gmail.com", "hello@cafe-one.co.test"):
             self.assertTrue(scrape.is_real_email(e), e)
 
 
