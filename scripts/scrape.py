@@ -196,11 +196,24 @@ def _keys(r, weak=False):
 
 
 def dedupe(rows, exclude=()):
-    """Keep the first row per place; drop rows already present in `exclude` (an earlier run)."""
-    seen, out = {k for r in exclude for k in _keys(r, weak=True)}, []
+    """Keep the first row per place; drop rows already present in `exclude` (an earlier run). A name
+    key (the t… ones) never joins two rows whose place_ids differ: branches and service-area listings
+    share a name and often a blank address."""
+    seen, out = {}, []
+
+    def add(r, weak):
+        for k in _keys(r, weak):
+            seen.setdefault(k, set()).add(r.get("place_id", ""))
+
+    def known(r, k):
+        ids, pid = seen.get(k), r.get("place_id", "")
+        return ids is not None and (not k.startswith("t") or not pid or "" in ids or pid in ids)
+
+    for r in exclude:
+        add(r, True)
     for r in rows:
-        if not any(k in seen for k in _keys(r, weak=True)):
-            seen.update(_keys(r)); out.append(r)
+        if not any(known(r, k) for k in _keys(r, weak=True)):
+            add(r, False); out.append(r)
     return out
 
 
@@ -386,9 +399,8 @@ def _poll(body, job_id):
             f"    curl {BASE}/api/v1/jobs/{job_id}\n"
             f"  and once its Status is \"ok\", download the CSV with\n"
             f"    curl -o results.csv {BASE}/api/v1/jobs/{job_id}/download")
-    print(f"\n⚠ Job still \"{status}\" after ~{attempts * POLL_EVERY // 60} min; keeping the {len(rows)} "
-          f"rows it has written. It keeps running in the engine: {BASE}/api/v1/jobs/{job_id}")
-    return job_id, rows
+    raise Partial(f"\n⚠ Job still \"{status}\" after ~{attempts * POLL_EVERY // 60} min; keeping the {len(rows)} "
+                  f"rows it has written. It keeps running in the engine: {BASE}/api/v1/jobs/{job_id}", job_id, rows)
 
 
 def download_rows_or_none(job_id):
@@ -1188,6 +1200,8 @@ def main():
         sys.exit("⚠ Incomplete: Google is rate-limiting this IP, so the scrape stopped; the file has the "
                  "rows found before that. Wait (minutes to hours) or add proxies, then rerun with "
                  "--exclude on this file to get only the rest.")
+    if skipped or failed_places:  # the ⚠ Incomplete line above says what is missing; exit 0 means complete
+        sys.exit(1)
 
 
 def interrupted():

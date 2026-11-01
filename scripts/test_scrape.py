@@ -56,6 +56,14 @@ class Dedupe(unittest.TestCase):
         self.assertEqual(out[0]["title"], "a")  # first occurrence wins
         self.assertNotIn("dup", json.dumps(out))
 
+    def test_same_name_and_address_with_other_place_ids_are_two_places(self):
+        rows = [{"place_id": "P1", "title": "Roto-Rooter", "address": ""},
+                {"place_id": "P2", "title": "Roto-Rooter", "address": ""},
+                {"title": "Roto-Rooter", "address": ""}]  # no id: cannot tell, so it is the first one
+        self.assertEqual([r.get("place_id") for r in scrape.dedupe(rows)], ["P1", "P2"])
+        self.assertEqual(scrape.dedupe(rows[1:2], exclude=rows[:1]), rows[1:2])
+        self.assertEqual(scrape.dedupe(rows[1:2], exclude=[{"title": "Roto-Rooter", "address": ""}]), [])
+
 
 class InBbox(unittest.TestCase):
     def test_margin_and_missing(self):
@@ -219,9 +227,10 @@ class JobOutcomes(unittest.TestCase):
         self.assertIn("Could not reach the engine", str(cm.exception))
 
     def test_budget_runs_out_keeps_written_rows(self):
-        (jid, rows), posts, _, text = run_jobs([[("working", "")] * 3], attempts=3, downloads={"j1": self.CSV})
-        self.assertEqual((jid, len(rows), posts), ("j1", 2, 1))
-        self.assertIn("keeps running in the engine", text)
+        err, posts, _, _ = run_jobs([[("working", "")] * 3], attempts=3, downloads={"j1": self.CSV})
+        self.assertIsInstance(err, scrape.Partial)  # the rows count, but the job is still running: incomplete
+        self.assertEqual((err.job_id, len(err.rows), posts), ("j1", 2, 1))
+        self.assertIn("keeps running in the engine", str(err))
 
     def test_budget_runs_out_with_no_rows_is_a_clean_error(self):
         for jobs in ([[("pending", "")] * 3], [[("working", "")] * 3]):
@@ -528,10 +537,12 @@ class EndToEnd(unittest.TestCase):
             with mock.patch.object(scrape, "BASE", f"http://127.0.0.1:{srv.server_port}"), \
                  mock.patch.object(scrape, "geocode", return_value=("30.25", "-97.75", BBOX)), \
                  mock.patch.object(scrape.time, "sleep"), \
-                 mock.patch.object(sys, "argv", argv), redirect_stdout(log):
+                 mock.patch.object(sys, "argv", argv), redirect_stdout(log), \
+                 self.assertRaises(SystemExit) as cm:
                 scrape.main()
         finally:
             srv.shutdown(); srv.server_close()
+        self.assertEqual(cm.exception.code, 1)  # a failed tile: the file is written, but incomplete
         text = log.getvalue()
         self.assertIn("cell 4/4: 3 rows, 6 unique so far", text)
         self.assertIn("cell 3/4 skipped", text)

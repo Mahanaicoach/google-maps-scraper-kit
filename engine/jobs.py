@@ -203,14 +203,14 @@ def to_row(place, keyword):
     row = dict.fromkeys(COLUMNS + EXTRA, "")
     for k, v in place.items():
         k = RENAME.get(k, k)
-        if k in row:
-            row[k] = str(v).replace("\x00", "")
+        if k in row:  # a name cut mid-emoji holds a lone surrogate, which UTF-8 cannot encode: "?"
+            row[k] = str(v).replace("\x00", "").encode("utf-8", "replace").decode("utf-8")
     row["input_id"] = keyword
     if not row["plus_code"]:
         row["plus_code"] = details.plus_code(row["latitude"], row["longitude"])
     if place.get("place_id"):  # Google's documented Maps URL for one place
         row["link"] = ("https://www.google.com/maps/search/?api=1&query="
-                       + urllib.parse.quote(str(place.get("title", "")), safe="")
+                       + urllib.parse.quote(row["title"], safe="")
                        + "&query_place_id=" + urllib.parse.quote(place["place_id"], safe=""))
     return row
 
@@ -248,7 +248,7 @@ def to_csv(rows, cols=None, header=True):
     if header:
         w.writeheader()
     w.writerows(rows)
-    return buf.getvalue().encode("utf-8")
+    return buf.getvalue().encode("utf-8", "replace")  # reviews are set on rows after to_row
 
 
 # ── Store ──
@@ -705,6 +705,10 @@ class Worker(threading.Thread):
                 if reason == "no-feed":
                     notes.append(f"keyword {i + 1}: Google showed no result list{' twice' if again else ''} "
                                  "(no results for it, or a page the engine cannot read)")
+                if reason.endswith("+dom-fallback"):  # no result batch parsed: Google changed its format
+                    notes.append(f"keyword {i + 1}: Google's result data could not be read, so "
+                                 + (f"only names, links and coordinates were kept for {len(places)} places"
+                                    if places else "no places were read") + " (the engine may need an update)")
                 retries, again = 0, False
                 if reason.startswith("timeout"):  # "timeout+dom-fallback" too
                     timed_out["yes"] = True

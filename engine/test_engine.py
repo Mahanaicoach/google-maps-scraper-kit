@@ -196,6 +196,13 @@ class Rows(unittest.TestCase):
         self.assertFalse(raw.startswith(b"\xef\xbb\xbf"))
         self.assertEqual(next(csv.DictReader(io.StringIO(raw.decode())))["title"], "Café ☕")
 
+    def test_lone_surrogate_is_written_not_fatal(self):
+        cut = json.loads('"Caf\\ud83d"')  # a name Google cut mid-emoji
+        row = jobs.to_row(place(1, title=cut), "k")  # place_id set, so the title is URL-quoted too
+        self.assertEqual(row["title"], "Caf?")
+        raw = jobs.to_csv([dict(row, user_reviews=cut)])  # reviews are set after to_row
+        self.assertIn(b"Caf?", raw)
+
 
 class Store(Fakes):
     def test_lifecycle(self):
@@ -1578,6 +1585,14 @@ class LoopThree(Fakes):
         RESULTS["cafes in Austin"] = ([place(1)], "timeout+dom-fallback")
         _, job = self.run_one()
         self.assertIn("stopped at max_time", job["Error"])
+
+    def test_dom_fallback_says_the_rows_are_thin(self):
+        for places, said in (([place(1)], "only names, links and coordinates were kept for 1 places"),
+                             ([], "no places were read")):
+            RESULTS["cafes in Austin"] = (places, "no-growth+dom-fallback")
+            _, job = self.run_one()
+            self.assertEqual(job["Status"], "ok")
+            self.assertIn(f"keyword 1: Google's result data could not be read, so {said}", job["Error"])
 
 def _drip_server(body=True):
     """A local site that sends one byte every 0.3 s, for the deadline tests. Returns its port."""
