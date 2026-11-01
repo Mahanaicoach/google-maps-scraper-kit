@@ -235,7 +235,9 @@ On Windows, use `py -m venv .engine/playwright-venv`, activate with
   a 30-second browser budget between emails, contact pages and socials. The API also caps retries
   at 30 seconds or its remaining website-pass time, whichever is less. Browser cleanup can add a
   little overhead. Once exhausted, remaining retries report `budget_exhausted` rather than adding
-  more page waits. Browsers use fresh contexts, block image/media/font downloads, and close after use.
+  more page waits. Retries also skip when less than three seconds remain for browser startup.
+  Slow third-party scripts do not discard an already usable page: rendering uses bounded DOM and
+  contact-content waits. Browsers use fresh contexts, block image/media/font downloads, and close after use.
 - `website_fetch_status` records `http`, `rendered`, `blocked`, `timeout`, `budget_exhausted` or `error`. A rendered page
   may contain no published contact information. Authentication, CAPTCHA and access denials can
   remain unavailable; the renderer does not solve them.

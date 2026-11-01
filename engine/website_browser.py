@@ -12,6 +12,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 _SLOTS = threading.BoundedSemaphore(2)
+_MIN_START = 3  # starting the driver with milliseconds left wastes time and trips Node timers
 SETUP = "Install optional rendering with: python3 -m pip install -r requirements-browser.txt"
 
 
@@ -25,7 +26,7 @@ class Budget:
             if self.deadline is None:
                 self.deadline = time.monotonic() + self.seconds
             left = self.deadline - time.monotonic()
-        if left <= 0:
+        if left < _MIN_START:
             return {"html": "", "status": "budget_exhausted"}
         return render(url, public_ip, timeout=min(20, left))
 
@@ -136,7 +137,8 @@ class _PublicProxy(ThreadingHTTPServer):
 
 def render(url, public_ip, timeout=20):
     """{html, status}: render public content, with bounded waits and no persistent browser state."""
-    failure = lambda status: {"html": "", "status": status}
+    stage = "validate"
+    failure = lambda status: {"html": "", "status": status, "stage": stage}
     try:
         parsed = urllib.parse.urlsplit(url if "://" in url else "https://" + url)
         if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password:
@@ -144,14 +146,24 @@ def render(url, public_ip, timeout=20):
         url = parsed.geturl()
     except ValueError:
         return failure("blocked")
+    if timeout < _MIN_START:
+        return failure("budget_exhausted")
     deadline = time.monotonic() + timeout
+    stage = "capacity"
     if not _SLOTS.acquire(timeout=max(0, timeout)):
         return failure("timeout")
     try:
+        if deadline - time.monotonic() < _MIN_START:
+            return failure("budget_exhausted")
+        stage = "setup"
         path = check_available()
         from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
         def left():
-            return max(1, int((deadline - time.monotonic()) * 1000))
+            remaining = deadline - time.monotonic()
+            if remaining < 0.5:
+                raise TimeoutError("browser budget exhausted")
+            return int((remaining - 0.2) * 1000)
+        stage = "browser_start"
         with _PublicProxy(public_ip, deadline) as proxy, sync_playwright() as pw:
             with pw.chromium.launch(executable_path=path, headless=True, timeout=left(),
                                     chromium_sandbox=True, proxy={"server": proxy},
@@ -168,17 +180,29 @@ def render(url, public_ip, timeout=20):
                             route.continue_()
                     context.route("**/*", route_request)
                     page = context.new_page()
-                    response = page.goto(url, wait_until="domcontentloaded", timeout=left())
+                    stage = "navigation"
+                    response = page.goto(url, wait_until="commit", timeout=min(10000, left()))
                     if response and response.status >= 400:
                         return failure("blocked" if response.status in (401, 403, 429) else "error")
+                    stage = "rendering"
                     try:
-                        page.wait_for_load_state("networkidle", timeout=min(3000, left()))
+                        page.wait_for_load_state("domcontentloaded", timeout=min(3000, left()))
                     except PlaywrightTimeout:
-                        pass  # analytics may never settle; keep the rendered DOM
+                        pass  # slow third-party scripts must not discard an already usable page
+                    try:
+                        page.wait_for_function(r"""() => document.body && (
+                            document.querySelector(`a[href^="mailto:"], a[href*="instagram.com/"],
+                            a[href*="facebook.com/"], a[href*="linkedin.com/"], a[href*="tiktok.com/"],
+                            a[href*="youtube.com/"], a[href*="twitter.com/"], a[href*="x.com/"]`) ||
+                            /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(document.body.innerText))""",
+                            timeout=min(2000, left()))
+                    except PlaywrightTimeout:
+                        pass  # not every business publishes contact details
+                    stage = "read_dom"
                     title = page.title().lower()
                     if any(t in title for t in ("just a moment", "access denied", "verify you are human", "captcha")):
                         return failure("blocked")
-                    return {"html": page.content()[:400_000], "status": "rendered"}
+                    return {"html": page.content()[:400_000], "status": "rendered", "stage": "complete"}
                 finally:
                     context.close()
     except Exception as e:

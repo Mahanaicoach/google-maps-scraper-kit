@@ -39,6 +39,12 @@ class PublicProxy(unittest.TestCase):
                 self.assertEqual(web.render(url, jobs._public_ip)['status'], 'blocked')
                 available.assert_not_called()
 
+    def test_nearly_expired_budget_never_starts_the_driver(self):
+        with patch.object(web, "check_available") as available:
+            result = web.render("https://fixture-business.test", jobs._public_ip, timeout=0.001)
+        self.assertEqual(result["status"], "budget_exhausted")
+        available.assert_not_called()
+
     def test_missing_dependency_is_actionable(self):
         with patch.dict(sys.modules, {'playwright': None, 'playwright.sync_api': None}):
             with self.assertRaisesRegex(RuntimeError, 'requirements-browser.txt'):
@@ -52,9 +58,9 @@ class BrowserBudget(unittest.TestCase):
             budget = web.Budget(30)
             budget.fetch("https://fixture-business.test", jobs._public_ip)
             self.assertEqual(render.call_args.kwargs["timeout"], 20)
-            clock.return_value = 128
+            clock.return_value = 126
             budget.fetch("https://fixture-business.test/contact", jobs._public_ip)
-            self.assertEqual(render.call_args.kwargs["timeout"], 2)
+            self.assertEqual(render.call_args.kwargs["timeout"], 4)
             clock.return_value = 131
             self.assertEqual(budget.fetch("https://fixture-business.test/about", jobs._public_ip)["status"], "budget_exhausted")
             self.assertEqual(render.call_count, 2)
@@ -111,6 +117,11 @@ class Fixture(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        if self.path == '/slow-script':
+            self.server.release_script.wait(25)
+            self.send_response(200)
+            self.end_headers()
+            return
         if self.path == '/blocked':
             self.send_error(403)
             return
@@ -119,7 +130,11 @@ class Fixture(BaseHTTPRequestHandler):
             self.send_header('Location', f'http://127.0.0.2:{self.server.server_port}/')
             self.end_headers()
             return
-        if self.path == '/data':
+        if self.path == '/slow-page':
+            body = b'''<!doctype html><title>Business</title>
+            <a href="mailto:hello@fixture-business.test">Contact</a>
+            <script src="/slow-script"></script>'''
+        elif self.path == '/data':
             body = json.dumps({'mail': ['hello', 'fixture-business.test'], 'profile': 'fixture_business'}).encode()
         else:
             body = b'''<!doctype html><title>Local business fixture</title><main>Loading</main>
@@ -134,6 +149,21 @@ class Fixture(BaseHTTPRequestHandler):
 
 @unittest.skipUnless(os.environ.get('GMSKIT_BROWSER_LIVE') == '1', 'optional real-browser fixture')
 class LiveBrowser(unittest.TestCase):
+    def test_usable_contacts_survive_slow_script(self):
+        with ThreadingHTTPServer(('127.0.0.1', 0), Fixture) as server:
+            server.release_script = threading.Event()
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                result = web.render(f'http://127.0.0.1:{server.server_port}/slow-page',
+                                    lambda ip: ip == '127.0.0.1', timeout=15)
+                self.assertEqual(result['status'], 'rendered', result.get('stage'))
+                self.assertEqual(jobs.find_emails(result['html']), ['hello@fixture-business.test'])
+            finally:
+                server.release_script.set()
+                server.shutdown()
+                thread.join(2)
+
     def test_javascript_links_and_private_destinations(self):
         with ThreadingHTTPServer(('127.0.0.1', 0), Fixture) as server:
             thread = threading.Thread(target=server.serve_forever, daemon=True)
