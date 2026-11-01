@@ -12,3 +12,8 @@ This page tells you how to get a bug fixed or a change merged into the Google Ma
 - **Engine changes go in `engine/`**, with offline tests in `engine/test_engine.py` (a fake Chrome
   and fake Google results, no network).
 - **Never commit scrape output.** CSV and result files are git-ignored because they hold personal data.
+- **Forks: please keep the sponsor box as it is.** The web UI reads its sponsor tiles from this
+  repository's `assets/sponsors/sponsors.json` on `master` (the `SPONSORS` URL in `engine/serve.py`),
+  so every copy shows the sponsors who fund the kit's upkeep, and a user can hide the box with its
+  close button. The MIT licence lets you change that line; we ask you not to, and to send sponsor
+  requests upstream instead ([Become a sponsor](https://github.com/sponsors/Mahanaicoach)).
