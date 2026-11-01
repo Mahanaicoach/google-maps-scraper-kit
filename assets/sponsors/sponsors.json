@@ -11,7 +11,7 @@
       "name": "SerpApi",
       "url": "https://serpapi.com/maps-scraper-kit-github",
       "tagline": "Google Maps API in JSON and Markdown",
-      "ui": true
+      "ui": false
     }
   ]
 }
