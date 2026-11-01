@@ -1256,7 +1256,8 @@ class ApiP3(Server):
         # each city, one job per city centred on it; downloads are named after the search; local times; a favicon
         for rule in ("} else if (ev.key === 'Enter') {  // never submits the form", "if (active >= 0) pick(active);",
                      "is not in the list", "is not picked yet", "whats.map(w => w + ' in ' + c.label)",
-                     "lat: c.lat, lon: c.lon", "for (const c of wheres)", "'/api/v1/cities?q=' + encodeURIComponent(q)"):
+                     "lat: c.lat, lon: c.lon", "for (const c of wheres)", "'/api/v1/cities?q=' + encodeURIComponent(q)",
+                     "stale = true", "!stale) say("):  # Enter picks nothing while a lookup for newer text is pending
             self.assertIn(rule, ui)
         for gone in ('id="keywords"', 'id="coords"', 'id="kwpick"', "<datalist", "Start anyway"):
             self.assertNotIn(gone, ui)
@@ -1296,17 +1297,23 @@ class Presets(Server):
         tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, tmp, True)
         self.assertEqual(serve.load_types(tmp), [])  # no file
-        with open(os.path.join(tmp, "business-types.json"), "w") as f:
-            f.write("{not json")
-        self.assertEqual(serve.load_types(tmp), [])
+        for bad in ("{not json", '["Dentists", 5]'):
+            with open(os.path.join(tmp, "business-types.json"), "w") as f:
+                f.write(bad)
+            self.assertEqual(serve.load_types(tmp), [])
         with open(os.path.join(tmp, "cities.tsv.gz"), "wb") as f:  # the real file cut short
             with open(os.path.join(serve.PRESETS, "cities.tsv.gz"), "rb") as g:
                 f.write(g.read(5000))
-        with unittest.mock.patch.object(serve, "PRESETS", tmp), unittest.mock.patch.object(serve, "_cities", None):
-            code, body, _ = self.call("GET", "/api/v1/cities?q=aus")
-            self.assertEqual(code, 200)
-            self.assertIsInstance(json.loads(body), list)
-            self.assertEqual(self.call("GET", "/api/v1/jobs")[0], 200)
+        for damage in ("cut", "flip"):  # cut short (EOFError), one byte flipped inside a deflate block (zlib.error)
+            if damage == "flip":
+                with open(os.path.join(tmp, "cities.tsv.gz"), "r+b") as f:
+                    f.seek(1124); b = f.read(1); f.seek(1124); f.write(bytes([b[0] ^ 0xFF]))
+            with unittest.mock.patch.object(serve, "PRESETS", tmp), unittest.mock.patch.object(serve, "_cities", None):
+                code, body, _ = self.call("GET", "/api/v1/cities?q=aus")
+                self.assertEqual(code, 200, damage)
+                self.assertIsInstance(json.loads(body), list)
+                self.assertEqual(self.call("GET", "/api/v1/jobs")[0], 200)
+        self.assertEqual(self.cities("!!!"), [])  # punctuation only is not "nothing typed"
 
     def test_where(self):
         top = self.cities("")  # nothing typed: the biggest US cities

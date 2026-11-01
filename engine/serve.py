@@ -15,7 +15,7 @@ Google Maps, for email or socials jobs to the businesses' own websites, and for 
 to Google's public DNS (dns.google), nothing else.
 Standard library only.
 """
-import argparse, csv, gzip, hmac, html, io, json, os, re, secrets, signal, socket, socketserver, sqlite3, sys, threading, unicodedata
+import argparse, csv, gzip, hmac, html, io, json, os, re, secrets, signal, socket, socketserver, sqlite3, sys, threading, unicodedata, zlib
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -51,8 +51,8 @@ def load_types(folder=None):
     try:
         with open(os.path.join(folder or PRESETS, "business-types.json"), encoding="utf-8") as f:
             types = json.load(f)
-        if not isinstance(types, list):
-            raise ValueError("not a list")
+        if not isinstance(types, list) or not all(isinstance(t, str) for t in types):
+            raise ValueError("not a list of names")
         return types
     except (OSError, ValueError) as e:
         print(f"presets/business-types.json unusable ({e.__class__.__name__}): the What box will be empty", file=sys.stderr)
@@ -104,7 +104,7 @@ def cities():
                         name, admin, cc, lat, lon = line.rstrip("\n").split("\t")
                         label = ", ".join([name] + ([admin] if admin and admin != name else []) + [cc])
                         rows.append("\t".join((fold(label), label, lat, lon, cc)))
-            except (OSError, EOFError, ValueError) as e:  # missing, truncated or odd file: what was read, once
+            except (OSError, EOFError, ValueError, zlib.error) as e:  # missing, truncated, corrupt or odd file: what was read, once
                 log(f"presets/cities.tsv.gz unusable after {len(rows)} cities ({e.__class__.__name__})")
             _cities = rows
     return _cities
@@ -112,7 +112,9 @@ def cities():
 
 def find_cities(q, limit=20):
     """The biggest cities whose "name, region, country" starts with q; with no q, the biggest in the US."""
-    q, out = fold(q), []
+    raw, q, out = q.strip(), fold(q), []
+    if raw and not q:  # punctuation only: nothing can start with it
+        return out
     for row in cities():  # ponytail: a linear scan, about 30 ms; a prefix index if lookups ever lag
         if row.startswith(q) if q else row.endswith("\tUS"):
             _, label, lat, lon, cc = row.split("\t")
@@ -492,9 +494,9 @@ function tags(box, list) {{  // each pick is a button; pressing it removes the p
   }});
 }}
 function combo(input, box, source, choose) {{  // a box that takes only picks from its own list: arrows move, Enter or a click picks
-  let items = [], active = -1;
+  let items = [], active = -1, stale = false;
   function show(list) {{
-    items = list; active = list.length ? 0 : -1; box.replaceChildren();
+    items = list; active = list.length ? 0 : -1; stale = false; box.replaceChildren();
     list.forEach((it, i) => {{
       const li = document.createElement('li'); li.id = box.id + '-' + i; li.setAttribute('role', 'option'); li.textContent = it.label;
       li.addEventListener('mousedown', ev => {{ ev.preventDefault(); pick(i); }}); box.appendChild(li);
@@ -507,7 +509,8 @@ function combo(input, box, source, choose) {{  // a box that takes only picks fr
     input.setAttribute('aria-activedescendant', box.id + '-' + active); box.children[active].scrollIntoView({{block: 'nearest'}});
   }}
   function pick(i) {{ choose(items[i]); input.value = ''; say('', ''); source('', show); }}
-  input.addEventListener('input', () => {{ if ($('msg').className === 'bad') say('', ''); source(input.value.trim(), show); }});
+  input.addEventListener('input', () => {{  // the list shown belongs to the old text until the source answers
+    items = []; active = -1; stale = true; mark(); if ($('msg').className === 'bad') say('', ''); source(input.value.trim(), show); }});
   input.addEventListener('focus', () => source(input.value.trim(), show));
   input.addEventListener('blur', () => show([]));
   input.addEventListener('keydown', ev => {{
@@ -517,7 +520,7 @@ function combo(input, box, source, choose) {{  // a box that takes only picks fr
     }} else if (ev.key === 'Enter') {{  // never submits the form
       ev.preventDefault();
       if (active >= 0) pick(active);
-      else if (input.value.trim()) say('"' + input.value.trim() + '" is not in the list. Type a few letters, then pick from it.', 'bad');
+      else if (input.value.trim() && !stale) say('"' + input.value.trim() + '" is not in the list. Type a few letters, then pick from it.', 'bad');
     }} else if (ev.key === 'Escape') show([]);
   }});
 }}

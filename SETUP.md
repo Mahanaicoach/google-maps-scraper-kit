@@ -124,8 +124,7 @@ profiles", under "Collect". Both read each business's homepage. Three collapsed 
 
 The job list shows each job's status with a progress bar, and CSV, JSON and Delete buttons. Job times
 show in your local time, and a review stage reads "reading reviews 7 of 20". A job's error, if any,
-shows under its name. The business type box suggests Google's business category names (4,053, US
-English). Your browser loads that list from GitHub and keeps it for 30 days. The page downloads the
+shows under its name. The page downloads the
 engine's raw rows, the rows so far while a job works, in a file named after the search (for example
 `bakery-in-portland-or-c063a815.csv`). The scripts give you the cleaned 8 lead fields and find more
 emails.

@@ -38,7 +38,7 @@ The What box offers a hand-picked list of popular business types for this kit
 from [lobstrio/google-business-categories](https://github.com/lobstrio/google-business-categories)
 by lobstr.io. Your browser loads that list from GitHub at runtime, pinned to one commit in
 `engine/serve.py`, and caches it for 30 days. This repository does not contain or redistribute it,
-because that repository has no license file. Offline, the box offers the kit's own list only.
+because that repository has no license file. Until the browser has fetched it once, the box offers the kit's own list only.
 
 ## Website signals adapted from OpenLeadFinder
 
