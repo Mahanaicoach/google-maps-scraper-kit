@@ -5,6 +5,7 @@ The browser's HTTP proxy pins public DNS addresses and checks connected peers, i
 redirects, scripts and iframes. It preserves the existing website fetcher's private-network guard.
 """
 import asyncio
+import concurrent.futures
 import select
 import socket
 import threading
@@ -14,8 +15,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 _SLOTS = threading.BoundedSemaphore(2)
 _MIN_START = 3  # starting the driver with milliseconds left wastes time and trips Node timers
-_CLOSE_SECONDS = 5  # graceful browser close; it took 1.6-2.3 s live, and hung 24-300 s at times
+_CLOSE_SECONDS = 5  # each of browser.close() and pw.stop(); close took 1.6-2.3 s live, and hung 24-300 s at times
 SETUP = "Install optional rendering in a virtual environment: see SETUP.md, Optional website rendering (Playwright)."
+
+
+def _quiet_target_closed(loop, context):
+    """Playwright settles the protocol calls of a cancelled or closed page with TargetClosedError once
+    the browser is gone. Nothing can await those internal futures, so asyncio would otherwise print
+    "Future exception was never retrieved" when the run ends. Everything else still gets reported."""
+    if type(context.get("exception")).__name__ != "TargetClosedError":
+        loop.default_exception_handler(context)
 
 
 def merge_status(current, incoming):
@@ -45,10 +54,14 @@ class Budget:
                 return {"html": "", "status": "budget_exhausted"}
             if self.loop is None:
                 self.loop = asyncio.new_event_loop()
+                self.loop.set_exception_handler(_quiet_target_closed)
                 self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
                 self.thread.start()
             future = asyncio.run_coroutine_threadsafe(self._fetch(url, public_ip), self.loop)
-        return future.result()
+        try:
+            return future.result()
+        except concurrent.futures.CancelledError:  # close() ran while this page was still rendering
+            return {"html": "", "status": "budget_exhausted"}
 
     async def _fetch(self, url, public_ip):
         if self.session is None:
@@ -301,6 +314,10 @@ class _Session:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        if self.proxy is not None:
+            # Nothing is served while the browser closes; its relays would otherwise run on
+            # until the deadline.
+            self.proxy.__exit__()
         try:
             if self.browser is not None:
                 # Chrome's graceful close can hang for minutes after many pages; pw.stop() below
@@ -311,10 +328,10 @@ class _Session:
         finally:
             try:
                 if self.pw is not None:
-                    await self.pw.stop()
+                    await asyncio.wait_for(self.pw.stop(), _CLOSE_SECONDS)
+            except Exception:
+                pass
             finally:
-                if self.proxy is not None:
-                    self.proxy.__exit__()
                 if self.has_slot:
                     _SLOTS.release()
 
