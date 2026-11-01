@@ -1715,6 +1715,7 @@ class AuditGuards(unittest.TestCase):
             w.join(5)
             self.assertFalse(w.is_alive())
             self.assertEqual(store.get(jid)["Status"], "failed")  # the second try wrote it after the pause
+            store.db.close()  # Windows cannot delete the folder while jobs.db is open
 
     def test_env_value_keeps_a_hash_inside_quotes(self):
         self.assertEqual(serve.env_value('"ab #c"'), "ab #c")
