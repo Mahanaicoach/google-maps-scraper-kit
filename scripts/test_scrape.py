@@ -553,6 +553,48 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(rows[0], scrape.LEAD + scrape.SOCIAL_FIELDS)  # socials are on by default
         self.assertEqual([r[0] for r in rows[1:]], ["Biz A", "Biz B", "Biz C", "Biz D", "Biz E"])
 
+    def test_deep_scan_splits_a_saturated_tile(self):
+        # --deep-scan: a 2x2 grid whose first tile comes back "full" gets 4 sub-tiles appended, one
+        # level only; the engine never sees the script's private _bbox/_sub keys.
+        MockEngine.created, MockEngine.polls = 0, {}
+        bodies = []
+        orig_post = MockEngine.do_POST
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length", 0))
+            bodies.append(json.loads(self.rfile.read(n)))
+            MockEngine.created += 1
+            self._send(201, json.dumps({"id": f"job-{MockEngine.created}"}))
+        rows = dict(CELL_ROWS, **{"job-3": [_row("G")], "job-4": [_row("H")],
+                                  "job-5": [_row("A")], "job-6": [_row("I")], "job-7": [], "job-8": [_row("J")]})
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), MockEngine)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        out = os.path.join(tempfile.mkdtemp(), "leads.csv")
+        argv = ["scrape.py", "plumbers in Austin TX", "--city", "Austin, TX", "--grid", "2", "--deep-scan",
+                "--no-email", "--no-socials", "--out", out]
+        log = io.StringIO()
+        try:
+            with mock.patch.object(scrape, "BASE", f"http://127.0.0.1:{srv.server_port}"), \
+                 mock.patch.object(scrape, "SATURATED", 3), mock.patch.object(MockEngine, "do_POST", do_POST), \
+                 mock.patch.dict(CELL_ROWS, rows), \
+                 mock.patch.object(scrape, "geocode", return_value=("30.25", "-97.75", BBOX)), \
+                 mock.patch.object(scrape.time, "sleep"), \
+                 mock.patch.object(sys, "argv", argv), redirect_stdout(log):
+                scrape.main()
+        finally:
+            MockEngine.do_POST = orig_post
+            srv.shutdown(); srv.server_close()
+        text = log.getvalue()
+        self.assertIn("!  Deep scan: 4 tiles", text)
+        self.assertIn("! cell 1 is at Google's cap: 4 sub-tiles added, 8 cells now", text)
+        self.assertIn("Cell 8/8", text)
+        self.assertEqual(len(bodies), 8)
+        self.assertFalse(any(k.startswith("_") for b in bodies for k in b))
+        self.assertEqual(len({(b["lat"], b["lon"]) for b in bodies}), 8)  # 8 distinct centres
+        self.assertTrue(all(int(b["zoom"]) >= int(bodies[0]["zoom"]) for b in bodies[4:]))  # sub-tiles zoom in
+        with open(out, newline="", encoding="utf-8-sig") as f:
+            names = [r[0] for r in list(csv.reader(f))[1:]]
+        self.assertEqual(names, ["Biz A", "Biz B", "Biz C", "Biz D", "Biz G", "Biz H", "Biz I", "Biz J"])
+
     def test_two_cities_filters_exclude_limit(self):
         # --city twice = two jobs into one deduped file; --exclude drops a place from an earlier lean
         # CSV (title+address only); --min-reviews and --limit trim the rest.

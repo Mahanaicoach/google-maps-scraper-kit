@@ -294,7 +294,7 @@ class FakeCDP:
     def __init__(self):
         self.closed, self.q = None, queue.Queue()
 
-    def subscribe(self, method, session_id=None):
+    def subscribe(self, method, session_id=None, q=None):
         return self.q
 
     def unsubscribe(self, *a):
@@ -336,11 +336,96 @@ class FakeMapsPage:
         return {"body": self.bodies[rid]}
 
 
-def batch(*titles):
-    return ")]}'\n" + json.dumps([None] * 64 + [[[None, entity(i11=t, i10=f"0x1:0x{i:x}")] for i, t in enumerate(titles, 1)]])
+def batch(*titles, start=1):
+    """One result batch body; `start` numbers the place ids so later batches hold new places."""
+    return ")]}'\n" + json.dumps([None] * 64 + [[[None, entity(i11=t, i10=f"0x1:0x{i:x}")] for i, t in enumerate(titles, start)]])
+
+
+def batch_events(rid, body, q, delay=0.0, fail=False):
+    """Replay one result batch the way Chrome reports it: the request now, its answer after `delay`."""
+    q.put({"requestId": rid, "request": {"url": "https://www.google.com/search?tbm=map&pb=x"}})
+    def answer():
+        if fail:
+            q.put({"requestId": rid, "errorText": "net::ERR_FAILED"})
+        else:
+            q.put({"requestId": rid, "response": {"url": "https://www.google.com/search?tbm=map&pb=x",
+                                                   "mimeType": "application/json"}})
+    if delay:
+        threading.Timer(delay, answer).start()
+    else:
+        answer()
+
+
+class ScrollingPage(FakeMapsPage):
+    """A page whose scrolls fetch more batches: `later` is a list of (body, delay, fail) that each
+    JS_SCROLL after the first batch triggers in turn; an empty list means Google asks for nothing."""
+
+    def __init__(self, first, later, render_nudges=0):
+        super().__init__({})
+        self.later, self.scrolls, self.render_nudges = list(later), 0, render_nudges
+        self.bodies["r0"] = first
+        batch_events("r0", first, self.cdp.q)
+
+    def eval(self, expr):
+        if expr == maps.JS_SCROLL:
+            self.scrolls += 1
+            if self.render_nudges and self.scrolls % (self.render_nudges + 1):
+                return self.scrolls  # the feed is still drawing: its height grows, nothing is asked yet
+            if self.later:
+                body, delay, fail = self.later.pop(0)
+                rid = f"r{self.scrolls}"
+                self.bodies[rid] = body
+                batch_events(rid, body, self.cdp.q, delay, fail)
+        return super().eval(expr)
 
 
 class Collect(unittest.TestCase):
+    def setUp(self):
+        self.saved = maps.SETTLE, maps.SLOW_BATCH
+        maps.SETTLE, maps.SLOW_BATCH = 0.6, 4
+
+    def tearDown(self):
+        maps.SETTLE, maps.SLOW_BATCH = self.saved
+
+    def test_silent_end_is_end_of_list_and_quick(self):
+        # Google often stops without drawing its end line: the page then asks for nothing on a scroll.
+        page = ScrollingPage(batch("A", "B"), [])
+        t0 = time.time()
+        places, reason, stats = maps.collect(page, "u", depth=10, log=lambda m: None)
+        self.assertEqual(reason, "end-of-list")
+        self.assertEqual(len(places), 2)
+        self.assertLess(time.time() - t0, 3)  # two SETTLE windows, not two 10 s stalls
+
+    def test_slow_batch_is_awaited(self):
+        # A batch Google answers after SETTLE but before SLOW_BATCH still counts.
+        page = ScrollingPage(batch("A"), [(batch("B", start=2), 1.5, False), (batch("C", start=3), 1.5, False)])
+        places, reason, stats = maps.collect(page, "u", depth=3, log=lambda m: None)
+        self.assertEqual([p["title"] for p in places], ["A", "B", "C"])
+        self.assertEqual(reason, "depth")
+        self.assertEqual(stats["batches"], 3)
+
+    def test_slow_rendering_is_not_the_end(self):
+        # The feed takes longer than SETTLE to draw the last batch's cards (its height keeps growing),
+        # so the bottom, and the next request, come late. That is not a complete list.
+        page = ScrollingPage(batch("A"), [(batch("B", start=2), 0, False), (batch("C", start=3), 0, False)],
+                             render_nudges=8)  # 8 nudges x 0.4 s, well past SETTLE, before each request
+        places, reason, stats = maps.collect(page, "u", depth=3, log=lambda m: None)
+        self.assertEqual([p["title"] for p in places], ["A", "B", "C"])
+        self.assertEqual(reason, "depth")
+
+    def test_failed_batches_end_as_no_growth(self):
+        page = ScrollingPage(batch("A"), [(batch("B", start=2), 0.2, True), (batch("C", start=3), 0.2, True)])
+        places, reason, _ = maps.collect(page, "u", depth=5, log=lambda m: None)
+        self.assertEqual([p["title"] for p in places], ["A"])
+        self.assertEqual(reason, "no-growth")
+
+    def test_too_slow_batch_is_no_growth_not_a_hang(self):
+        page = ScrollingPage(batch("A"), [(batch("B", start=2), 30, False), (batch("C", start=3), 30, False)])
+        t0 = time.time()
+        places, reason, _ = maps.collect(page, "u", depth=5, log=lambda m: None)
+        self.assertEqual(reason, "no-growth")
+        self.assertLess(time.time() - t0, 2 * maps.SLOW_BATCH + 2)
+
     def test_error_mid_scroll_keeps_places(self):
         page = FakeMapsPage({"r1": batch("A", "B")}, fail_eval=maps.JS_END)
         places, reason, _ = maps.collect(page, "u", depth=3, log=lambda m: None)
