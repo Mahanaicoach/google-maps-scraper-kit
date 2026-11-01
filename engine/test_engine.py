@@ -1585,7 +1585,9 @@ class LoopThree(Fakes):
             _, job = self.run_one(reviews_max=1, max_time=1)
         finally:
             maps.place_panel, details.parse_place = saved
-        self.assertIn("reviews read for 2 of 3 places: ran out of time", job["Error"])
+        # Wall clock: 0.6 s per panel against max_time 1. A fast machine reads 2 of 3; a slow CI
+        # runner (Windows) has read 0 or 1. The claim under test is that the note says how many.
+        self.assertRegex(job["Error"], r"reviews read for [0-2] of 3 places: ran out of time")
 
     def test_timeout_with_the_dom_fallback_is_a_timeout(self):
         RESULTS["cafes in Austin"] = ([place(1)], "timeout+dom-fallback")
