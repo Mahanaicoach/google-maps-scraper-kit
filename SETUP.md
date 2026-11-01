@@ -233,12 +233,15 @@ On Windows, use `py -m venv .engine/playwright-venv`, activate with
 - HTTP lookups finish before browser retries, so slow retries never occupy HTTP worker slots.
   At most two browser retries run concurrently. Each page gets at most 20 seconds; the CLI shares
   a 30-second browser budget between emails, contact pages and socials. The API also caps retries
-  at 30 seconds or its remaining website-pass time, whichever is less. Browser cleanup can add a
-  little overhead. Once exhausted, remaining retries report `budget_exhausted` rather than adding
+  at 30 seconds or its remaining website-pass time, whichever is less. Each run or job starts one
+  browser and opens every page in a fresh context in it; closing it takes at most about 5 seconds.
+  Once exhausted, remaining retries report `budget_exhausted` rather than adding
   more page waits. Retries also skip when less than three seconds remain for browser startup.
   Slow third-party scripts do not discard an already usable page: rendering uses bounded DOM and
-  contact-content waits. Browsers use fresh contexts, block image/media/font downloads, and close after use.
-- `website_fetch_status` records `http`, `rendered`, `blocked`, `timeout`, `budget_exhausted` or `error`. A rendered page
+  contact-content waits. Pages block image/media/font downloads.
+- `website_fetch_status` records `http`, `rendered`, `blocked`, `timeout`, `budget_exhausted` or `error`.
+  It keeps the best fetch: `rendered` beats `http`, and a failed or skipped browser retry leaves
+  `http` in place. `timeout` means the HTTP fetch itself ran out of time. A rendered page
   may contain no published contact information. Authentication, CAPTCHA and access denials can
   remain unavailable; the renderer does not solve them.
 

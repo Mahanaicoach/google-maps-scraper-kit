@@ -1136,6 +1136,8 @@ def add_site_data(rows, seconds, email=True, socials=False, verify=False, get=No
     """HTTP lookups first; optional browser retries use separate workers and the remaining budget."""
     get = get or fetch
     end = time.monotonic() + seconds
+    if browser_sites:
+        from website_browser import Budget, merge_status
 
     def extract(r, page):
         out = {}
@@ -1167,7 +1169,7 @@ def add_site_data(rows, seconds, email=True, socials=False, verify=False, get=No
         done = set(futs) - pending
         if timeout_status:
             for f in pending:
-                futs[f]["website_fetch_status"] = timeout_status
+                futs[f]["website_fetch_status"] = merge_status(futs[f].get("website_fetch_status"), timeout_status)
         pool.shutdown(wait=False, cancel_futures=True)
         completed = []
         for f in done:
@@ -1181,17 +1183,16 @@ def add_site_data(rows, seconds, email=True, socials=False, verify=False, get=No
         return completed, len(pending)
 
     todo = [r for r in rows if r.get("website")]
-    completed, pending = run(todo, http_work, SITE_WORKERS, end)
+    completed, pending = run(todo, http_work, SITE_WORKERS, end, "timeout" if browser_sites else None)
     if browser_sites and not stop():
-        from website_browser import Budget
-        budget = Budget(max(0, min(30, end - time.monotonic())))
-        def retry(r):
-            rendered = budget.fetch(r["website"], _public_ip)
-            out = extract(r, rendered["html"])
-            out["website_fetch_status"] = rendered["status"]
-            return out
-        missing = [r for r in completed if (email and not r.get("emails"))
-                   or (socials and not any(r.get(k) for k in SOCIALS))]
-        _, unchecked = run(missing, retry, 2, min(end, time.monotonic() + 30), "budget_exhausted")
-        pending += unchecked
+        with Budget(max(0, min(30, end - time.monotonic()))) as budget:
+            def retry(r):
+                rendered = budget.fetch(r["website"], _public_ip)
+                out = extract(r, rendered["html"])
+                out["website_fetch_status"] = merge_status(r.get("website_fetch_status"), rendered["status"])
+                return out
+            missing = [r for r in completed if (email and not r.get("emails"))
+                       or (socials and not any(r.get(k) for k in SOCIALS))]
+            # HTTP already checked these rows: retries the budget cut off are not "not checked".
+            run(missing, retry, 2, min(end, time.monotonic() + 30), "budget_exhausted")
     return len(enriched), pending

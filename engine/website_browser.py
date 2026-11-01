@@ -1,9 +1,10 @@
 """Optional Playwright rendering for business website email and social-link enrichment.
 
-Each render owns its Playwright instance (the API is not thread-safe). At most two run at once.
+Each job owns one browser on a dedicated asyncio thread, with at most two isolated pages at once.
 The browser's HTTP proxy pins public DNS addresses and checks connected peers, including for
 redirects, scripts and iframes. It preserves the existing website fetcher's private-network guard.
 """
+import asyncio
 import select
 import socket
 import threading
@@ -13,22 +14,72 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 _SLOTS = threading.BoundedSemaphore(2)
 _MIN_START = 3  # starting the driver with milliseconds left wastes time and trips Node timers
-SETUP = "Install optional rendering with: python3 -m pip install -r requirements-browser.txt"
+_CLOSE_SECONDS = 5  # graceful browser close; it took 1.6-2.3 s live, and hung 24-300 s at times
+SETUP = "Install optional rendering in a virtual environment: see SETUP.md, Optional website rendering (Playwright)."
+
+
+def merge_status(current, incoming):
+    """A successful fetch survives later failed enrichment attempts."""
+    if current == "rendered" or (current == "http" and incoming != "rendered"):
+        return current
+    return incoming
 
 
 class Budget:
-    """One shared browser-retry allowance, started only when the first retry is needed."""
+    """One job's lazy browser, shared deadline and two-page concurrency limit.
+
+    Playwright objects stay on their owning event-loop thread. Call close() after enrichment.
+    """
     def __init__(self, seconds=30):
         self.seconds, self.deadline, self.lock = seconds, None, threading.Lock()
+        self.loop = self.thread = self.session = None
+        self.closed = False
 
     def fetch(self, url, public_ip):
         with self.lock:
+            if self.closed:
+                return {"html": "", "status": "budget_exhausted"}
             if self.deadline is None:
                 self.deadline = time.monotonic() + self.seconds
-            left = self.deadline - time.monotonic()
-        if left < _MIN_START:
-            return {"html": "", "status": "budget_exhausted"}
-        return render(url, public_ip, timeout=min(20, left))
+            if self.deadline - time.monotonic() < (_MIN_START if self.loop is None else 0.5):
+                return {"html": "", "status": "budget_exhausted"}
+            if self.loop is None:
+                self.loop = asyncio.new_event_loop()
+                self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
+                self.thread.start()
+            future = asyncio.run_coroutine_threadsafe(self._fetch(url, public_ip), self.loop)
+        return future.result()
+
+    async def _fetch(self, url, public_ip):
+        if self.session is None:
+            self.session = _Session(public_ip, self.deadline)
+        return await self.session.render(url)
+
+    def close(self):
+        with self.lock:
+            if self.closed:
+                return
+            self.closed = True
+            if self.loop is None:
+                return
+            future = asyncio.run_coroutine_threadsafe(self._close(), self.loop)
+        try:
+            future.result()
+        finally:
+            self.loop.call_soon_threadsafe(self.loop.stop)
+            self.thread.join()
+            self.loop.close()
+
+    async def _close(self):
+        # On the loop, after any fetch scheduled before close() has created the session.
+        if self.session is not None:
+            await self.session.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
 
 
 def check_available():
@@ -135,78 +186,140 @@ class _PublicProxy(ThreadingHTTPServer):
         self.thread.join(2)
 
 
-def render(url, public_ip, timeout=20):
-    """{html, status}: render public content, with bounded waits and no persistent browser state."""
-    stage = "validate"
-    failure = lambda status: {"html": "", "status": status, "stage": stage}
-    try:
-        parsed = urllib.parse.urlsplit(url if "://" in url else "https://" + url)
-        if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password:
-            return failure("blocked")
-        url = parsed.geturl()
-    except ValueError:
-        return failure("blocked")
-    if timeout < _MIN_START:
-        return failure("budget_exhausted")
-    deadline = time.monotonic() + timeout
-    stage = "capacity"
-    if not _SLOTS.acquire(timeout=max(0, timeout)):
-        return failure("timeout")
-    try:
-        if deadline - time.monotonic() < _MIN_START:
-            return failure("budget_exhausted")
-        stage = "setup"
-        path = check_available()
-        from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
-        def left():
-            remaining = deadline - time.monotonic()
+class _Session:
+    def __init__(self, public_ip, deadline):
+        self.public_ip, self.deadline = public_ip, deadline
+        self.pages, self.start_lock = asyncio.Semaphore(2), asyncio.Lock()
+        self.browser = self.pw = self.proxy = None
+        self.tasks = set()
+        self.has_slot = False
+        self.start_error = None
+
+    async def start(self):
+        async with self.start_lock:
+            if self.browser is not None:
+                return
+            if self.start_error is not None:  # one launch attempt per job; close() frees what it took
+                raise self.start_error
+            try:
+                if self.deadline - time.monotonic() < _MIN_START:
+                    raise TimeoutError("browser budget exhausted")
+                path = check_available()
+                self.has_slot = _SLOTS.acquire(blocking=False)
+                if not self.has_slot:
+                    raise TimeoutError("browser capacity unavailable")
+                from playwright.async_api import async_playwright
+                self.proxy = _PublicProxy(self.public_ip, self.deadline)
+                proxy = self.proxy.__enter__()
+                self.pw = await async_playwright().start()
+                self.browser = await self.pw.chromium.launch(
+                    executable_path=path, headless=True, timeout=self.left(self.deadline),
+                    chromium_sandbox=True, proxy={"server": proxy},
+                    args=["--proxy-bypass-list=<-loopback>",
+                          "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"])
+            except Exception as e:
+                self.start_error = e
+                raise
+
+    @staticmethod
+    def left(deadline):
+        remaining = deadline - time.monotonic()
+        if remaining < 0.5:
+            raise TimeoutError("browser budget exhausted")
+        return int((remaining - 0.2) * 1000)
+
+    async def render(self, url):
+        stage = "validate"
+        failure = lambda status: {"html": "", "status": status, "stage": stage}
+        task = asyncio.current_task()
+        self.tasks.add(task)
+        acquired = False
+        try:
+            parsed = urllib.parse.urlsplit(url if "://" in url else "https://" + url)
+            if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password:
+                return failure("blocked")
+            url = parsed.geturl()
+            stage = "capacity"
+            remaining = self.deadline - time.monotonic()
             if remaining < 0.5:
-                raise TimeoutError("browser budget exhausted")
-            return int((remaining - 0.2) * 1000)
-        stage = "browser_start"
-        with _PublicProxy(public_ip, deadline) as proxy, sync_playwright() as pw:
-            with pw.chromium.launch(executable_path=path, headless=True, timeout=left(),
-                                    chromium_sandbox=True, proxy={"server": proxy},
-                                    args=["--proxy-bypass-list=<-loopback>",
-                                          "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"]) as browser:
-                context = browser.new_context(service_workers="block", accept_downloads=False)
+                return failure("budget_exhausted")
+            await asyncio.wait_for(self.pages.acquire(), remaining)
+            acquired = True
+            stage = "browser_start"
+            await self.start()
+            deadline = min(self.deadline, time.monotonic() + 20)
+            left = lambda: self.left(deadline)
+            from playwright.async_api import TimeoutError as PlaywrightTimeout
+            context = await self.browser.new_context(service_workers="block", accept_downloads=False)
+            try:
+                async def route_request(route):
+                    req = route.request
+                    if (req.resource_type in ("image", "media", "font") or req.method not in ("GET", "HEAD")
+                            or urllib.parse.urlsplit(req.url).scheme not in ("http", "https")):
+                        await route.abort()
+                    else:
+                        await route.continue_()
+                await context.route("**/*", route_request)
+                page = await context.new_page()
+                stage = "navigation"
+                response = await page.goto(url, wait_until="commit", timeout=min(10000, left()))
+                if response and response.status >= 400:
+                    return failure("blocked" if response.status in (401, 403, 429) else "error")
+                stage = "rendering"
                 try:
-                    def route_request(route):
-                        req = route.request
-                        if (req.resource_type in ("image", "media", "font") or req.method not in ("GET", "HEAD")
-                                or urllib.parse.urlsplit(req.url).scheme not in ("http", "https")):
-                            route.abort()
-                        else:
-                            route.continue_()
-                    context.route("**/*", route_request)
-                    page = context.new_page()
-                    stage = "navigation"
-                    response = page.goto(url, wait_until="commit", timeout=min(10000, left()))
-                    if response and response.status >= 400:
-                        return failure("blocked" if response.status in (401, 403, 429) else "error")
-                    stage = "rendering"
-                    try:
-                        page.wait_for_load_state("domcontentloaded", timeout=min(3000, left()))
-                    except PlaywrightTimeout:
-                        pass  # slow third-party scripts must not discard an already usable page
-                    try:
-                        page.wait_for_function(r"""() => document.body && (
-                            document.querySelector(`a[href^="mailto:"], a[href*="instagram.com/"],
-                            a[href*="facebook.com/"], a[href*="linkedin.com/"], a[href*="tiktok.com/"],
-                            a[href*="youtube.com/"], a[href*="twitter.com/"], a[href*="x.com/"]`) ||
-                            /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(document.body.innerText))""",
-                            timeout=min(2000, left()))
-                    except PlaywrightTimeout:
-                        pass  # not every business publishes contact details
-                    stage = "read_dom"
-                    title = page.title().lower()
-                    if any(t in title for t in ("just a moment", "access denied", "verify you are human", "captcha")):
-                        return failure("blocked")
-                    return {"html": page.content()[:400_000], "status": "rendered", "stage": "complete"}
-                finally:
-                    context.close()
-    except Exception as e:
-        # No exception text: URLs, proxy credentials and page contents must not leak into logs.
-        return failure("timeout" if "timeout" in type(e).__name__.lower() else "error")
-    finally:
-        _SLOTS.release()
+                    await page.wait_for_load_state("domcontentloaded", timeout=min(3000, left()))
+                except PlaywrightTimeout:
+                    pass  # slow third-party scripts must not discard an already usable page
+                try:
+                    await page.wait_for_function(r"""() => document.body && (
+                        document.querySelector(`a[href^="mailto:"], a[href*="instagram.com/"],
+                        a[href*="facebook.com/"], a[href*="linkedin.com/"], a[href*="tiktok.com/"],
+                        a[href*="youtube.com/"], a[href*="twitter.com/"], a[href*="x.com/"]`) ||
+                        /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(document.body.innerText))""",
+                        timeout=min(2000, left()))
+                except PlaywrightTimeout:
+                    pass  # not every business publishes contact details
+                stage = "read_dom"
+                title = (await page.title()).lower()
+                if any(t in title for t in ("just a moment", "access denied", "verify you are human", "captcha")):
+                    return failure("blocked")
+                return {"html": (await page.content())[:400_000], "status": "rendered", "stage": "complete"}
+            finally:
+                await context.close()
+        except ValueError:
+            return failure("blocked")
+        except Exception as e:
+            # Never log exception text: it may contain URLs, credentials or page content.
+            return failure("timeout" if "timeout" in type(e).__name__.lower() else "error")
+        finally:
+            if acquired:
+                self.pages.release()
+            self.tasks.discard(task)
+
+    async def close(self):
+        tasks = list(self.tasks)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            if self.browser is not None:
+                # Chrome's graceful close can hang for minutes after many pages; pw.stop() below
+                # ends the driver, which ends the browser it launched.
+                await asyncio.wait_for(self.browser.close(), _CLOSE_SECONDS)
+        except Exception:
+            pass
+        finally:
+            try:
+                if self.pw is not None:
+                    await self.pw.stop()
+            finally:
+                if self.proxy is not None:
+                    self.proxy.__exit__()
+                if self.has_slot:
+                    _SLOTS.release()
+
+
+def render(url, public_ip, timeout=20):
+    """Standalone diagnostic render; enrichment uses one Budget across the whole job."""
+    with Budget(timeout) as budget:
+        return budget.fetch(url, public_ip)

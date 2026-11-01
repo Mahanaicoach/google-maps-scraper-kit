@@ -631,19 +631,28 @@ _BROWSER_BUDGET = None
 _BROWSER_LOCK = threading.Lock()
 
 
+def _web():
+    """The engine's optional website_browser module (standard library until it renders)."""
+    engine_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine")
+    if engine_dir not in sys.path:
+        sys.path.insert(0, engine_dir)
+    import website_browser
+    return website_browser
+
+
 @functools.lru_cache(maxsize=128)
 def _render_site(url):
     """Rendered homepages shared by email and social extraction during this CLI run."""
     global _BROWSER_BUDGET
-    engine_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine")
-    if engine_dir not in sys.path:
-        sys.path.insert(0, engine_dir)
-    from website_browser import Budget
     with _BROWSER_LOCK:
         if _BROWSER_BUDGET is None:
-            _BROWSER_BUDGET = Budget()
+            _BROWSER_BUDGET = _web().Budget()
         budget = _BROWSER_BUDGET
     return budget.fetch(url, _is_public_ip)
+
+
+def _set_fetch_status(r, status):
+    r["website_fetch_status"] = _web().merge_status(r.get("website_fetch_status"), status)
 
 
 def _find_socials(html):
@@ -691,7 +700,7 @@ def enrich_sites(results, find, fields, label, workers=None, browser_sites=False
     if browser_sites:
         def retry(r):
             rendered = _render_site(r["website"])
-            r["website_fetch_status"] = rendered["status"]
+            _set_fetch_status(r, rendered["status"])
             r.update({k: v for k, v in find(rendered["html"]).items() if v})
         _each_site([r for r in todo if not any(r.get(k) for k in fields)],
                    retry, "browser " + label, workers=2)
@@ -875,14 +884,14 @@ def enrich_emails(results, deep=True, workers=None, browser_sites=False):
         def retry(r):
             site = r["website"]
             rendered = _render_site(site)
-            r["website_fetch_status"] = rendered["status"]
+            _set_fetch_status(r, rendered["status"])
             home = rendered["html"]
             found = extract_emails(home, site)
             if deep and home and not found:
                 for url in contact_links(home, site):
                     contact = _render_site(url)
                     if contact["status"] == "budget_exhausted":
-                        r["website_fetch_status"] = "budget_exhausted"
+                        _set_fetch_status(r, "budget_exhausted")
                         break
                     found = extract_emails(contact["html"], site)
                     if found:
@@ -1077,10 +1086,8 @@ def main():
     f.add_argument("--limit", type=int, metavar="N", help="stop at N rows after filtering")
     a = ap.parse_args()
     if a.browser_sites:
-        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine"))
-        from website_browser import check_available
         try:
-            check_available()
+            _web().check_available()
         except RuntimeError as e:
             sys.exit(f"✗ {e}")
         _render_site.cache_clear()
@@ -1248,6 +1255,8 @@ def main():
 
     if a.browser_sites:
         fields = fields + ["website_fetch_status"]
+        if _BROWSER_BUDGET is not None:  # the last pass that renders: close the job's one browser
+            _BROWSER_BUDGET.close()
 
     if a.tech:
         print("▶ Checking ad pixels, analytics and site platform on each website (0 LLM tokens)…")

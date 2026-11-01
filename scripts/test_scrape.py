@@ -1115,7 +1115,7 @@ class BrowserSites(unittest.TestCase):
             out = os.path.join(tmp, "leads.csv")
             argv = ["scrape.py", "test in city", "1", "2", "--browser-sites", "--out", out]
             with mock.patch.object(website_browser, "check_available", return_value="/chrome"), \
-                 mock.patch.object(website_browser, "render", return_value={"html": page, "status": "rendered"}), \
+                 mock.patch.object(website_browser._Session, "render", return_value={"html": page, "status": "rendered"}), \
                  mock.patch.object(scrape, "req", return_value=(200, b"null")), \
                  mock.patch.object(scrape, "run_job", return_value=("j1", [{"title": "Fixture", "website": "https://fixture-business.test", "emails": ""}])), \
                  mock.patch.object(scrape, "_fetch_cached", return_value=""), \
@@ -1137,7 +1137,7 @@ class BrowserSites(unittest.TestCase):
         scrape._render_site.cache_clear()
         try:
             with mock.patch.object(scrape, "_fetch_cached", return_value=""), \
-                 mock.patch.object(website_browser, "render", return_value={"html": page, "status": "rendered"}) as render, \
+                 mock.patch.object(website_browser._Session, "render", return_value={"html": page, "status": "rendered"}) as render, \
                  redirect_stdout(io.StringIO()):
                 scrape.enrich_emails(rows, browser_sites=True)
                 scrape.enrich_sites(rows, scrape._find_socials, scrape.SOCIAL_FIELDS, "socials", browser_sites=True)
@@ -1164,6 +1164,14 @@ class BrowserSites(unittest.TestCase):
              mock.patch.object(scrape, "_render_site") as render, redirect_stdout(io.StringIO()):
             scrape.enrich_emails(rows, browser_sites=True)
         render.assert_not_called()
+        self.assertEqual(rows[0]["website_fetch_status"], "http")
+
+    def test_failed_browser_retry_keeps_the_http_status(self):
+        rows = [{"website": "https://fixture-business.test", "emails": "hi@fixture-business.test"}]
+        with mock.patch.object(scrape, "_fetch_cached", return_value="<p>no social links</p>"), \
+             mock.patch.object(scrape, "_render_site", return_value={"html": "", "status": "budget_exhausted"}), \
+             redirect_stdout(io.StringIO()):
+            scrape.enrich_sites(rows, scrape._find_socials, scrape.SOCIAL_FIELDS, "socials", browser_sites=True)
         self.assertEqual(rows[0]["website_fetch_status"], "http")
 
 

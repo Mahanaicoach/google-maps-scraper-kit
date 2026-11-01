@@ -1,4 +1,5 @@
 """Offline checks; GMSKIT_BROWSER_LIVE=1 also renders a local JavaScript fixture with Playwright."""
+import asyncio
 import json
 import os
 import socket
@@ -47,23 +48,57 @@ class PublicProxy(unittest.TestCase):
 
     def test_missing_dependency_is_actionable(self):
         with patch.dict(sys.modules, {'playwright': None, 'playwright.sync_api': None}):
-            with self.assertRaisesRegex(RuntimeError, 'requirements-browser.txt'):
+            with self.assertRaisesRegex(RuntimeError, 'virtual environment'):
                 web.check_available()
 
 
 class BrowserBudget(unittest.TestCase):
-    def test_expired_budget_skips_browser_and_caps_each_page(self):
-        with patch.object(web.time, "monotonic", return_value=100) as clock, \
-             patch.object(web, "render", return_value={"html": "ok", "status": "rendered"}) as render:
-            budget = web.Budget(30)
+    def test_one_session_per_budget_until_the_deadline(self):
+        with patch.object(web._Session, "render", return_value={"html": "ok", "status": "rendered"}) as render, \
+             web.Budget(30) as budget:
             budget.fetch("https://fixture-business.test", jobs._public_ip)
-            self.assertEqual(render.call_args.kwargs["timeout"], 20)
-            clock.return_value = 126
+            session = budget.session
             budget.fetch("https://fixture-business.test/contact", jobs._public_ip)
-            self.assertEqual(render.call_args.kwargs["timeout"], 4)
-            clock.return_value = 131
+            self.assertIs(budget.session, session)
+            budget.deadline = time.monotonic()
             self.assertEqual(budget.fetch("https://fixture-business.test/about", jobs._public_ip)["status"], "budget_exhausted")
             self.assertEqual(render.call_count, 2)
+        self.assertEqual(budget.fetch("https://fixture-business.test", jobs._public_ip)["status"], "budget_exhausted")
+
+    def test_failed_launch_never_leaks_a_browser_slot(self):
+        with patch.object(web, "check_available", side_effect=RuntimeError("no browser")):
+            with web.Budget(30) as budget:
+                for _ in range(3):
+                    self.assertEqual(budget.fetch("https://fixture-business.test", jobs._public_ip)["status"], "error")
+        slots = [web._SLOTS.acquire(blocking=False) for _ in range(2)]
+        for ok in slots:
+            if ok:
+                web._SLOTS.release()
+        self.assertEqual(slots, [True, True])
+
+    def test_hung_browser_close_still_stops_the_driver(self):
+        stopped = []
+        async def hang():
+            await asyncio.sleep(60)
+        async def stop():
+            stopped.append(True)
+        async def render(session, url):
+            session.browser, session.pw = Mock(close=hang), Mock(stop=stop)
+            return {"html": "", "status": "rendered"}
+        with patch.object(web._Session, "render", render), patch.object(web, "_CLOSE_SECONDS", 0.2):
+            budget = web.Budget(30)
+            budget.fetch("https://fixture-business.test", jobs._public_ip)
+            started = time.monotonic()
+            budget.close()
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertEqual(stopped, [True])
+
+    def test_status_keeps_the_best_fetch(self):
+        self.assertEqual(web.merge_status("http", "budget_exhausted"), "http")
+        self.assertEqual(web.merge_status("http", "rendered"), "rendered")
+        self.assertEqual(web.merge_status("rendered", "blocked"), "rendered")
+        self.assertEqual(web.merge_status("error", "blocked"), "blocked")
+        self.assertEqual(web.merge_status(None, "timeout"), "timeout")
 
 
 class WebsiteEnrichment(unittest.TestCase):
@@ -76,14 +111,14 @@ class WebsiteEnrichment(unittest.TestCase):
         def render(*a, **kw):
             self.assertEqual(len(fetched), len(rows))
             return {"html": "", "status": "blocked"}
-        with patch.object(web, "render", side_effect=render) as browser:
+        with patch.object(web._Session, "render", side_effect=render) as browser:
             jobs.add_site_data(rows, 5, browser_sites=True, get=http)
         self.assertEqual(browser.call_count, len(rows))
 
     def test_engine_retries_empty_http_for_emails_and_socials_once(self):
         html = '<a href="mailto:hello@fixture-business.test">Email</a><a href="https://instagram.com/fixture_business">IG</a>'
         rows = [{'website': 'https://fixture-business.test', 'emails': ''}]
-        with patch.object(web, 'render', return_value={'html': html, 'status': 'rendered'}) as render:
+        with patch.object(web._Session, 'render', return_value={'html': html, 'status': 'rendered'}) as render:
             jobs.add_site_data(rows, 5, socials=True, browser_sites=True, get=lambda _: '')
         self.assertEqual(rows[0]['emails'], 'hello@fixture-business.test')
         self.assertEqual(rows[0]['instagram'], 'https://instagram.com/fixture_business')
@@ -92,16 +127,36 @@ class WebsiteEnrichment(unittest.TestCase):
 
     def test_engine_keeps_fast_path_and_reports_blocks_without_fabricating_data(self):
         rows = [{'website': 'https://fixture-business.test', 'emails': ''}]
-        with patch.object(web, 'render') as render:
+        with patch.object(web._Session, 'render') as render:
             jobs.add_site_data(rows, 5, browser_sites=True, get=lambda _: 'hello@fixture-business.test')
             render.assert_not_called()
         self.assertEqual(rows[0]['website_fetch_status'], 'http')
         rows[0]['emails'] = ''
-        with patch.object(web, 'render', return_value={'html': '', 'status': 'blocked'}):
+        with patch.object(web._Session, 'render', return_value={'html': '', 'status': 'blocked'}):
             jobs.add_site_data(rows, 5, socials=True, browser_sites=True, get=lambda _: '')
         self.assertEqual(rows[0]['emails'], '')
         self.assertNotIn('instagram', rows[0])
         self.assertEqual(rows[0]['website_fetch_status'], 'blocked')
+
+    def test_budget_cut_retries_are_not_reported_unchecked_and_keep_http_status(self):
+        rows = [{'website': f'https://fixture-{i}.test', 'emails': ''} for i in range(6)]
+        def slow(url):
+            time.sleep(1.5)
+            return {'html': '', 'status': 'blocked'}
+        with patch.object(web._Session, 'render', side_effect=slow) as render:
+            # 4 s budget, 1.5 s per page: some retries are still queued when it ends.
+            _, unchecked = jobs.add_site_data(rows, 4, browser_sites=True, get=lambda _: '<p>no contact</p>')
+            self.assertLess(render.call_count, len(rows))
+        self.assertEqual(unchecked, 0)
+        self.assertEqual({r['website_fetch_status'] for r in rows}, {'http'})
+
+    def test_http_timeouts_are_labelled(self):
+        rows = [{'website': 'https://slow.test', 'emails': ''}]
+        with patch.object(web._Session, 'render') as render:
+            _, unchecked = jobs.add_site_data(rows, 0.5, browser_sites=True, get=lambda _: time.sleep(2) or '')
+        self.assertEqual(unchecked, 1)
+        self.assertEqual(rows[0]['website_fetch_status'], 'timeout')
+        render.assert_not_called()
 
     def test_api_flag_is_typed_and_adds_status_column(self):
         body = {'name': 'test', 'keywords': ['cafes'], 'lang': 'en', 'lat': '1', 'lon': '2', 'max_time': 60}
