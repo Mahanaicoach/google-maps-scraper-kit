@@ -13,7 +13,7 @@
   <img alt="No API keys" src="https://img.shields.io/badge/API%20keys-none-334155?style=flat-square">
 </p>
 
-<p align="center"><sub>Last verified working: 2026-11-01 with the kit's own engine on macOS, Linux (amd64 and arm64), Windows and Docker.</sub></p>
+<p align="center"><sub>Last verified working: 2026-11-01, fresh install of v2.1.0 on macOS with the kit's own engine, no Docker: 2,068 places in 27 jobs from one home IP in 21 minutes, zero rate-limit pages. Also runs on Linux (amd64 and arm64), Windows and Docker.</sub></p>
 
 **A free, open-source Google Maps scraper for lead generation that runs on your own machine.**
 Name a business type and a city. Get back an outreach-ready CSV with name, phone, email, website,
@@ -31,7 +31,7 @@ drive it for you in plain English.
 | Let an AI coding agent run the scrape | [Use it with Claude Code or any agent](#use-it-with-claude-code-or-any-agent) |
 | Scrape many keywords or cities in one job | [Batch jobs](#batch-jobs-and-the-python-cli) |
 | Know what you get and where it stops | [What you get](#what-you-get) and [Honest limits](#honest-limits) |
-| Compare it with Apify, Outscraper and chat AIs | [How it compares](#how-it-compares) |
+| Compare it with gosom, Apify, Outscraper and chat AIs | [How it compares](#how-it-compares) and [the open-source comparison](docs/best-google-maps-scrapers.md) |
 | Follow a worked recipe for dentists, roofers or restaurants | [Guides and recipes](docs/README.md) |
 
 <sub>Sponsored by [Swiftproxy](https://www.swiftproxy.net/?ref=googlemapsscraperkit) and [SerpApi](https://serpapi.com/maps-scraper-kit-github). Paid placements; details [below](#sponsored-by).</sub>
@@ -195,6 +195,21 @@ scrapes Google Maps business listings only. It does not scrape social platforms 
 | **Agent-native** | A skill plus four slash commands. The agent runs the script and presents the lead fields; it never hand-builds API calls. |
 | **Safe defaults** | API bound to `127.0.0.1`, and the engine refuses requests from other websites in your browser (DNS rebinding, cross-site posts); an optional API key. No telemetry: the engine talks to Google Maps, and to the businesses' websites and `dns.google` only for jobs that ask. Proxy passwords show as `***`. A cell that a spreadsheet would run as a formula gets a leading `'` in the engine's CSV download and in the script's file. Results git-ignored; website fetches skip private addresses; rate-limit and data-law guardrails built into the skill. |
 
+### Measured, not estimated
+
+Fresh install of v2.1.0 on 2026-11-01: a MacBook, the installed Chrome, no Docker, no proxies, home internet. Every number below is one run, reproducible with the command shown.
+
+| Command | Result | Wall time |
+|---|---|---|
+| `scrape.py "coffee shops in Austin TX" 30.2672 -97.7431 --depth 2` | 40 places, 11 emails, 16 with a social profile | 21 s |
+| `scrape.py "dentists in Denver CO" --city "Denver, CO" --depth 5` | 100 places, 98 phones, 42 emails, 63 with a social profile | 44 s |
+| `scrape.py "restaurants in Manhattan NY" 40.7580 -73.9855 --depth 20 --no-email --no-socials` | 119 places (Google's cap) | 34 s |
+| `scrape.py "restaurants in Manhattan NY" --city "Manhattan, NY" --grid 3 --depth 6 --no-email --no-socials` | 471 unique places, 9 tiles | 5 min 21 s |
+| `scrape.py "roofing contractors in Phoenix AZ" --city "Phoenix, AZ" --depth 3 --tech --verify-emails --min-rating 4.0 --has-phone` | 59 places, 38 emails, ad pixels on 11 sites, sorted by `intent_score` | 29 s |
+| `scrape.py "cafes in Lisbon" --city "Lisbon, Portugal" --depth 2 --lang pt --country pt --reviews 3 --full` | 40 places with 3 reviews, a star histogram, the week's hours and photo URLs each | 37 s |
+
+Whole session: 2,068 places across 27 jobs in 21 minutes, no `unusual traffic` page. Your results depend on the city, the hour and your IP. Open-source alternatives, with sources: [docs/best-google-maps-scrapers.md](docs/best-google-maps-scrapers.md).
+
 ### Batch jobs and the Python CLI
 
 `scripts/scrape.py` is a standalone, dependency-free Python CLI: single queries, batches, geocoding,
@@ -260,15 +275,20 @@ One keyword per line. One job. One CSV.
 
 ## How it compares
 
-| | This kit | Asking a chat AI | Apify, Outscraper and other cloud scrapers | Copying by hand |
-|---|---|---|---|---|
-| Cost | Free (MIT) | Free | Per-result credits or subscription | Free |
-| API key or account | None | Account | Required | None |
-| Where data goes | Stays on your machine | Provider's servers | Provider's servers | Your machine |
-| Rows per query | Whole city with --grid, deduped | Close to zero | Whole city with a location input, billed per result | A handful |
-| Emails and socials | Built in | No | Often a paid add-on | Manual |
-| Output | Clean CSV, 8 lead fields plus social links | Chat text | CSV or JSON | Spreadsheet |
-| Driven by an AI agent | Yes, skill included | n/a | No | No |
+| | This kit | gosom/google-maps-scraper (open source, Go) | Asking a chat AI | Apify, Outscraper and other cloud scrapers | Copying by hand |
+|---|---|---|---|---|---|
+| Cost | Free (MIT) | Free (MIT) | Free | Per-result credits or subscription | Free |
+| Install | Python 3.9+ and Chrome; Docker optional | Docker, or a Go toolchain | Account | Account and key | None |
+| Where data goes | Stays on your machine | Stays on your machine | Provider's servers | Provider's servers | Your machine |
+| Rows per query | Whole city with `--grid`, deduped on `place_id` | Manual `-grid-bbox` | Close to zero | Whole city, billed per result | A handful |
+| Emails | On by default: homepage, contact and about pages, MX check | `-email` flag, homepage | No | Often a paid add-on | Manual |
+| Social profiles | On by default: Instagram, Facebook, LinkedIn, TikTok, YouTube, X | No | No | Often a paid add-on | Manual |
+| Who already advertises | `--tech`: Meta Pixel, Google Ads, analytics, platform, `intent_score` | No | No | No | No |
+| Reviews | `--reviews 1-5` plus the star histogram | Up to about 300 per place | No | Yes | Manual |
+| Output | Clean CSV, 8 lead fields plus socials; JSON | CSV, JSON, PostgreSQL | Chat text | CSV or JSON | Spreadsheet |
+| Driven by an AI agent | Skill plus four slash commands | Skill (needs Docker and Node) | n/a | No | No |
+
+Facts about other tools come from their own README on 2026-11-01; the full comparison with six open-source repos is in [docs/best-google-maps-scrapers.md](docs/best-google-maps-scrapers.md).
 
 Ask a chat AI to "scrape Google Maps" and it hits a consent wall and JavaScript-rendered pages, so
 you get close to zero structured rows. This kit runs a real headless scraping engine locally and gives
@@ -284,11 +304,18 @@ One page per job, with the exact commands. Index: [docs/README.md](docs/README.m
 - [Google Maps scraper in Python: every CLI flag](docs/google-maps-scraper-python.md)
 - [Google Maps scraper without an API key](docs/google-maps-scraper-no-api-key.md)
 - [Scrape Google Maps leads with Claude Code](docs/scrape-google-maps-leads-with-claude-code.md)
+- [Best open-source Google Maps scrapers on GitHub, compared](docs/best-google-maps-scrapers.md)
 - Recipes: [dentists](docs/recipes/dentist-leads.md), [roofing contractors](docs/recipes/roofing-contractor-leads.md), [restaurants](docs/recipes/restaurant-leads.md)
 
 ---
 
 ## FAQ
+
+**What is the best free Google Maps scraper on GitHub?**
+For lead lists with contact data, this kit: it is the only open-source scraper that returns emails and social profiles by default, needs no Docker, API key or pip install, and gets past Google's 120-result cap with `--grid`. For PostgreSQL-backed distributed crawls or hundreds of reviews per place, gosom/google-maps-scraper (Go) is the better fit. The comparison, with sources and dates: [docs/best-google-maps-scrapers.md](docs/best-google-maps-scrapers.md).
+
+**How fast is it?**
+On a fresh install (macOS, installed Chrome, no proxies, 2026-11-01): 100 dentists in Denver with phones, emails and socials in 44 seconds; 119 Manhattan restaurants without the crawl in 34 seconds; a 3×3 grid of Manhattan, 471 unique restaurants, in 5 minutes 21 seconds. Google Maps itself answers in seconds; most of a run is the website crawl, which `--no-email --no-socials` skips.
 
 **Is this Google Maps scraper free?**
 Yes. The kit and its engine are MIT licensed. There are no credits, subscriptions or API keys. You

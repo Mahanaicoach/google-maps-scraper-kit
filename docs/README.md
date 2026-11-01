@@ -8,6 +8,7 @@ Short guides for the Google Maps Scraper Kit. Each page covers one task with the
 - [Google Maps scraper in Python](google-maps-scraper-python.md): for terminal users who want every flag of the CLI in one table.
 - [Google Maps scraper without an API key](google-maps-scraper-no-api-key.md): for anyone avoiding Places API keys, quotas and billing.
 - [Scrape Google Maps leads with Claude Code](scrape-google-maps-leads-with-claude-code.md): for people who want an AI agent to run the scrape for them.
+- [Best open-source Google Maps scrapers on GitHub](best-google-maps-scrapers.md): the kit against gosom, omkarcloud and four more repos, with measured numbers and sources, checked 2026-11-01.
 
 ## Recipes
 
