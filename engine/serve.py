@@ -28,7 +28,7 @@ for _stream in (sys.stdout, sys.stderr):  # ✓ and accented names on a Windows 
     except (AttributeError, ValueError):
         pass
 
-VERSION = "2.0.1-dev.2"
+VERSION = "2.0.1-dev.3"
 MARK = f"gmskit-engine/{VERSION}"  # X-Engine header: tells scripts/engine.py this engine from others
 REPO = "https://github.com/Mahanaicoach/google-maps-scraper-kit"
 # The web UI's sponsor box: the browser reads this static file from GitHub (cached a day, no
@@ -335,6 +335,14 @@ summary:hover {{ color: var(--go); }}
 button {{ font: inherit; min-height: 40px; padding: 8px 14px; color: var(--ink); background: var(--sheet);
   border: 1px solid var(--rule); border-radius: 8px; cursor: pointer; transition: border-color .15s, filter .15s; }}
 button:hover {{ border-color: var(--ink); }}
+.collect-choice {{ display: flex; align-items: center; gap: 6px; }}
+button.info-button {{ width: 40px; min-height: 40px; padding: 0; border-radius: 50%; font-weight: 700;
+  color: var(--soft); }}
+.info-note[popover] {{ width: min(360px, calc(100vw - 40px)); padding: 20px; border: 1px solid var(--rule);
+  border-radius: 12px; background: var(--sheet); color: var(--ink); line-height: 1.6;
+  box-shadow: 0 12px 40px #0003; }}
+.info-note p {{ margin: 8px 0 0; }}
+
 button.primary {{ min-height: 48px; padding: 10px 26px; color: var(--go-ink); background: var(--go); border-color: var(--go);
   font-weight: 650; letter-spacing: .01em; }}
 button.primary:hover {{ filter: brightness(1.08); }} button:disabled {{ opacity: .6; cursor: progress; }}
@@ -390,8 +398,29 @@ progress {{ display: block; width: 100%; max-width: 200px; height: 6px; margin-t
   <p class="hint soft">Pick from the lists; add as many as you like. Each business type is searched in each city, one job per city.</p>
   <fieldset class="collect"><legend>Collect</legend>
     <label class="chip"><input type="checkbox" id="email" checked> Emails</label>
-    <label class="chip"><input type="checkbox" id="socials" checked> Social profiles</label>
-    <label class="chip"><input type="checkbox" id="browser-sites"> Render websites (Playwright)</label>
+    <div class="collect-choice">
+      <label class="chip"><input type="checkbox" id="socials" checked> Social accounts</label>
+      <button type="button" class="info-button" popovertarget="socials-help"
+        aria-label="About social accounts and scrape speed"
+        title="Finds social profile links on business websites. Website checks may slow the scrape."><span aria-hidden="true">!</span></button>
+    </div>
+    <div class="collect-choice">
+      <label class="chip"><input type="checkbox" id="browser-sites"> Render websites (Playwright)</label>
+      <button type="button" class="info-button" popovertarget="browser-help"
+        aria-label="About website rendering and scrape speed"
+        title="Retries websites with a browser. This can slow the scrape; enable only when needed."><span aria-hidden="true">!</span></button>
+    </div>
+    <div id="socials-help" class="info-note" popover role="note" aria-label="Social account collection">
+      <strong>Social accounts</strong>
+      <p>Finds Instagram, Facebook, LinkedIn, TikTok, YouTube and X profile links on each business website.</p>
+      <p>Website checks may slow the scrape compared with collecting Maps listings alone. Pages already fetched for emails are reused.</p>
+      <p>Turn this option off when you do not need social accounts.</p>
+    </div>
+    <div id="browser-help" class="info-note" popover role="note" aria-label="Website rendering speed">
+      <strong>Render websites</strong>
+      <p>Retries websites when the quick website check finds no email addresses or social profile links.</p>
+      <p>This can slow the scrape. Browser retries share a 30-second budget per job, plus cleanup time. Leave this off for the fastest run.</p>
+    </div>
   </fieldset>
   <details><summary>Location and language</summary><div class="body">
     <p class="wide soft">Each job centres the map on its city.</p>
