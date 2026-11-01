@@ -12,7 +12,7 @@ Install these once:
 
 | Tool | Why | Get it |
 |---|---|---|
-| **Python 3.9 or newer** | runs the engine and the scripts (standard library only, no `pip install`) | https://www.python.org/downloads |
+| **Python 3.9 or newer** | runs the engine and scripts; optional website rendering adds Playwright | https://www.python.org/downloads |
 | **Google Chrome** *(or Chromium, Edge or Brave)* | the engine drives it, headless | https://www.google.com/chrome |
 | **Docker Desktop** *(optional)* | runs the engine in a container instead, with its own Chromium | https://www.docker.com/products/docker-desktop |
 | **Claude Code** *(optional but recommended)* | lets Claude drive the scraper for you | https://claude.com/claude-code |
@@ -205,6 +205,50 @@ open one). On macOS a second Chrome icon shows in the Dock and the window may ta
 starts.
 
 ---
+
+### Optional website rendering (Playwright)
+
+The standard HTTP email/social crawl needs no pip dependencies. For websites that need JavaScript,
+or return no useful email/social links over HTTP, install the optional renderer in a virtual
+environment. It uses the Chrome/Chromium already installed for the kit, with no additional browser
+download.
+
+```bash
+python3 -m venv .engine/playwright-venv
+source .engine/playwright-venv/bin/activate
+python -m pip install -r requirements-browser.txt
+python scripts/scrape.py "coffee shops in Austin TX" --depth 1 --browser-sites
+```
+
+On Windows, use `py -m venv .engine/playwright-venv`, activate with
+`.engine\playwright-venv\Scripts\Activate.ps1`, then use `python` for the remaining commands.
+
+- CLI: `--browser-sites` retries pages where the requested emails or social links were not found.
+  Email extraction also tries rendered contact/about pages when needed. Social profiles are links
+  found on business websites; social networks themselves are not crawled.
+- API: use `"browser_sites": true` with `email` and/or `socials`. Start the engine using the same
+  virtual environment's Python so it can import Playwright. The API website pass reads homepages.
+- Web UI: select **Render websites (Playwright)**. Missing optional dependencies are reported before
+  a job starts. The stock Docker image does not install this optional package.
+- HTTP lookups finish before browser retries, so slow retries never occupy HTTP worker slots.
+  At most two browser retries run concurrently. Each page gets at most 20 seconds; the CLI shares
+  a 30-second browser budget between emails, contact pages and socials. The API also caps retries
+  at 30 seconds or its remaining website-pass time, whichever is less. Each run or job starts one
+  browser and opens every page in a fresh context in it; closing it takes at most about 5 seconds.
+  Once exhausted, remaining retries report `budget_exhausted` rather than adding
+  more page waits. Retries also skip when less than three seconds remain for browser startup.
+  Slow third-party scripts do not discard an already usable page: rendering uses bounded DOM and
+  contact-content waits. Pages block image/media/font downloads.
+- `website_fetch_status` records `http`, `rendered`, `blocked`, `timeout`, `budget_exhausted` or `error`.
+  It keeps the best fetch: `rendered` beats `http`, and a failed or skipped browser retry leaves
+  `http` in place. `timeout` means the HTTP fetch itself ran out of time. A rendered page
+  may contain no published contact information. Authentication, CAPTCHA and access denials can
+  remain unavailable; the renderer does not solve them.
+
+Checks: `python engine/test_website_browser.py` runs offline. With Playwright installed,
+`GMSKIT_BROWSER_LIVE=1 python engine/test_website_browser.py` also renders a local JavaScript fixture
+and checks blocked/private redirects. Reference: https://playwright.dev/python/docs/library .
+
 
 ## 4. Run it from Claude Code or another agent
 

@@ -1,0 +1,2 @@
+# Optional website rendering. This release supports the kit's Python 3.9+ minimum.
+playwright==1.60.0

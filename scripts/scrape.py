@@ -627,6 +627,34 @@ def _fetch_cached(url):
     """Homepage fetch shared by the email crawl, --socials and --tech (one fetch per site)."""
     return _fetch_html(url, timeout=8)
 
+_BROWSER_BUDGET = None
+_BROWSER_LOCK = threading.Lock()
+
+
+def _web():
+    """The engine's optional website_browser module (standard library until it renders)."""
+    engine_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine")
+    if engine_dir not in sys.path:
+        sys.path.insert(0, engine_dir)
+    import website_browser
+    return website_browser
+
+
+@functools.lru_cache(maxsize=128)
+def _render_site(url):
+    """Rendered homepages shared by email and social extraction during this CLI run."""
+    global _BROWSER_BUDGET
+    with _BROWSER_LOCK:
+        if _BROWSER_BUDGET is None:
+            _BROWSER_BUDGET = _web().Budget()
+        budget = _BROWSER_BUDGET
+    return budget.fetch(url, _is_public_ip)
+
+
+def _set_fetch_status(r, status):
+    r["website_fetch_status"] = _web().merge_status(r.get("website_fetch_status"), status)
+
+
 def _find_socials(html):
     out = {k: "" for k in SOCIAL_FIELDS}
     for plat, rx in SOCIAL_RE.items():
@@ -656,13 +684,26 @@ def _each_site(todo, work, label, workers=None):
             print(f"\r  {label}: {done}/{len(todo)} checked", end="", flush=True)
     print(f"  ({failed} skipped after an error)" if failed else "")
 
-def enrich_sites(results, find, fields, label, workers=None):
-    """Merge find(homepage html) into every lead that has a website. Zero LLM tokens."""
-    for r in results:                       # make sure every row has the keys
+def enrich_sites(results, find, fields, label, workers=None, browser_sites=False):
+    """Finish the HTTP pass before browser retries, so retries never occupy HTTP worker slots."""
+    for r in results:
         for k in fields:
             r.setdefault(k, "")
-    _each_site([r for r in results if r.get("website")],
-               lambda r: r.update(find(_fetch_cached(r["website"]))), label, workers)
+    def work(r):
+        page = _fetch_cached(r["website"])
+        found = find(page)
+        if browser_sites:
+            r.setdefault("website_fetch_status", "http" if page else "error")
+        r.update(found)
+    todo = [r for r in results if r.get("website")]
+    _each_site(todo, work, label, workers)
+    if browser_sites:
+        def retry(r):
+            rendered = _render_site(r["website"])
+            _set_fetch_status(r, rendered["status"])
+            r.update({k: v for k, v in find(rendered["html"]).items() if v})
+        _each_site([r for r in todo if not any(r.get(k) for k in fields)],
+                   retry, "browser " + label, workers=2)
 
 
 # ── Optional ad and tech signals (--tech): who already spends on marketing ──────
@@ -825,8 +866,8 @@ def contact_links(html, base_url):
             out.append(url)
     return out[:3]
 
-def enrich_emails(results, deep=True, workers=None):
-    """Fill empty `emails` from the homepage, then (deep) up to 3 contact/about pages. Zero LLM tokens."""
+def enrich_emails(results, deep=True, workers=None, browser_sites=False):
+    """Finish all HTTP email lookups before bounded browser retries for still-empty rows."""
     def work(r):
         site = r["website"]
         home = _fetch_cached(site)
@@ -834,8 +875,29 @@ def enrich_emails(results, deep=True, workers=None):
         if deep and home and not found:
             pages = "\n".join(_fetch_html(u, timeout=8) for u in contact_links(home, site))
             found = extract_emails(pages, site)
+        if browser_sites:
+            r.setdefault("website_fetch_status", "http" if home else "error")
         r["emails"] = ", ".join(found)
-    _each_site([r for r in results if r.get("website") and not r.get("emails")], work, "emails", workers)
+    todo = [r for r in results if r.get("website") and not r.get("emails")]
+    _each_site(todo, work, "emails", workers)
+    if browser_sites:
+        def retry(r):
+            site = r["website"]
+            rendered = _render_site(site)
+            _set_fetch_status(r, rendered["status"])
+            home = rendered["html"]
+            found = extract_emails(home, site)
+            if deep and home and not found:
+                for url in contact_links(home, site):
+                    contact = _render_site(url)
+                    if contact["status"] == "budget_exhausted":
+                        _set_fetch_status(r, "budget_exhausted")
+                        break
+                    found = extract_emails(contact["html"], site)
+                    if found:
+                        break
+            r["emails"] = ", ".join(found)
+        _each_site([r for r in todo if not r.get("emails")], retry, "browser emails", workers=2)
 
 
 # ── Optional email domain check (--verify-emails): can the domain receive mail, and who hosts it ──
@@ -952,6 +1014,7 @@ def scrape_place(a, body, city, keywords):
 
 
 def main():
+    global _BROWSER_BUDGET
     ap = argparse.ArgumentParser(description="Scrape Google Maps business listings.")
     ap.add_argument("keyword", nargs="?", help='e.g. "coffee shops in Austin TX"')
     ap.add_argument("lat", nargs="?", help="latitude (optional if --city given)")
@@ -999,6 +1062,9 @@ def main():
     ap.add_argument("--no-socials", dest="socials", action="store_false", default=True,
                     help="skip the social profiles (Instagram, Facebook, LinkedIn, TikTok, YouTube and X links on "
                          "each website), which are on by default and cost 0 LLM tokens")
+    ap.add_argument("--browser-sites", action="store_true",
+                    help="retry websites with Playwright when HTTP finds no emails or social links; "
+                         "requires requirements-browser.txt and Chrome, adds website_fetch_status")
     ap.add_argument("--socials", dest="socials", action="store_true", help=argparse.SUPPRESS)  # the old opt-in
     ap.add_argument("--tech", action="store_true",
                     help="also detect Meta Pixel, Google Ads tag, analytics, Bing, LinkedIn and TikTok "
@@ -1019,6 +1085,14 @@ def main():
                    help="drop places already in this earlier results file (.csv or .json); repeatable")
     f.add_argument("--limit", type=int, metavar="N", help="stop at N rows after filtering")
     a = ap.parse_args()
+    if a.browser_sites:
+        try:
+            _web().check_available()
+        except RuntimeError as e:
+            sys.exit(f"✗ {e}")
+        _render_site.cache_clear()
+        _BROWSER_BUDGET = None
+
 
     keywords = collect_keywords(a)
     if not keywords:
@@ -1158,7 +1232,7 @@ def main():
     if a.email and "emails" in fields and not a.no_website:  # no website, nothing to crawl
         pages = "homepage, then contact and about pages" if a.deep_emails else "homepage only"
         print(f"▶ Emails: checking each business website ({pages}, {SITE_WORKERS} at a time)…")
-        enrich_emails(rows, deep=a.deep_emails)
+        enrich_emails(rows, deep=a.deep_emails, browser_sites=a.browser_sites)
         total, n = sum(1 for r in rows if r.get("emails")), len(rows)
         print(f"  emails found for {total}/{n} businesses ({round(100 * total / n) if n else 0}%)")
         if a.verify_emails:
@@ -1174,10 +1248,15 @@ def main():
     # Enrichment runs on the raw rows, which always carry the website, whatever --fields keeps.
     if a.socials:
         print("▶ Finding socials (Instagram / Facebook / LinkedIn / TikTok / YouTube / X) on each website…")
-        enrich_sites(rows, _find_socials, SOCIAL_FIELDS, "socials")
+        enrich_sites(rows, _find_socials, SOCIAL_FIELDS, "socials", browser_sites=a.browser_sites)
         fields = fields + SOCIAL_FIELDS
         found = sum(1 for r in rows if any(r.get(k) for k in SOCIAL_FIELDS))
         print(f"  socials found for {found}/{len(rows)} businesses")
+
+    if a.browser_sites:
+        fields = fields + ["website_fetch_status"]
+        if _BROWSER_BUDGET is not None:  # the last pass that renders: close the job's one browser
+            _BROWSER_BUDGET.close()
 
     if a.tech:
         print("▶ Checking ad pixels, analytics and site platform on each website (0 LLM tokens)…")

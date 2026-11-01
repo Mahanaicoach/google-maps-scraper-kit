@@ -134,8 +134,15 @@ def validate(body):
             "max_time": _int(body, "max_time", 600, 1, 86400, "max time"),
             "fast_mode": _bool(body, "fast_mode"), "email": _bool(body, "email"),
             "verify_emails": _bool(body, "verify_emails"), "socials": _bool(body, "socials"),
+            "browser_sites": _bool(body, "browser_sites"),
             "reviews_max": _int(body, "reviews_max", 0, 0, REVIEWS_MAX, "reviews_max"),
             "proxies": _proxies(body.get("proxies"))}
+    if data["browser_sites"]:
+        from website_browser import check_available
+        try:
+            check_available()
+        except RuntimeError as e:
+            raise ValueError(str(e)) from e
     return name.strip(), data
 
 
@@ -198,7 +205,7 @@ def locale(d):
 # ── Rows ──
 def fields(d):
     """A job's CSV columns: the old engine's 36, ours, then those its website pass fills."""
-    return COLUMNS + EXTRA + (SOCIALS if d.get("socials") else []) + (["email_host"] if d.get("verify_emails") else [])
+    return COLUMNS + EXTRA + (SOCIALS if d.get("socials") else []) + (["email_host"] if d.get("verify_emails") else []) + (["website_fetch_status"] if d.get("browser_sites") else [])
 
 
 def to_row(place, keyword):
@@ -755,7 +762,8 @@ class Worker(threading.Thread):
                 self._browser = None
         if stage == "websites" and (d["email"] or d.get("socials")) and rows and not stop.is_set():
             n, unchecked = add_site_data(rows, max(deadline - time.monotonic(), EMAIL_MIN_SECONDS), email=d["email"],
-                                         socials=d.get("socials"), verify=d.get("verify_emails"), stop=stop.is_set)
+                                         socials=d.get("socials"), verify=d.get("verify_emails"), stop=stop.is_set,
+                                         browser_sites=d.get("browser_sites", False))
             self.log(f"job {jid}: website data for {n}/{sum(1 for r in rows if r['website'])} websites")
             if unchecked and not stop.is_set():
                 notes.append(f"{unchecked} website(s) not checked: ran out of time")
@@ -1124,15 +1132,15 @@ def find_emails(text, site=""):
     return sorted(found, key=lambda e: not own(e))[:3]
 
 
-def add_site_data(rows, seconds, email=True, socials=False, verify=False, get=None, stop=lambda: False):
-    """One homepage fetch per row with a website, SITE_WORKERS at a time, for at most `seconds` or
-    until stop() is true: `emails` (joined by ", ", like the old engine), the social columns, and
-    with verify an MX check of each address's domain (dns.google) that drops domains that do not
-    exist and fills `email_host`. (rows that got something, rows not checked in time)."""
+def add_site_data(rows, seconds, email=True, socials=False, verify=False, get=None, stop=lambda: False, browser_sites=False):
+    """HTTP lookups first; optional browser retries use separate workers and the remaining budget."""
     get = get or fetch
+    end = time.monotonic() + seconds
+    if browser_sites:
+        from website_browser import Budget, merge_status
 
-    def work(r):
-        page, out = get(r["website"]), {}
+    def extract(r, page):
+        out = {}
         if email and not r.get("emails"):
             found = find_emails(page, site_host(r["website"]))
             if verify:
@@ -1144,18 +1152,47 @@ def add_site_data(rows, seconds, email=True, socials=False, verify=False, get=No
             out.update(find_socials(page))
         return out
 
+    def http_work(r):
+        page = get(r["website"])
+        out = extract(r, page)
+        if browser_sites:
+            out["website_fetch_status"] = "http" if page else "error"
+        return out
+
+    enriched = set()
+    def run(todo, work, workers, deadline, timeout_status=None):
+        pool = concurrent.futures.ThreadPoolExecutor(workers)
+        futs = {pool.submit(work, r): r for r in todo}
+        pending = set(futs)
+        while pending and not stop() and time.monotonic() < deadline:
+            _, pending = concurrent.futures.wait(pending, timeout=min(1, max(0, deadline - time.monotonic())))
+        done = set(futs) - pending
+        if timeout_status:
+            for f in pending:
+                futs[f]["website_fetch_status"] = merge_status(futs[f].get("website_fetch_status"), timeout_status)
+        pool.shutdown(wait=False, cancel_futures=True)
+        completed = []
+        for f in done:
+            if not f.exception():
+                got = {k: v for k, v in f.result().items() if v}
+                r = futs[f]
+                r.update(got)
+                completed.append(r)
+                if any(k != "website_fetch_status" for k in got):
+                    enriched.add(id(r))
+        return completed, len(pending)
+
     todo = [r for r in rows if r.get("website")]
-    pool = concurrent.futures.ThreadPoolExecutor(SITE_WORKERS)
-    futs = {pool.submit(work, r): r for r in todo}
-    end, pending = time.monotonic() + seconds, set(futs)
-    while pending and not stop() and time.monotonic() < end:
-        _, pending = concurrent.futures.wait(pending, timeout=min(1, max(0, end - time.monotonic())))
-    done = set(futs) - pending
-    pool.shutdown(wait=False, cancel_futures=True)
-    n = 0
-    for f in done:
-        if not f.exception():
-            got = {k: v for k, v in f.result().items() if v}
-            futs[f].update(got)
-            n += bool(got)
-    return n, len(pending)
+    completed, pending = run(todo, http_work, SITE_WORKERS, end, "timeout" if browser_sites else None)
+    if browser_sites and not stop():
+        with Budget(max(0, min(30, end - time.monotonic()))) as budget:
+            def retry(r):
+                rendered = budget.fetch(r["website"], _public_ip)
+                out = extract(r, rendered["html"])
+                out["website_fetch_status"] = merge_status(r.get("website_fetch_status"), rendered["status"])
+                return out
+            missing = [r for r in completed if (email and not r.get("emails"))
+                       or (socials and not any(r.get(k) for k in SOCIALS))]
+            # HTTP already checked these rows: retries the budget cut off are not "not checked".
+            run(missing, retry, 2, min(end, time.monotonic() + 30), "budget_exhausted")
+    return len(enriched), pending

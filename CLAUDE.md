@@ -62,7 +62,7 @@ using Docker. A skill installed on its own has no `scripts/`: ask the user to in
 `SETUP.md` has the full setup.
 
 ## Changing the kit
-`python3 scripts/test_scrape.py`, `python3 engine/test_engine.py` and `python3 engine/test_cdp.py` run the
+`python3 scripts/test_scrape.py`, `python3 engine/test_engine.py`, `python3 engine/test_cdp.py` and `python3 engine/test_website_browser.py` run the
 offline checks, no network and no Chrome. Engine changes go in `engine/`, with a test.
 
 ## Attribution

@@ -41,7 +41,8 @@ drive it for you in plain English.
 ## Quick start
 
 Requires Python 3.9 or newer and Google Chrome (or Chromium, Edge or Brave). The engine and the
-scripts use the Python standard library only, so there is nothing to `pip install`. No browser
+scripts use the Python standard library by default. Optional website rendering adds Playwright
+([setup](SETUP.md#optional-website-rendering-playwright)); the basic crawl needs no pip install. No browser
 installed? The first start downloads Chrome for Testing once, about 100 MB, checked against a pinned
 SHA-256.
 
@@ -93,6 +94,11 @@ Illustrative rows. The file also has six social columns after these eight (see b
 | Sample Espresso Bar | +1 512-555-0102 | info@example.org | example.org | Cafe | 200 S Lamar Blvd, Austin, TX | 4.5 | 128 |
 
 `review_count` works in headless mode; see [Honest limits](#honest-limits).
+
+`--browser-sites` enables optional Playwright retries when HTTP finds no emails or social profile
+links. It renders JavaScript and shares the rendered homepage between both passes. Output adds
+`website_fetch_status`: `http`, `rendered`, `blocked`, `timeout`, `budget_exhausted` or `error`.
+See [optional setup](SETUP.md#optional-website-rendering-playwright).
 
 The social columns `instagram`, `facebook`, `linkedin`, `tiktok`, `youtube` and `x` come after the eight
 lead fields by default. `--no-socials` drops them. `--tech` adds

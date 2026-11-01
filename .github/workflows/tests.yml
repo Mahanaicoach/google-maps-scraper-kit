@@ -32,6 +32,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: python scripts/test_scrape.py
       - run: python engine/test_cdp.py
+      - run: python engine/test_website_browser.py
       - run: python engine/test_engine.py
       - run: bash -n scripts/scrape.sh
       - run: bash scripts/test_update.sh

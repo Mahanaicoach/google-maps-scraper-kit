@@ -1,7 +1,7 @@
 # Google Maps scraper in Python: the kit's dependency-free CLI
 
-`scripts/scrape.py` is a free Google Maps scraper Python CLI that turns a keyword and a place into a lead CSV, using only the standard library.
-It drives the kit's own engine running on your machine, so there is no API key, no pip install and no data leaving your machine.
+`scripts/scrape.py` is a free Google Maps scraper Python CLI that turns a keyword and a place into a lead CSV, using the standard library by default.
+It drives the kit's own engine running on your machine, so no Maps API key is needed. The default crawl needs no pip install; optional website rendering uses Playwright.
 
 ## Run it
 
@@ -33,6 +33,7 @@ On Windows, run the same commands with `py` in place of `python3`. The engine ne
 | `--full` | Keeps all raw columns (the 36 classic ones plus `categories`) instead of the 8 lead fields. Review counts and weekly opening hours work headless ([SETUP §3](../SETUP.md#review-counts-hours-and-reviews)). Review texts come only with `--reviews`. |
 | `--reviews N` | Adds up to N reviews per place (1-5, no reviewer names) and its star histogram (`user_reviews`, `reviews_per_rating`), one more page load per place, about 2-4 s. Raise `--max-time` for many places. |
 | `--fields` | Comma-separated columns to keep, overriding the lead fields. |
+| `--browser-sites` | Optional Playwright retry for emails and social links when HTTP finds none. Adds `website_fetch_status`; requires [optional setup](../SETUP.md#optional-website-rendering-playwright). |
 | `--no-socials` | Skips the social columns. By default the CSV has `instagram`, `facebook`, `linkedin`, `tiktok`, `youtube` and `x` after the lead fields, found on each website. Reuses the homepage the email crawl fetched. Zero AI tokens. `--socials` is still accepted for old commands but no longer needed. |
 | `--tech` | Adds `fb_pixel`, `google_ads_tag`, `analytics`, `bing_ads`, `linkedin_insight`, `tiktok_pixel` (yes/no, blank if the site did not load), `cms`, `mobile_friendly` and a 0-100 `intent_score`, and sorts by that score. Shares the homepage fetch with the social profiles. Zero AI tokens. |
 | `--keyword` | Adds an extra keyword to the same job. Repeatable. |
