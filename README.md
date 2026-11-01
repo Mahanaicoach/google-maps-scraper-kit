@@ -282,18 +282,18 @@ One keyword per line. One job. One CSV.
 
 ## How it compares
 
-| | This kit | gosom/google-maps-scraper (open source, Go) | Asking a chat AI | Apify, Outscraper and other cloud scrapers | Copying by hand |
-|---|---|---|---|---|---|
-| Cost | Free (MIT) | Free (MIT) | Free | Per-result credits or subscription | Free |
-| Install | Python 3.9+ and Chrome; Docker optional | Docker, or a Go toolchain | Account | Account and key | None |
-| Where data goes | Stays on your machine | Stays on your machine | Provider's servers | Provider's servers | Your machine |
-| Rows per query | Whole city with `--grid`, deduped on `place_id` | Manual `-grid-bbox` | Close to zero | Whole city, billed per result | A handful |
-| Emails | On by default: homepage, contact and about pages, MX check | `-email` flag, homepage | No | Often a paid add-on | Manual |
-| Social profiles | On by default: Instagram, Facebook, LinkedIn, TikTok, YouTube, X | No | No | Often a paid add-on | Manual |
-| Who already advertises | `--tech`: Meta Pixel, Google Ads, analytics, platform, `intent_score` | No | No | No | No |
-| Reviews | `--reviews 1-5` plus the star histogram | Up to about 300 per place | No | Yes | Manual |
-| Output | Clean CSV, 8 lead fields plus socials; JSON | CSV, JSON, PostgreSQL | Chat text | CSV or JSON | Spreadsheet |
-| Driven by an AI agent | Skill plus four slash commands | Skill (needs Docker and Node) | n/a | No | No |
+| | This kit | gosom/google-maps-scraper (open source, Go) | Asking a chat AI | Apify, Outscraper and other cloud scrapers |
+|---|---|---|---|---|
+| Cost | Free (MIT) | Free (MIT) | Free | Per-result credits or subscription |
+| Install | Python 3.9+ and Chrome; Docker optional | Docker, or a Go toolchain | Account | Account and key |
+| Where data goes | Stays on your machine | Stays on your machine | Provider's servers | Provider's servers |
+| Rows per query | Whole city with `--grid`, deduped on `place_id` | Manual `-grid-bbox` | Close to zero | Whole city, billed per result |
+| Emails | On by default: homepage, contact and about pages, MX check | `-email` flag, homepage | No | Often a paid add-on |
+| Social profiles | On by default: Instagram, Facebook, LinkedIn, TikTok, YouTube, X | No | No | Often a paid add-on |
+| Who already advertises | `--tech`: Meta Pixel, Google Ads, analytics, platform, `intent_score` | No | No | No |
+| Reviews | `--reviews 1-5` plus the star histogram | Up to about 300 per place | No | Yes |
+| Output | Clean CSV, 8 lead fields plus socials; JSON | CSV, JSON, PostgreSQL | Chat text | CSV or JSON |
+| Driven by an AI agent | Skill plus four slash commands | Skill (needs Docker and Node) | n/a | No |
 
 Facts about other tools come from their own README on 2026-11-01; the full comparison with six open-source repos is in [docs/best-google-maps-scrapers.md](docs/best-google-maps-scrapers.md).
 
