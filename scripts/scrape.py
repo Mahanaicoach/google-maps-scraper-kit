@@ -769,7 +769,14 @@ def is_real_email(e):
     local, _, dom = e.rpartition("@")
     if not EMAIL_RE.fullmatch(e) or e.endswith(_JUNK_EXT):
         return False
-    return local not in _JUNK_LOCAL and not any(j in dom for j in _JUNK_DOMAIN)
+    return local not in _JUNK_LOCAL and not junk_domain(dom)
+
+
+def junk_domain(dom, junk=_JUNK_DOMAIN):
+    """An entry with a dot is a domain and its subdomains, one without is a whole label: sentry.io
+    and user@email.com are junk, sentryinsurance.com and myemail.com are not. engine/jobs.py has the same."""
+    labels = dom.split(".")
+    return any(dom == j or dom.endswith("." + j) if "." in j else j in labels for j in junk)
 
 
 # "name [at] domain [dot] com", "name (at) domain dot com" and friends, adapted from OpenLeadFinder.
@@ -928,6 +935,7 @@ def scrape_place(a, body, city, keywords):
             print(f"\n  ⚠ cell {i}/{len(cells)} incomplete: {str(e).strip()}")
             skipped += 1
             job_id, rows = job_id or e.job_id, dedupe(rows + e.rows)
+            SALVAGE["rows"], SALVAGE["job"] = dedupe(SALVAGE["rows"] + rows), SALVAGE["job"] or job_id
             continue
         except Exception as e:
             print(f"\n  ⚠ cell {i}/{len(cells)} skipped: {str(e).strip()}")
@@ -1030,6 +1038,8 @@ def main():
         sys.exit("✗ --limit must be 1 or more.")
     if a.has_email and not a.email:
         sys.exit("✗ --has-email needs the email crawl: drop --no-email.")
+    if a.has_email and a.fields and not a.full and "emails" not in [c.strip() for c in a.fields.split(",")]:
+        sys.exit("✗ --has-email needs the emails column: add emails to --fields.")
     if a.city and (a.lat or a.lon):
         print("ℹ --city given, so the lat/lon arguments are ignored.")
     if a.out and os.path.splitext(a.out)[1].lower() not in (".csv", ".json"):  # never a .zshrc or a key file
@@ -1126,6 +1136,7 @@ def main():
         print(f"  filters and --exclude kept {len(rows)} of {before} rows")
     if a.limit and not a.has_email:
         rows = rows[:a.limit]
+    SALVAGE["rows"] = rows  # Ctrl-C in the crawl below keeps the filtered rows, not the raw ones
     if a.full:
         fields = list(rows[0].keys()) if rows else LEAD
     elif a.fields:
@@ -1134,8 +1145,6 @@ def main():
         fields = LEAD
     if a.reviews and not a.full:  # the page loads were paid for: keep what they read
         fields = fields + [c for c in ("reviews_per_rating", "user_reviews") if c not in fields]
-    if a.has_email and "emails" not in fields:
-        sys.exit("✗ --has-email needs the emails column: add emails to --fields.")
     if before and not rows:
         print(f"⚠ Nothing left: the filters and --exclude dropped all {before} rows. Loosen them and rerun; "
               f"the file below has only a header.")

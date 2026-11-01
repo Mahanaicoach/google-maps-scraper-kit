@@ -889,6 +889,23 @@ class ArgumentBounds(unittest.TestCase):
     def test_has_email_needs_the_crawl(self):
         self.assertIn("--has-email", self.run_main("--has-email", "--no-email"))
 
+    def test_has_email_needs_the_column_before_the_scrape(self):  # no engine here: it must exit first
+        self.assertIn("needs the emails column", self.run_main("--has-email", "--fields", "title,phone"))
+
+    def test_ctrl_c_in_the_crawl_keeps_only_the_filtered_rows(self):
+        good, bad = dict(_row("A"), review_rating="4.8"), dict(_row("B"), review_rating="3.0")
+        argv = ["scrape.py", "x", "1", "2", "--min-rating", "4.5", "--no-socials", "--out",
+                os.path.join(tempfile.mkdtemp(), "leads.csv")]
+        with mock.patch.object(scrape, "run_job", return_value=("job-1", [good, bad])), \
+             mock.patch.object(scrape, "enrich_emails", side_effect=KeyboardInterrupt), \
+             mock.patch.dict(scrape.SALVAGE, {"rows": [], "job": None}), \
+             mock.patch.object(sys, "argv", argv), redirect_stdout(io.StringIO()), self.assertRaises(KeyboardInterrupt):
+            try:
+                scrape.main()
+            finally:
+                titles = [r["title"] for r in scrape.SALVAGE["rows"]]
+        self.assertEqual(titles, ["Biz A"])
+
     def test_rejects_values_the_engine_would_choke_on(self):
         self.assertIn("--country", self.run_main("--country", "usa"))
         self.assertIn("--depth", self.run_main("--depth", "0"))
@@ -902,6 +919,14 @@ class ArgumentBounds(unittest.TestCase):
     def test_out_writes_only_csv_or_json(self):
         for path in ("~/.zshrc", "authorized_keys", "leads.txt", "leads.csv.sh"):
             self.assertIn("--out must name a .csv or .json file", self.run_main("--out", path), path)
+
+
+class JunkDomains(unittest.TestCase):
+    def test_whole_labels_and_domains_only(self):
+        for e in ("info@sentryinsurance.com", "me@myemail.com", "x@counterexample.org", "a@wordpressdev.co"):
+            self.assertTrue(scrape.is_real_email(e), e)
+        for e in ("abc@o1.ingest.sentry.io", "user@email.com", "x@example.co.uk", "a@sentry-next.wixpress.com"):
+            self.assertFalse(scrape.is_real_email(e), e)
 
 
 class ScrapedTextInOutput(unittest.TestCase):

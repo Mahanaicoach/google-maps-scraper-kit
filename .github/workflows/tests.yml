@@ -15,10 +15,13 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python: ["3.12"]
-        include:  # the oldest Python the docs promise (macOS's own python3 is 3.9)
-          - os: ubuntu-latest
-            python: "3.9"
+        python: ["3.12", "3.14"]
+        include:  # every version the docs promise, 3.9 up, once each; macOS's own python3 3.9 is run by hand
+          - {os: ubuntu-latest, python: "3.9"}
+          - {os: ubuntu-latest, python: "3.10"}
+          - {os: ubuntu-latest, python: "3.11"}
+          - {os: ubuntu-latest, python: "3.13"}
+          - {os: windows-latest, python: "3.9"}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

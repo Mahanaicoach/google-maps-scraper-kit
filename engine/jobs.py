@@ -145,7 +145,7 @@ def _coords(lat, lon):
         if isinstance(lat, bool) or isinstance(lon, bool):
             raise ValueError
         flat, flon = float(lat), float(lon)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # OverflowError: a JSON integer of 400 digits
         raise ValueError("invalid geo coordinates") from None
     if not (math.isfinite(flat) and math.isfinite(flon) and -90 <= flat <= 90 and -180 <= flon <= 180):
         raise ValueError("invalid geo coordinates")
@@ -179,7 +179,10 @@ def _proxies(v):
 def mask(proxy):
     """A proxy URL with its password replaced by *** (or its username, when that is the only
     secret, as some providers do): what the API and the web UI show."""
-    u = urllib.parse.urlsplit(proxy)
+    try:
+        u = urllib.parse.urlsplit(proxy)
+    except ValueError:  # "http://[abc" from a 1.x job: validate() never saw it; it must not break the job list
+        return "***"
     if not (u.username or u.password):
         return proxy
     user, host = u.netloc.rpartition("@")[0], u.netloc.rpartition("@")[2]
@@ -863,7 +866,14 @@ class Worker(threading.Thread):
 # ── Website pass (email, socials, verify_emails): each business homepage over plain HTTP ──
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,24}")
 JUNK_SUFFIX = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".css", ".js")
-JUNK_DOMAIN = ("example.", "sentry", "wixpress.com", "domain.com", "yourdomain", "email.com")
+JUNK_DOMAIN = ("example", "sentry", "wixpress.com", "domain.com", "yourdomain", "email.com")
+
+
+def junk_domain(dom, junk=JUNK_DOMAIN):
+    """An entry with a dot is a domain and its subdomains, one without is a whole label: sentry.io
+    and user@email.com are junk, sentryinsurance.com and myemail.com are not. scripts/scrape.py has the same."""
+    labels = dom.split(".")
+    return any(dom == j or dom.endswith("." + j) if "." in j else j in labels for j in junk)
 UA = "Mozilla/5.0 (compatible; google-maps-scraper-kit; +https://github.com/Mahanaicoach/google-maps-scraper-kit)"
 # The same patterns as scripts/scrape.py --socials (a test keeps them in step).
 SOCIAL_RE = {
@@ -1107,7 +1117,7 @@ def find_emails(text, site=""):
     for e in EMAIL_RE.findall(html.unescape(text or "")):
         e = urllib.parse.unquote(e).lower()
         dom = e.rpartition("@")[2]
-        if not EMAIL_RE.fullmatch(e) or e.endswith(JUNK_SUFFIX) or any(j in dom for j in JUNK_DOMAIN) or e in found:
+        if not EMAIL_RE.fullmatch(e) or e.endswith(JUNK_SUFFIX) or junk_domain(dom) or e in found:
             continue  # "a%0Ab@x.com" unquotes to a newline: not an address
         found.append(e)
     own = lambda e: site and (e.endswith("@" + site) or e.endswith("." + site))

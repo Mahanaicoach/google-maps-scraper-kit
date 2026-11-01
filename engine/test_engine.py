@@ -175,7 +175,10 @@ class Validate(unittest.TestCase):
         self.assertEqual((d["country"], jobs.locale(d), d["proxies"]), ("de", "en-DE", ["http://u%40x:p%3A@h:1"]))
         self.assertEqual(jobs.mask("http://u%40x:p%3A@h:1"), "http://u%40x:***@h:1")
         self.assertEqual(jobs.mask("socks5://h:1"), "socks5://h:1")
+        self.assertEqual(jobs.mask("http://[abc"), "***")  # a 1.x job's proxy validate() never saw
         self.assertEqual(jobs.validate(dict(GOOD, radius=5_000_000))[1]["radius"], 5_000_000)
+        self.assertEqual(self.err(name="x", keywords=["a"], lang="en", max_time=60, lat=10 ** 400, lon=1),
+                         "invalid geo coordinates")  # float() overflows: a 422, not a dropped connection
 
 
 class Rows(unittest.TestCase):
@@ -392,6 +395,8 @@ class Emails(unittest.TestCase):
     def test_find_emails(self):
         text = "a@gmail.com x img@2x.png user@example.com info@shop.com sentry@o1.sentry.io info@shop.com"
         self.assertEqual(jobs.find_emails(text, "shop.com"), ["info@shop.com", "a@gmail.com"])
+        self.assertEqual(jobs.find_emails("info@sentryinsurance.com me@myemail.com user@email.com x@example.co.uk"),
+                         ["info@sentryinsurance.com", "me@myemail.com"])  # whole labels, not substrings
 
     def test_public_only(self):
         self.assertFalse(jobs._public_ip("127.0.0.1"))
