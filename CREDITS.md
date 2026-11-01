@@ -72,3 +72,10 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## Optional website rendering: Playwright
+
+The optional website enrichment fallback uses [Microsoft Playwright for Python](https://github.com/microsoft/playwright-python),
+licensed under [Apache License 2.0](https://github.com/microsoft/playwright-python/blob/main/LICENSE).
+It is installed separately through `requirements-browser.txt`; this repository does not vendor its code
+or browser binaries. The default HTTP crawl and Maps engine do not require Playwright.

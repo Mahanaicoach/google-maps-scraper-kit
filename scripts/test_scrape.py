@@ -1089,5 +1089,66 @@ class AuditGuards(unittest.TestCase):
         self.assertEqual(scrape._env_value("plain # note"), "plain")
         self.assertEqual(scrape._env_value("'q'"), "q")
 
+class BrowserSites(unittest.TestCase):
+    def test_cli_flag_keeps_rendered_results_and_status_in_csv(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine"))
+        import website_browser
+        page = '<a href="mailto:hello@fixture-business.test">Email</a><a href="https://instagram.com/fixture_business">IG</a>'
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "leads.csv")
+            argv = ["scrape.py", "test in city", "1", "2", "--browser-sites", "--out", out]
+            with mock.patch.object(website_browser, "check_available", return_value="/chrome"), \
+                 mock.patch.object(website_browser, "render", return_value={"html": page, "status": "rendered"}), \
+                 mock.patch.object(scrape, "req", return_value=(200, b"null")), \
+                 mock.patch.object(scrape, "run_job", return_value=("j1", [{"title": "Fixture", "website": "https://fixture-business.test", "emails": ""}])), \
+                 mock.patch.object(scrape, "_fetch_cached", return_value=""), \
+                 mock.patch.object(sys, "argv", argv), redirect_stdout(io.StringIO()):
+                scrape.main()
+            with open(out) as f:
+                row = next(csv.DictReader(f))
+            self.assertEqual(row["emails"], "hello@fixture-business.test")
+            self.assertEqual(row["instagram"], "https://instagram.com/fixture_business")
+            self.assertEqual(row["website_fetch_status"], "rendered")
+        scrape._render_site.cache_clear()
+
+    def test_rendered_home_is_shared_by_email_and_social_extraction(self):
+        engine_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "engine")
+        sys.path.insert(0, engine_dir)
+        import website_browser
+        page = '<a href="mailto:hello@fixture-business.test">Email</a><a href="https://instagram.com/fixture_business">IG</a>'
+        rows = [{"website": "https://fixture-business.test", "emails": ""}]
+        scrape._render_site.cache_clear()
+        try:
+            with mock.patch.object(scrape, "_fetch_cached", return_value=""), \
+                 mock.patch.object(website_browser, "render", return_value={"html": page, "status": "rendered"}) as render, \
+                 redirect_stdout(io.StringIO()):
+                scrape.enrich_emails(rows, browser_sites=True)
+                scrape.enrich_sites(rows, scrape._find_socials, scrape.SOCIAL_FIELDS, "socials", browser_sites=True)
+            self.assertEqual(rows[0]["emails"], "hello@fixture-business.test")
+            self.assertEqual(rows[0]["instagram"], "https://instagram.com/fixture_business")
+            self.assertEqual(rows[0]["website_fetch_status"], "rendered")
+            render.assert_called_once()
+        finally:
+            scrape._render_site.cache_clear()
+
+    def test_rendered_contact_page_is_used_when_homepage_has_no_email(self):
+        rows = [{"website": "https://fixture-business.test", "emails": ""}]
+        def render(url):
+            content = '<a href="/contact">Contact</a>' if url.endswith('.test') else 'hello@fixture-business.test'
+            return {"html": content, "status": "rendered"}
+        with mock.patch.object(scrape, "_fetch_cached", return_value=""), \
+             mock.patch.object(scrape, "_render_site", side_effect=render), redirect_stdout(io.StringIO()):
+            scrape.enrich_emails(rows, browser_sites=True)
+        self.assertEqual(rows[0]["emails"], "hello@fixture-business.test")
+
+    def test_http_success_never_starts_browser(self):
+        rows = [{"website": "https://fixture-business.test", "emails": ""}]
+        with mock.patch.object(scrape, "_fetch_cached", return_value="hello@fixture-business.test"), \
+             mock.patch.object(scrape, "_render_site") as render, redirect_stdout(io.StringIO()):
+            scrape.enrich_emails(rows, browser_sites=True)
+        render.assert_not_called()
+        self.assertEqual(rows[0]["website_fetch_status"], "http")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

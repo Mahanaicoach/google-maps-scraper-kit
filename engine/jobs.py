@@ -134,8 +134,15 @@ def validate(body):
             "max_time": _int(body, "max_time", 600, 1, 86400, "max time"),
             "fast_mode": _bool(body, "fast_mode"), "email": _bool(body, "email"),
             "verify_emails": _bool(body, "verify_emails"), "socials": _bool(body, "socials"),
+            "browser_sites": _bool(body, "browser_sites"),
             "reviews_max": _int(body, "reviews_max", 0, 0, REVIEWS_MAX, "reviews_max"),
             "proxies": _proxies(body.get("proxies"))}
+    if data["browser_sites"]:
+        from website_browser import check_available
+        try:
+            check_available()
+        except RuntimeError as e:
+            raise ValueError(str(e)) from e
     return name.strip(), data
 
 
@@ -198,7 +205,7 @@ def locale(d):
 # ── Rows ──
 def fields(d):
     """A job's CSV columns: the old engine's 36, ours, then those its website pass fills."""
-    return COLUMNS + EXTRA + (SOCIALS if d.get("socials") else []) + (["email_host"] if d.get("verify_emails") else [])
+    return COLUMNS + EXTRA + (SOCIALS if d.get("socials") else []) + (["email_host"] if d.get("verify_emails") else []) + (["website_fetch_status"] if d.get("browser_sites") else [])
 
 
 def to_row(place, keyword):
@@ -755,7 +762,8 @@ class Worker(threading.Thread):
                 self._browser = None
         if stage == "websites" and (d["email"] or d.get("socials")) and rows and not stop.is_set():
             n, unchecked = add_site_data(rows, max(deadline - time.monotonic(), EMAIL_MIN_SECONDS), email=d["email"],
-                                         socials=d.get("socials"), verify=d.get("verify_emails"), stop=stop.is_set)
+                                         socials=d.get("socials"), verify=d.get("verify_emails"), stop=stop.is_set,
+                                         browser_sites=d.get("browser_sites", False))
             self.log(f"job {jid}: website data for {n}/{sum(1 for r in rows if r['website'])} websites")
             if unchecked and not stop.is_set():
                 notes.append(f"{unchecked} website(s) not checked: ran out of time")
@@ -1124,7 +1132,7 @@ def find_emails(text, site=""):
     return sorted(found, key=lambda e: not own(e))[:3]
 
 
-def add_site_data(rows, seconds, email=True, socials=False, verify=False, get=None, stop=lambda: False):
+def add_site_data(rows, seconds, email=True, socials=False, verify=False, get=None, stop=lambda: False, browser_sites=False):
     """One homepage fetch per row with a website, SITE_WORKERS at a time, for at most `seconds` or
     until stop() is true: `emails` (joined by ", ", like the old engine), the social columns, and
     with verify an MX check of each address's domain (dns.google) that drops domains that do not
@@ -1133,6 +1141,15 @@ def add_site_data(rows, seconds, email=True, socials=False, verify=False, get=No
 
     def work(r):
         page, out = get(r["website"]), {}
+        if browser_sites:
+            out["website_fetch_status"] = "http" if page else "error"
+            missing_email = email and not r.get("emails") and not find_emails(page, site_host(r["website"]))
+            missing_socials = socials and not any(find_socials(page).values())
+            if missing_email or missing_socials:
+                from website_browser import render
+                rendered = render(r["website"], _public_ip)
+                out["website_fetch_status"] = rendered["status"]
+                page += "\n" + rendered["html"]
         if email and not r.get("emails"):
             found = find_emails(page, site_host(r["website"]))
             if verify:
@@ -1157,5 +1174,5 @@ def add_site_data(rows, seconds, email=True, socials=False, verify=False, get=No
         if not f.exception():
             got = {k: v for k, v in f.result().items() if v}
             futs[f].update(got)
-            n += bool(got)
+            n += any(k != "website_fetch_status" for k in got)
     return n, len(pending)

@@ -28,7 +28,7 @@ for _stream in (sys.stdout, sys.stderr):  # ✓ and accented names on a Windows 
     except (AttributeError, ValueError):
         pass
 
-VERSION = "2.0.0"
+VERSION = "2.0.1-dev.1"
 MARK = f"gmskit-engine/{VERSION}"  # X-Engine header: tells scripts/engine.py this engine from others
 REPO = "https://github.com/Mahanaicoach/google-maps-scraper-kit"
 # The web UI's sponsor box: the browser reads this static file from GitHub (cached a day, no
@@ -173,6 +173,7 @@ JOB_PROPS = {
     "email": {"type": "boolean", "description": "visit each website's homepage for emails"},
     "verify_emails": {"type": "boolean", "description": "with email: check each address's domain over DNS (dns.google), "
                                                        "drop domains that do not exist, add email_host"},
+    "browser_sites": {"type": "boolean", "description": "optional Playwright retry when HTTP finds no email or social links; adds website_fetch_status"},
     "socials": {"type": "boolean", "description": "visit each website's homepage for Instagram, Facebook, LinkedIn, "
                                                  "TikTok, YouTube and X links"},
     "reviews_max": {"type": "integer", "description": "0-5 reviews per place from its panel, one page load per place (headless supported)"},
@@ -390,6 +391,7 @@ progress {{ display: block; width: 100%; max-width: 200px; height: 6px; margin-t
   <fieldset class="collect"><legend>Collect</legend>
     <label class="chip"><input type="checkbox" id="email" checked> Emails</label>
     <label class="chip"><input type="checkbox" id="socials" checked> Social profiles</label>
+    <label class="chip"><input type="checkbox" id="browser-sites"> Render websites (Playwright)</label>
   </fieldset>
   <details><summary>Location and language</summary><div class="body">
     <p class="wide soft">Each job centres the map on its city.</p>
@@ -572,7 +574,7 @@ $('f').addEventListener('submit', async ev => {{
       const body = {{name: Array.from(keywords[0] + (keywords.length > 1 ? ' +' + (keywords.length - 1) + ' more' : '')).slice(0, 200).join(''),
         keywords, lang: $('lang').value.trim().toLowerCase(), country: $('country').value.trim().toLowerCase() || c.country.toLowerCase(),
         lat: c.lat, lon: c.lon, zoom: +$('zoom').value || 15, depth: +$('depth').value, max_time: +$('max_time').value,
-        email: $('email').checked, socials: $('socials').checked, verify_emails: $('verify').checked,
+        email: $('email').checked, socials: $('socials').checked, browser_sites: $('browser-sites').checked, verify_emails: $('verify').checked,
         reviews_max: +$('reviews').value || 0}};
       if (proxies.length) body.proxies = proxies;
       const r = await api('POST', '/api/v1/jobs', body), d = await r.json();
