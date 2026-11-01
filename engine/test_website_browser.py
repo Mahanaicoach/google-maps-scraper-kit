@@ -93,6 +93,56 @@ class BrowserBudget(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 5)
         self.assertEqual(stopped, [True])
 
+    def test_close_during_a_render_returns_budget_exhausted_not_an_exception(self):
+        started = threading.Event()
+        async def render(session, url):
+            session.tasks.add(asyncio.current_task())  # as the real render registers itself
+            started.set()
+            await asyncio.sleep(60)
+        with patch.object(web._Session, "render", render):
+            budget = web.Budget(30)
+            out = {}
+            t = threading.Thread(target=lambda: out.update(budget.fetch("https://fixture-business.test", jobs._public_ip)), daemon=True)
+            t.start()
+            self.assertTrue(started.wait(5))
+            budget.close()
+            t.join(5)
+        self.assertEqual(out.get("status"), "budget_exhausted")
+
+    def test_close_stops_the_proxy_before_the_browser_and_bounds_the_driver_stop(self):
+        order = []
+        async def hang():
+            await asyncio.sleep(60)
+        def browser_close():
+            order.append("browser")
+            return hang()
+        async def render(session, url):
+            session.browser = Mock(close=browser_close)
+            session.pw = Mock(stop=hang)
+            session.proxy = Mock(__exit__=Mock(side_effect=lambda *a: order.append("proxy")))
+            return {"html": "", "status": "rendered"}
+        with patch.object(web._Session, "render", render), patch.object(web, "_CLOSE_SECONDS", 0.2):
+            budget = web.Budget(30)
+            budget.fetch("https://fixture-business.test", jobs._public_ip)
+            started = time.monotonic()
+            budget.close()
+        self.assertLess(time.monotonic() - started, 2)  # two bounded waits, not a hung driver
+        self.assertEqual(order, ["proxy", "browser"])
+
+    def test_target_closed_futures_do_not_print_at_exit_but_other_errors_do(self):
+        TargetClosedError = type("TargetClosedError", (Exception,), {})
+        loop = asyncio.new_event_loop()
+        loop.set_exception_handler(web._quiet_target_closed)
+        with patch.object(asyncio.BaseEventLoop, "default_exception_handler") as default:
+            loop.call_exception_handler({"message": "Future exception was never retrieved", "exception": TargetClosedError("gone")})
+            default.assert_not_called()
+            loop.call_exception_handler({"message": "Future exception was never retrieved", "exception": RuntimeError("real")})
+            default.assert_called_once()
+        loop.close()
+        with patch.object(web._Session, "render", return_value={"html": "", "status": "rendered"}), web.Budget(30) as budget:
+            budget.fetch("https://fixture-business.test", jobs._public_ip)
+            self.assertIs(budget.loop.get_exception_handler(), web._quiet_target_closed)
+
     def test_status_keeps_the_best_fetch(self):
         self.assertEqual(web.merge_status("http", "budget_exhausted"), "http")
         self.assertEqual(web.merge_status("http", "rendered"), "rendered")
