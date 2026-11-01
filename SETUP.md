@@ -172,6 +172,11 @@ tiles. That is 9 jobs, run one at a time, with duplicates removed:
 python3 scripts/scrape.py "plumbers in Phoenix AZ" --city "Phoenix, AZ" --grid 3
 ```
 
+`--deep-scan` is the `!` option (slower): it runs the grid (3 x 3 unless `--grid` says otherwise), then
+splits every tile that came back at Google's cap, about 120 places per keyword, into 4 sub-tiles one zoom
+level in, and dedupes everything on `place_id`. Up to 5x the tiles, about 25 s each per keyword; the
+script prints the time range before it starts.
+
 **Scraping another country?** `--lang` sets the interface language (category names, hours text),
 and `--country` the 2-letter country Google ranks and formats results for (default: the country of
 your IP address): `--lang de --country de`. Phones come as Google shows them in that market:

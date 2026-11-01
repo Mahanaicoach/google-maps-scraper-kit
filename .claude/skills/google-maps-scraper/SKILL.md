@@ -87,7 +87,10 @@ python3 scripts/scrape.py "<business type> in <City, ST>" --city "<City, ST>" --
   The engine takes a `keywords` array, so all terms go in a single job rather than many jobs.
 - **Several cities:** repeat `--city`; they run one after another into one deduped file.
 - **Whole-city runs:** when the user says all, every or entire city, or a run returns about 120 rows
-  (Google's per-search cap), add `--grid 3`. It splits the city into 3 x 3 tiles (9 jobs, one at a
+  (Google's per-search cap), add `--grid 3`. When the user wants every listing in a dense city, or a
+  grid tile itself returns about 120 rows, add `--deep-scan` instead (the `!` option, slower: it runs
+  the grid, then splits each tile at the cap into 4 sub-tiles one zoom level in, deduped; say once that
+  it takes several minutes per city). `--grid 3` splits the city into 3 x 3 tiles (9 jobs, one at a
   time) and dedupes on `place_id`. A grid is slower and more likely to trip rate limits: say so once.
 - **Proxies:** `--proxy <url the user supplies>` (repeatable; `http`, `https`, `socks5`, `socks5h`; a
   login only on `http` and `https`). See "Rate limits, blocks and proxies".

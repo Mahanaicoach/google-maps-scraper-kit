@@ -83,6 +83,13 @@ up to about 100, near Google's cap of about 120 per search. Need the whole city?
 python3 scripts/scrape.py "dentists in Denver CO" --city "Denver, CO" --grid 3
 ```
 
+Want every listing, not just a grid's worth? `--deep-scan` (the `!` option: slower) runs the grid, then
+splits every tile that came back at Google's cap into four sub-tiles one zoom level in, deduped:
+
+```bash
+python3 scripts/scrape.py "restaurants in Denver CO" --city "Denver, CO" --deep-scan
+```
+
 ### Example output
 
 `results-<short job id>.csv` from the first command above (pass `--out` to name it yourself).
@@ -184,7 +191,7 @@ scrapes Google Maps business listings only. It does not scrape social platforms 
 |---|---|
 | **8 lead fields by default** | name, phone, email, website, category, address, rating, review count, then the six social columns (`--no-socials` drops them). The engine writes 36 raw columns plus `categories`; `--full` keeps them all. |
 | **Email extraction, on by default** | After the Maps job, the script crawls every business website, 16 at a time: the homepage, then its contact and about pages if the homepage shows no email. It prints your found rate. |
-| **Beyond the 120 cap** | `--grid 3` splits the city into 3 x 3 map tiles, runs them one at a time and dedupes on `place_id`. |
+| **Beyond the 120 cap** | `--grid 3` splits the city into 3 x 3 map tiles, runs them one at a time and dedupes on `place_id`. `--deep-scan` (`!` slower) goes further: any tile that comes back at the cap is split into 4 sub-tiles one zoom level in, so dense districts are searched block by block. |
 | **Social enrichment, on by default** | Finds Instagram, Facebook, LinkedIn, TikTok, YouTube and X profiles in code (HTTP + regex), reusing the homepage the email crawl already fetched. Zero AI tokens. `--no-socials` skips it. |
 | **Who already advertises** | `--tech` spots a Meta Pixel, Google Ads tag, analytics, Bing Ads, LinkedIn Insight and TikTok pixels on each website, plus its platform (WordPress, Shopify, Wix…) and mobile support, then ranks leads by an `intent_score` from 0 to 100. Zero AI tokens. |
 | **Filters** | `--no-website` (businesses that still need a site), `--min-rating`, `--min-reviews`, `--has-phone`, `--has-email`, `--limit`. `--exclude earlier.csv` skips the places you already have, so a weekly re-run returns only new leads. |
@@ -357,7 +364,8 @@ LinkedIn, TikTok, YouTube and X links by default. Add `--no-socials` to drop the
 `--full` for every raw column.
 
 **How many leads can I scrape?**
-Up to about 120 per search. Add `--grid 3` to split the city into 9 map tiles and get past that cap,
+Up to about 120 per search. Add `--grid 3` to split the city into 9 map tiles and get past that cap, or
+`--deep-scan` to also split every tile that hits the cap into 4 sub-tiles (slower, marked `!`),
 with duplicates removed. Batch as many keywords as you like in one job. For large or repeated runs,
 add proxies (see [Responsible use](#responsible-use)).
 

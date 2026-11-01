@@ -1155,7 +1155,7 @@ class Locale(unittest.TestCase):
         q = queue.Queue()
         class C:
             closed = None
-            def subscribe(self, *a):
+            def subscribe(self, *a, **k):
                 return q
         class P:
             sid, cdp = "s", C()
@@ -1372,7 +1372,7 @@ class LoopOne(Fakes):
         q = queue.Queue()
         class C:
             closed = None
-            def subscribe(self, *a):
+            def subscribe(self, *a, **k):
                 return q
             def unsubscribe(self, *a):
                 pass

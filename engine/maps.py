@@ -18,6 +18,9 @@ END_MARKERS = ("You've reached the end of the list", "reached the end",
                "Você chegou ao fim da lista", "Chegou ao fim da lista", "Je hebt het einde van de lijst bereikt",
                "Listenin sonuna ulaştınız", "Dotarłeś do końca listy", "Du har nått slutet av listan")
 BATCH_URL = re.compile(r"^https://www\.google\.[a-z.]+/search\?.*tbm=map")
+# After a scroll: seconds to wait for the page to request the next batch (Google asks at once or
+# never), and seconds to wait for that batch once requested (seen live up to 40 s on a busy tile).
+SETTLE, SLOW_BATCH = 6, 45
 _CID = re.compile(r"!1s(0x[0-9a-f]+:0x[0-9a-f]+)")
 _LAT_LON = re.compile(r"!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)")
 _PLACE_ID = re.compile(r"!19s(ChIJ[\w-]+)")
@@ -93,8 +96,13 @@ class Batches:
 
     def __init__(self, page):
         self.page = page
-        self.q = page.cdp.subscribe("Network.responseReceived", page.sid)
+        # One queue for the three events a result batch goes through, so drain() sees them in order.
+        self.q = page.cdp.subscribe("Network.requestWillBeSent", page.sid)
+        for method in ("Network.responseReceived", "Network.loadingFailed"):
+            page.cdp.subscribe(method, page.sid, q=self.q)
         self.pending = {}   # requestId -> tries, for batches seen but not yet readable
+        self.inflight = set()  # batch requests the page has sent and Google has not answered yet
+        self.asked = 0      # batch requests the page sent in all
         self.count = 0
         self.limited = 0    # batch requests Google answered with 429 Too Many Requests
 
@@ -107,13 +115,23 @@ class Batches:
                 break
             if not isinstance(p, dict):  # the connection died (cdp puts a marker on every queue)
                 raise CDPError(f"connection lost: {self.page.cdp.closed}")
+            rid = p.get("requestId")
+            if "request" in p:  # requestWillBeSent: the page asks Google for the next batch
+                if BATCH_URL.match(p["request"].get("url", "")):
+                    self.inflight.add(rid)
+                    self.asked += 1
+                continue
+            if "errorText" in p:  # loadingFailed: no answer is coming for this one
+                self.inflight.discard(rid)
+                continue
             r = p.get("response", {})
             if not BATCH_URL.match(r.get("url", "")):
                 continue
+            self.inflight.discard(rid)
             if r.get("status") == 429:
                 self.limited += 1
             elif "json" in (r.get("mimeType") or ""):
-                self.pending[p["requestId"]] = 0
+                self.pending[rid] = 0
         rows = []
         for rid in list(self.pending):
             try:
@@ -131,7 +149,8 @@ class Batches:
         return rows
 
     def close(self):
-        self.page.cdp.unsubscribe("Network.responseReceived", self.q, self.page.sid)
+        for method in ("Network.requestWillBeSent", "Network.responseReceived", "Network.loadingFailed"):
+            self.page.cdp.unsubscribe(method, self.q, self.page.sid)
 
 
 def collect(page, url, depth=1, max_seconds=180, log=print, stop=lambda: False, on_batch=None):
@@ -181,20 +200,37 @@ def collect(page, url, depth=1, max_seconds=180, log=print, stop=lambda: False, 
                 if batches.limited or "/sorry/" in (page.url() or ""):
                     reason = "blocked"
                     break
-                before = batches.count
-                page.eval(JS_SCROLL)
-                end = time.time() + 10
-                while time.time() < end and batches.count == before:
+                before, asked = batches.count, batches.asked
+                height = page.eval(JS_SCROLL)
+                # The page asks Google for the next batch within a moment of reaching the bottom, or
+                # never (the list is complete, even when Google draws no end line). So: SETTLE seconds
+                # of a still feed for the request to appear, then up to SLOW_BATCH for its answer once
+                # it is in flight. While the feed is still drawing the last batch (its height grows),
+                # the bottom has not been reached yet, so the settle clock starts over.
+                scrolled = time.time()
+                end = scrolled + SETTLE
+                while time.time() < end and batches.count == before and not stop():
                     time.sleep(0.4)
                     take()
-                    if batches.count == before:
-                        page.eval(JS_SCROLL)  # the feed renders in small steps; keep nudging
+                    if batches.inflight:
+                        end = scrolled + SLOW_BATCH
+                    elif batches.count == before:
+                        if batches.asked > asked and not batches.pending:  # answered (or failed), nothing new
+                            break
+                        h = page.eval(JS_SCROLL)  # the feed renders in small steps; keep nudging
+                        if h != height:
+                            height, scrolled = h, time.time()
+                            end = scrolled + SETTLE
                 if batches.count == before:
-                    stale += 1
                     if batches.limited:  # Google refused the next batch: slow down, do not keep asking
                         reason = "blocked"
                         break
-                    if stale >= 2:
+                    stale += 1
+                    if batches.asked == asked:  # two scrolls that asked Google for nothing: it is complete
+                        if stale >= 2:
+                            reason = "end-of-list"
+                            break
+                    elif stale >= 2:  # Google answered twice with nothing new, or is slower than SLOW_BATCH
                         reason = "no-growth"
                         break
                 else:

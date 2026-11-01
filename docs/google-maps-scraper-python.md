@@ -27,6 +27,7 @@ On Windows, run the same commands with `py` in place of `python3`. The engine ne
 | `--no-email` | Skips email extraction for a faster run. Emails are on by default. |
 | `--no-deep-emails` | Checks homepages only for emails, not contact and about pages. |
 | `--grid N` | Splits the `--city` area into N x N map tiles, one job each, deduped. Needs `--city`. Max 10. |
+| `--deep-scan` | `!` slower. Runs the grid (3 x 3 unless `--grid` says otherwise), then splits every tile that came back at Google's cap (about 120 places per keyword) into 4 sub-tiles one zoom level in, deduped. Needs `--city`. |
 | `--max-time` | Job time limit in seconds. Default `600`. |
 | `--out` | Output path, ending in `.csv` or `.json`. Default `results-<short job id>.csv`. A `.json` extension writes JSON. |
 | `--json` | Writes JSON instead of CSV. |
@@ -62,7 +63,7 @@ Illustrative rows only:
 
 ## What to expect
 
-- Google Maps returns about 120 listings per search. Use `--grid 3` to cover a whole city past that cap.
+- Google Maps returns about 120 listings per search. Use `--grid 3` to cover a whole city past that cap, or `--deep-scan` to also split the tiles that hit it.
 - Grid tiles run one at a time, so a grid is slower and more likely to trip rate limits than one search.
 - Emails appear only when a business publishes one on its website. Many rows will have an empty `emails` cell.
 - Heavy use without proxies can get your IP temporarily rate-limited by Google. Your Google account is not affected.

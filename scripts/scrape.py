@@ -165,8 +165,19 @@ def grid_cells(bbox, n):
             zoom = round(math.log2(156543.03 * cos * 1000 / width))  # 156543 m/px at zoom 0
             cells.append({"lat": f"{lat:.6f}", "lon": f"{lon:.6f}",
                           "radius": max(1000, math.ceil(1.15 * diag / 2)),
-                          "zoom": min(17, max(11, zoom))})
+                          "zoom": min(17, max(11, zoom)),
+                          "_bbox": [s + i * dlat, s + (i + 1) * dlat, w + j * dlon, w + (j + 1) * dlon]})
     return cells
+
+
+# A tile that returns this many rows for one keyword hit Google's cap (about 120 per search), so
+# the tile holds more than one search can show. --deep-scan splits such a tile into 2 x 2 sub-tiles.
+SATURATED = 100
+
+
+def engine_cell(cell):
+    """The cell without the script's private `_` keys, which never reach the engine."""
+    return {k: v for k, v in cell.items() if not k.startswith("_")}
 
 
 def in_bbox(row, bbox, margin=0.10):
@@ -982,12 +993,15 @@ def scrape_place(a, body, city, keywords):
             print(str(e))
             return None, [], 0, 0
         return job_id, rows, 0, 0
-    print(f"▶ Grid {a.grid}x{a.grid}: {len(cells)} jobs, one at a time, {len(keywords)} keyword(s) depth={a.depth}")
-    job_id, rows, skipped = None, [], 0
-    for i, cell in enumerate(cells, 1):  # sequential on purpose: never parallel jobs against Google
-        print(f"▶ Cell {i}/{len(cells)} @ {cell['lat']},{cell['lon']} radius={cell['radius']}m")
+    print(f"▶ Grid {a.grid}x{a.grid}: {len(cells)} jobs, one at a time, {len(keywords)} keyword(s) depth={a.depth}"
+          + (" (! deep scan: a tile at Google's cap is split into 4 sub-tiles)" if a.deep_scan else ""))
+    job_id, rows, skipped, i = None, [], 0, 0
+    while i < len(cells):  # sequential on purpose: never parallel jobs against Google
+        i, cell = i + 1, cells[i]
+        print(f"▶ Cell {i}/{len(cells)} @ {cell['lat']},{cell['lon']} radius={cell['radius']}m"
+              + (" (sub-tile)" if cell.get("_sub") else ""))
         try:
-            jid, cell_rows = run_job(dict(body, **cell))
+            jid, cell_rows = run_job(dict(body, **engine_cell(cell)))
         except Blocked as e:  # keep what the tiles so far found, inside the city box, and stop
             e.job_id = job_id or e.job_id
             e.rows = [r for r in dedupe(rows + e.rows) if in_bbox(r, bbox)]
@@ -1007,6 +1021,10 @@ def scrape_place(a, body, city, keywords):
         rows = dedupe(rows + cell_rows)
         SALVAGE["rows"], SALVAGE["job"] = dedupe(SALVAGE["rows"] + rows), SALVAGE["job"] or job_id  # Ctrl-C keeps these
         print(f"  cell {i}/{len(cells)}: {len(cell_rows)} rows, {len(rows)} unique so far")
+        if a.deep_scan and not cell.get("_sub") and len(cell_rows) >= SATURATED * len(keywords):
+            subs = [dict(c, _sub=True) for c in grid_cells(cell["_bbox"], 2)]
+            cells.extend(subs)  # one level only: sub-tiles never split again
+            print(f"  ! cell {i} is at Google's cap: {len(subs)} sub-tiles added, {len(cells)} cells now")
     # the engine does not clip results to the tile, so tiles leak outside the city
     kept = [r for r in rows if in_bbox(r, bbox)]
     print(f"  dropped {len(rows) - len(kept)} rows outside the city box")
@@ -1047,6 +1065,11 @@ def main():
     ap.add_argument("--grid", type=int, metavar="N",
                     help="split the --city area into N x N map tiles, one job each, deduped "
                          "(breaks Google's ~120 per search cap; max 10)")
+    ap.add_argument("--deep-scan", action="store_true",
+                    help="! slower: a whole-city run past Google's cap. Runs --grid (3 x 3 unless --grid "
+                         "says otherwise), then splits every tile that came back at the cap (about 120 "
+                         "places per keyword) into 4 sub-tiles one zoom level in, deduped; up to 5x the "
+                         "tiles, about 25 s each per keyword")
     ap.add_argument("--max-time", type=int, default=600,
                     help="job time limit in SECONDS; the script waits that long for the "
                          "engine, plus a short grace (default: 600)")
@@ -1124,6 +1147,10 @@ def main():
         except OSError as e:
             sys.exit(f"✗ Cannot create the folder for --out: {e}")
 
+    if a.deep_scan:
+        if not a.city:
+            sys.exit("✗ --deep-scan needs --city: the city's bounding box is what gets split into tiles.")
+        a.grid = a.grid or 3
     if a.grid is not None:
         if not a.city:
             sys.exit("✗ --grid needs --city: the city's bounding box is what gets split into tiles.")
@@ -1137,6 +1164,10 @@ def main():
         sys.exit(f"✗ Cannot read --exclude file: {e}")
 
     # --- WARN, don't block: flag high-volume jobs (proceed anyway) ---
+    if a.deep_scan:
+        n = a.grid ** 2
+        print(f"!  Deep scan: {n} tiles, and up to {4 * n} more where a tile is at Google's cap, one at a "
+              f"time, about 25 s each per keyword: expect {n * 25 * len(keywords) // 60}-{5 * n * 25 * len(keywords) // 60} min per city.")
     if a.depth >= 15 or len(keywords) >= 10 or (a.grid or 1) ** 2 >= 4 or len(cities) >= 3:
         print("⚠️  Heads-up: this is a large job (high depth, many keywords or a grid).")
         print("    Running it back-to-back without proxies can get your IP temporarily rate-limited by")
