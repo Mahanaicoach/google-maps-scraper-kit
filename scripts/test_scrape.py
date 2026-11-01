@@ -896,7 +896,8 @@ class ArgumentBounds(unittest.TestCase):
         good, bad = dict(_row("A"), review_rating="4.8"), dict(_row("B"), review_rating="3.0")
         argv = ["scrape.py", "x", "1", "2", "--min-rating", "4.5", "--no-socials", "--out",
                 os.path.join(tempfile.mkdtemp(), "leads.csv")]
-        with mock.patch.object(scrape, "run_job", return_value=("job-1", [good, bad])), \
+        with mock.patch.object(scrape, "req", return_value=(200, b"null")), \
+             mock.patch.object(scrape, "run_job", return_value=("job-1", [good, bad])), \
              mock.patch.object(scrape, "enrich_emails", side_effect=KeyboardInterrupt), \
              mock.patch.dict(scrape.SALVAGE, {"rows": [], "job": None}), \
              mock.patch.object(sys, "argv", argv), redirect_stdout(io.StringIO()), self.assertRaises(KeyboardInterrupt):
