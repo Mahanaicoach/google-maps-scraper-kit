@@ -110,7 +110,8 @@ web UI and API docs in the browser:
   http://localhost:8080/api/openapi.json). Neither needs the API key.
 
 The page has a form. Up front are "What" and "Where": type a few letters, then pick a business type
-(about 200, such as "Dentists") and a city (about 168,000 from GeoNames, such as "Austin, Texas, US").
+(about 4,100: the kit's 201 popular ones, such as "Dentists", then Google's own category names, which
+the page loads from GitHub) and a city (about 168,000 from GeoNames, such as "Austin, Texas, US").
 Both boxes take only picks from their lists, so a search never names a place or a type that does not
 exist; add as many of each as you like. Each type is searched in each city, one job per city, with the
 map centred on that city ("Dentists in Austin, Texas, US"). Pressing Enter in either box adds the pick

@@ -237,12 +237,14 @@ One keyword per line. One job. One CSV.
   CSV, JSON and Delete buttons. Downloads are named after the search, for example
   `bakery-in-portland-or-c063a815.csv`. It downloads the raw CSV or JSON, and its email and
   social options read homepages only, so the scripts find more emails and return the clean lead
-  fields. Its What and Where boxes take only picks from their lists: about 200 business types
-  (`engine/presets/business-types.json`, add a niche there) and about 168,000 cities from GeoNames,
-  so a search never names a place that does not exist. Each type is searched in each city, one
-  job per city, with the map centred on that city. The page loads one static file from GitHub
+  fields. Its What and Where boxes take only picks from their lists: about 4,100 business types
+  (the kit's 201 popular ones in `engine/presets/business-types.json`, add a niche there, then
+  Google's own category names) and about 168,000 cities from GeoNames, so a search never names a
+  place or a type that does not exist. Each type is searched in each city, one job per city, with
+  the map centred on that city. The page loads two static files from GitHub
   (`raw.githubusercontent.com`), with no tracking: the sponsor box's
-  `assets/sponsors/sponsors.json` from this repo (cached for a day). Scraped data stays on your machine.
+  `assets/sponsors/sponsors.json` from this repo (cached for a day), and Google's category names
+  for the What box (cached for 30 days). Scraped data stays on your machine.
 - **Service-area businesses often have no address.** Plumbers, cleaners and other mobile services
   often hide their street address on Google, so `address` is empty for them. The city and the phone
   usually remain.

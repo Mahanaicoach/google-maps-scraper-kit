@@ -1239,7 +1239,9 @@ class ApiP3(Server):
         self.assertIn('id="country"', ui)
         self.assertIn('<input id="what" role="combobox"', ui)
         self.assertIn('<input id="where" role="combobox"', ui)
-        self.assertIn("const TYPES = " + json.dumps(serve.TYPES) + ";", ui)  # the What list is in the page, no download
+        self.assertIn("const TYPES = " + json.dumps(serve.TYPES) + ";", ui)  # the kit's own types work offline
+        self.assertIn(serve.CATEGORIES, ui)  # Google's category names: loaded by the browser from GitHub, pinned
+        self.assertRegex(serve.CATEGORIES, r"/[0-9a-f]{40}/")
         front = ui.split("<details>")[0]  # what a beginner sees before opening a section
         self.assertIn('<input type="checkbox" id="email" checked>', front)
         self.assertIn('<input type="checkbox" id="socials" checked>', front)  # socials on by default
@@ -1256,7 +1258,7 @@ class ApiP3(Server):
                      "is not in the list", "is not picked yet", "whats.map(w => w + ' in ' + c.label)",
                      "lat: c.lat, lon: c.lon", "for (const c of wheres)", "'/api/v1/cities?q=' + encodeURIComponent(q)"):
             self.assertIn(rule, ui)
-        for gone in ('id="keywords"', 'id="coords"', 'id="kwpick"', "<datalist", "Start anyway", "raw.githubusercontent.com/lobstrio"):
+        for gone in ('id="keywords"', 'id="coords"', 'id="kwpick"', "<datalist", "Start anyway"):
             self.assertNotIn(gone, ui)
         self.assertIn("a.download = fileName(j) + '.' + fmt", ui)
         self.assertIn("toLocaleString", ui)

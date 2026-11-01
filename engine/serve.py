@@ -37,6 +37,11 @@ SPONSORS = "https://raw.githubusercontent.com/Mahanaicoach/google-maps-scraper-k
 # The web UI's What and Where boxes offer only these, so nobody searches for a business type or a
 # place that does not exist: presets/business-types.json (hand-picked; add a niche there) and
 # presets/cities.tsv.gz (GeoNames cities1000, CC BY 4.0: name, region, country code, lat, lon, biggest first).
+# What also offers Google Business Profile's category names (4,053, US English) from
+# lobstrio/google-business-categories, pinned to one commit. The browser loads that list from GitHub,
+# like the sponsor box; the kit ships no copy, because that repository has no licence file.
+CATEGORIES = ("https://raw.githubusercontent.com/lobstrio/google-business-categories/"
+              "4ee1c4788d07c812a32986177c2a51c28957062f/data/google-business-categories.txt")
 PRESETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "presets")
 with open(os.path.join(PRESETS, "business-types.json"), encoding="utf-8") as _f:
     TYPES = json.load(_f)
@@ -498,8 +503,28 @@ function combo(input, box, source, choose) {{  // a box that takes only picks fr
     }} else if (ev.key === 'Escape') show([]);
   }});
 }}
-combo($('what'), $('what-opts'), (q, show) => show(TYPES.filter(t => t.toLowerCase().includes(q.toLowerCase())).map(t => ({{label: t}}))),
-  t => {{ if (!whats.includes(t.label)) whats.push(t.label); tags($('whats'), whats); }});
+combo($('what'), $('what-opts'), (q, show) => {{  // names that start with q first, then the rest; 50 at most
+  q = q.toLowerCase();
+  const hit = TYPES.filter(t => t.toLowerCase().includes(q)), first = hit.filter(t => t.toLowerCase().startsWith(q));
+  show(first.concat(hit.filter(t => !first.includes(t))).slice(0, 50).map(t => ({{label: t}})));
+}}, t => {{ if (!whats.includes(t.label)) whats.push(t.label); tags($('whats'), whats); }});
+(function () {{  // What also offers Google's own category names, cached for 30 days, as text only
+  const key = 'gmskit-categories', month = 30 * 86400000, base = s => s.toLowerCase().replace(/s$/, '');
+  function add(names) {{  // after the kit's own list; "Dentist" is dropped when "Dentists" is there
+    const have = new Set(TYPES.map(base));
+    for (const n of names) if (!have.has(base(n))) {{ have.add(base(n)); TYPES.push(n); }}
+  }}
+  try {{
+    const c = JSON.parse(localStorage.getItem(key) || 'null');
+    if (c && Date.now() - c.t < month && Array.isArray(c.names)) return add(c.names);
+  }} catch (e) {{}}
+  fetch('{categories}', {{credentials: 'omit'}}).then(r => r.ok ? r.text() : '').then(t => {{
+    const names = t.split('\\n').map(s => s.trim()).filter(s => s && s.length <= 80).slice(0, 5000);
+    if (!names.length) return;
+    add(names);
+    try {{ localStorage.setItem(key, JSON.stringify({{t: Date.now(), names}})); }} catch (e) {{}}
+  }}).catch(() => {{}});
+}})();
 let timer = 0;
 combo($('where'), $('where-opts'), (q, show) => {{  // the biggest cities that start with q; nothing typed, the biggest US ones
   clearTimeout(timer);
@@ -699,7 +724,8 @@ class Handler(BaseHTTPRequestHandler):
                    "connect-src 'self' https://raw.githubusercontent.com; img-src 'self' data:; "
                    "form-action 'self'; base-uri 'none'; "
                    "frame-ancestors 'none'")
-            page = PAGE.format(nonce=nonce, version=VERSION, repo=REPO, sponsors=SPONSORS, types=TYPES_JS).encode()
+            page = PAGE.format(nonce=nonce, version=VERSION, repo=REPO, sponsors=SPONSORS, types=TYPES_JS,
+                               categories=CATEGORIES).encode()
             return self.reply(200, page, "text/html; charset=utf-8", [("Content-Security-Policy", csp)])
         self.fail(404, "not found")
 

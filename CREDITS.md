@@ -33,7 +33,12 @@ people (name, region, country, coordinates), from the [GeoNames](https://www.geo
 `cities1000` dump, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 `engine/presets/cities.tsv.gz` is that data, cut to those five fields, one row per city label.
 
-The What box's business types (`engine/presets/business-types.json`) are a hand-picked list for this kit.
+The What box offers a hand-picked list of popular business types for this kit
+(`engine/presets/business-types.json`), then Google's business category names (4,053, US English)
+from [lobstrio/google-business-categories](https://github.com/lobstrio/google-business-categories)
+by lobstr.io. Your browser loads that list from GitHub at runtime, pinned to one commit in
+`engine/serve.py`, and caches it for 30 days. This repository does not contain or redistribute it,
+because that repository has no license file. Offline, the box offers the kit's own list only.
 
 ## Website signals adapted from OpenLeadFinder
 
