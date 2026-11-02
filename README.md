@@ -287,24 +287,24 @@ finds emails, social profiles and ad pixels by default, for free, without the da
 
 ✅ built in and free · 🟡 partial, manual or paid · ❌ no · ➖ not applicable or not stated
 
-| | **This kit** | [gosom](https://github.com/gosom/google-maps-scraper) | [omkarcloud](https://github.com/omkarcloud/google-maps-scraper) | [zohaibbashir](https://github.com/zohaibbashir/Google-Maps-Scrapper) | [gaspa93](https://github.com/gaspa93/googlemaps-scraper) | [conor-is-my-name](https://github.com/conor-is-my-name/google-maps-scraper) | Apify, Outscraper (cloud) | Chat AI |
+| | **This kit** | [gosom](https://github.com/gosom/google-maps-scraper) | [omkarcloud](https://github.com/omkarcloud/google-maps-scraper) | [zohaibbashir](https://github.com/zohaibbashir/Google-Maps-Scrapper) | [gaspa93](https://github.com/gaspa93/googlemaps-scraper) | [conor](https://github.com/conor-is-my-name/google-maps-scraper) | Cloud (Apify, Outscraper) | Chat AI |
 |---|---|---|---|---|---|---|---|---|
-| Price | ✅ Free, MIT | ✅ Free, MIT | 🟡 Closed app: 200 free searches a month, then $16 to $48 | ✅ Free, MIT | ✅ Free, GPL-3.0 | ✅ Free, MIT | ❌ Per result or subscription | ✅ Free tier |
-| Data stays on your machine | ✅ | ✅ | 🟡 Enrichment runs on their cloud | ✅ | ✅ | ✅ | ❌ | ❌ |
-| Setup | ✅ Python and Chrome. No pip, Docker or account | 🟡 Docker or a binary; the skill needs Docker and Node | 🟡 Desktop app; account and phone check for enrichment | 🟡 pip and Playwright, visible browser | 🟡 pip and chromedriver | 🟡 Docker or uvicorn | 🟡 Account and API key | 🟡 Account |
-| Whole city, past Google's ~120 cap | ✅ `--grid N` from a city name, deduped; `--deep-scan` for dense areas | 🟡 Manual `-grid-bbox` coordinates | ✅ Whole-city searches | ❌ | ❌ Reviews only | ❌ One search | ✅ Billed per result | ❌ Close to zero rows |
-| Emails | ✅ On by default: homepage, contact and about pages | 🟡 `-email` flag, off by default | 🟡 Paid, 0.2 credits per business | ❌ | ❌ | ❌ | 🟡 Often a paid add-on | ❌ |
-| Email domain check | ✅ `--verify-emails` MX lookup, no key | ❌ | 🟡 Paid | ❌ | ❌ | ❌ | 🟡 Paid add-on | ❌ |
-| Social profiles | ✅ On by default: Instagram, Facebook, LinkedIn, TikTok, YouTube, X | ❌ | 🟡 Paid | ❌ | ❌ | ❌ | 🟡 Often a paid add-on | ❌ |
-| Who already advertises | ✅ `--tech`: ad pixels, analytics, site platform, `intent_score` ranking | ❌ | 🟡 One yes/no ads field | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Lead filters | ✅ No website, rating, reviews, phone, email; `--exclude` old leads | 🟡 `-resume` skips places already in the file | ✅ Rating, reviews, website, phone | ❌ | ❌ | ❌ | 🟡 Varies by tool | ❌ |
-| Reviews | 🟡 Up to 5 per place, plus the star histogram | ✅ Up to about 300 per place | ✅ | 🟡 Count and rating | ✅ Reviews only | 🟡 Count only | ✅ | ❌ |
-| Proxy rotation | ✅ `--proxy`, repeatable; a blocked keyword retries on the next one | ✅ `-proxies` | ➖ | ❌ | ❌ | ❌ | ✅ Built in | ❌ |
-| Web UI | ✅ Form with 4,100 business types and 168,000 cities | ✅ `-web` | ✅ Desktop app | ❌ | ❌ | ❌ | ✅ | ➖ |
-| REST API | ✅ OpenAPI, localhost only | ✅ OpenAPI | ✅ 13 endpoints | ❌ | ❌ | ✅ `/scrape` | ✅ | ❌ |
-| AI agent | ✅ Skill and four slash commands, no Docker | 🟡 Skill, needs Docker and Node | ❌ | ❌ | ❌ | ❌ | 🟡 Apify has an MCP server | ➖ |
-| Published speed | ✅ 100 dentists with phones, emails and socials in 44 s | 🟡 About 120 places a minute (estimate, emails off) | ❌ None published | ❌ None published | ❌ None published | ❌ None published | ➖ Varies | ➖ |
-| Scale-out to many machines | ❌ One machine | ✅ PostgreSQL queue, S3, Lambda | ➖ | ❌ | 🟡 MongoDB monitor | ❌ | ✅ | ❌ |
+| Price | ✅ Free | ✅ Free | 🟡 200 free searches a month | ✅ Free | ✅ Free | ✅ Free | ❌ Per result | ✅ Free tier |
+| Data stays local | ✅ | ✅ | 🟡 Enrichment in their cloud | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Setup | ✅ Python and Chrome | 🟡 Docker or binary | 🟡 App and account | 🟡 pip and Playwright | 🟡 pip and chromedriver | 🟡 Docker | 🟡 Account and key | 🟡 Account |
+| Past Google's 120 cap | ✅ `--grid`, `--deep-scan` | 🟡 Manual bbox | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ |
+| Emails | ✅ On by default, 3 pages per site | 🟡 Flag, off by default | 🟡 Paid | ❌ | ❌ | ❌ | 🟡 Paid add-on | ❌ |
+| Email check (MX) | ✅ `--verify-emails` | ❌ | 🟡 Paid | ❌ | ❌ | ❌ | 🟡 Paid add-on | ❌ |
+| Social profiles | ✅ 6 networks, on by default | ❌ | 🟡 Paid | ❌ | ❌ | ❌ | 🟡 Paid add-on | ❌ |
+| Ad pixels and lead score | ✅ `--tech`, `intent_score` | ❌ | 🟡 Yes/no ads field | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Lead filters | ✅ 6 filters and `--exclude` | 🟡 `-resume` only | ✅ | ❌ | ❌ | ❌ | 🟡 Varies | ❌ |
+| Reviews | 🟡 5 per place and histogram | ✅ About 300 per place | ✅ | 🟡 Count | ✅ Reviews only | 🟡 Count | ✅ | ❌ |
+| Proxy rotation | ✅ Retries on the next proxy | ✅ | ➖ | ❌ | ❌ | ❌ | ✅ | ❌ |
+| Web UI | ✅ | ✅ | ✅ App | ❌ | ❌ | ❌ | ✅ | ➖ |
+| REST API | ✅ Localhost only | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ |
+| AI agent | ✅ Skill and 4 commands | 🟡 Needs Docker and Node | ❌ | ❌ | ❌ | ❌ | 🟡 Apify MCP | ➖ |
+| Published speed | ✅ 100 leads with emails in 44 s | 🟡 ~120 a minute, emails off | ❌ | ❌ | ❌ | ❌ | ➖ | ➖ |
+| Scale-out | ❌ One machine | ✅ PostgreSQL, S3 | ➖ | ❌ | 🟡 MongoDB | ❌ | ✅ | ❌ |
 | **✅ count** | **14** | 7 | 5 | 2 | 3 | 3 | 6 | 1 |
 
 Facts about other tools come from their own README on 2026-11-02. The kit's numbers are measured, with
