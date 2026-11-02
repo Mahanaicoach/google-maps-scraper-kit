@@ -31,7 +31,7 @@ drive it for you in plain English.
 | Let an AI coding agent run the scrape | [Use it with Claude Code or any agent](#use-it-with-claude-code-or-any-agent) |
 | Scrape many keywords or cities in one job | [Batch jobs](#batch-jobs-and-the-python-cli) |
 | Know what you get and where it stops | [What you get](#what-you-get) and [Honest limits](#honest-limits) |
-| Compare it with gosom, Apify, Outscraper and chat AIs | [How it compares](#how-it-compares) and [the open-source comparison](docs/best-google-maps-scrapers.md) |
+| Compare it with gosom, omkarcloud, Apify, Outscraper and chat AIs | [How it compares](#how-it-compares) and [the open-source comparison](docs/best-google-maps-scrapers.md) |
 | Follow a worked recipe for dentists, roofers or restaurants | [Guides and recipes](docs/README.md) |
 
 <sub>Sponsored by [Swiftproxy](https://www.swiftproxy.net/?ref=googlemapsscraperkit) and [SerpApi](https://serpapi.com/maps-scraper-kit-github). Paid placements; details [below](#sponsored-by).</sub>
@@ -282,20 +282,34 @@ One keyword per line. One job. One CSV.
 
 ## How it compares
 
-| | This kit | gosom/google-maps-scraper (open source, Go) | Asking a chat AI | Apify, Outscraper and other cloud scrapers |
-|---|---|---|---|---|
-| Cost | Free (MIT) | Free (MIT) | Free | Per-result credits or subscription |
-| Install | Python 3.9+ and Chrome; Docker optional | Docker, or a Go toolchain | Account | Account and key |
-| Where data goes | Stays on your machine | Stays on your machine | Provider's servers | Provider's servers |
-| Rows per query | Whole city with `--grid`, deduped on `place_id` | Manual `-grid-bbox` | Close to zero | Whole city, billed per result |
-| Emails | On by default: homepage, contact and about pages, MX check | `-email` flag, homepage | No | Often a paid add-on |
-| Social profiles | On by default: Instagram, Facebook, LinkedIn, TikTok, YouTube, X | No | No | Often a paid add-on |
-| Who already advertises | `--tech`: Meta Pixel, Google Ads, analytics, platform, `intent_score` | No | No | No |
-| Reviews | `--reviews 1-5` plus the star histogram | Up to about 300 per place | No | Yes |
-| Output | Clean CSV, 8 lead fields plus socials; JSON | CSV, JSON, PostgreSQL | Chat text | CSV or JSON |
-| Driven by an AI agent | Skill plus four slash commands | Skill (needs Docker and Node) | n/a | No |
+**14 of 16 green, the most of any Google Maps scraper we compared.** The kit is the only one that
+finds emails, social profiles and ad pixels by default, for free, without the data leaving your machine.
 
-Facts about other tools come from their own README on 2026-11-01; the full comparison with six open-source repos is in [docs/best-google-maps-scrapers.md](docs/best-google-maps-scrapers.md).
+✅ built in and free · 🟡 partial, manual or paid · ❌ no · ➖ not applicable or not stated
+
+| | **This kit** | [gosom](https://github.com/gosom/google-maps-scraper) | [omkarcloud](https://github.com/omkarcloud/google-maps-scraper) | [zohaibbashir](https://github.com/zohaibbashir/Google-Maps-Scrapper) | [gaspa93](https://github.com/gaspa93/googlemaps-scraper) | [conor-is-my-name](https://github.com/conor-is-my-name/google-maps-scraper) | Apify, Outscraper (cloud) | Chat AI |
+|---|---|---|---|---|---|---|---|---|
+| Price | ✅ Free, MIT | ✅ Free, MIT | 🟡 Closed app: 200 free searches a month, then $16 to $48 | ✅ Free, MIT | ✅ Free, GPL-3.0 | ✅ Free, MIT | ❌ Per result or subscription | ✅ Free tier |
+| Data stays on your machine | ✅ | ✅ | 🟡 Enrichment runs on their cloud | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Setup | ✅ Python and Chrome. No pip, Docker or account | 🟡 Docker or a binary; the skill needs Docker and Node | 🟡 Desktop app; account and phone check for enrichment | 🟡 pip and Playwright, visible browser | 🟡 pip and chromedriver | 🟡 Docker or uvicorn | 🟡 Account and API key | 🟡 Account |
+| Whole city, past Google's ~120 cap | ✅ `--grid N` from a city name, deduped; `--deep-scan` for dense areas | 🟡 Manual `-grid-bbox` coordinates | ✅ Whole-city searches | ❌ | ❌ Reviews only | ❌ One search | ✅ Billed per result | ❌ Close to zero rows |
+| Emails | ✅ On by default: homepage, contact and about pages | 🟡 `-email` flag, off by default | 🟡 Paid, 0.2 credits per business | ❌ | ❌ | ❌ | 🟡 Often a paid add-on | ❌ |
+| Email domain check | ✅ `--verify-emails` MX lookup, no key | ❌ | 🟡 Paid | ❌ | ❌ | ❌ | 🟡 Paid add-on | ❌ |
+| Social profiles | ✅ On by default: Instagram, Facebook, LinkedIn, TikTok, YouTube, X | ❌ | 🟡 Paid | ❌ | ❌ | ❌ | 🟡 Often a paid add-on | ❌ |
+| Who already advertises | ✅ `--tech`: ad pixels, analytics, site platform, `intent_score` ranking | ❌ | 🟡 One yes/no ads field | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Lead filters | ✅ No website, rating, reviews, phone, email; `--exclude` old leads | 🟡 `-resume` skips places already in the file | ✅ Rating, reviews, website, phone | ❌ | ❌ | ❌ | 🟡 Varies by tool | ❌ |
+| Reviews | 🟡 Up to 5 per place, plus the star histogram | ✅ Up to about 300 per place | ✅ | 🟡 Count and rating | ✅ Reviews only | 🟡 Count only | ✅ | ❌ |
+| Proxy rotation | ✅ `--proxy`, repeatable; a blocked keyword retries on the next one | ✅ `-proxies` | ➖ | ❌ | ❌ | ❌ | ✅ Built in | ❌ |
+| Web UI | ✅ Form with 4,100 business types and 168,000 cities | ✅ `-web` | ✅ Desktop app | ❌ | ❌ | ❌ | ✅ | ➖ |
+| REST API | ✅ OpenAPI, localhost only | ✅ OpenAPI | ✅ 13 endpoints | ❌ | ❌ | ✅ `/scrape` | ✅ | ❌ |
+| AI agent | ✅ Skill and four slash commands, no Docker | 🟡 Skill, needs Docker and Node | ❌ | ❌ | ❌ | ❌ | 🟡 Apify has an MCP server | ➖ |
+| Published speed | ✅ 100 dentists with phones, emails and socials in 44 s | 🟡 About 120 places a minute (estimate, emails off) | ❌ None published | ❌ None published | ❌ None published | ❌ None published | ➖ Varies | ➖ |
+| Scale-out to many machines | ❌ One machine | ✅ PostgreSQL queue, S3, Lambda | ➖ | ❌ | 🟡 MongoDB monitor | ❌ | ✅ | ❌ |
+| **✅ count** | **14** | 7 | 5 | 2 | 3 | 3 | 6 | 1 |
+
+Facts about other tools come from their own README on 2026-11-02. The kit's numbers are measured, with
+the commands to reproduce them, in [Measured, not estimated](#measured-not-estimated). The full
+comparison is in [docs/best-google-maps-scrapers.md](docs/best-google-maps-scrapers.md).
 
 Ask a chat AI to "scrape Google Maps" and it hits a consent wall and JavaScript-rendered pages, so
 you get close to zero structured rows. This kit runs a real headless scraping engine locally and gives
