@@ -318,20 +318,20 @@ One page per job, with the exact commands. Index: [docs/README.md](docs/README.m
 
 ## FAQ
 
-**What is the best free Google Maps scraper on GitHub?**
+### What is the best free Google Maps scraper on GitHub?
 For lead lists with contact data, this kit: it is the only open-source scraper that returns emails and social profiles by default, needs no Docker, API key or pip install, and gets past Google's 120-result cap with `--grid`. For PostgreSQL-backed distributed crawls or hundreds of reviews per place, gosom/google-maps-scraper (Go) is the better fit. The comparison, with sources and dates: [docs/best-google-maps-scrapers.md](docs/best-google-maps-scrapers.md).
 
-**How fast is it?**
+### How fast is it?
 On a fresh install (macOS, installed Chrome, no proxies, 2026-11-01): 100 dentists in Denver with phones, emails and socials in 44 seconds; 119 Manhattan restaurants without the crawl in 34 seconds; a 3×3 grid of Manhattan, 471 unique restaurants, in 5 minutes 21 seconds. Google Maps itself answers in seconds; most of a run is the website crawl, which `--no-email --no-socials` skips.
 
-**Is this Google Maps scraper free?**
+### Is this Google Maps scraper free?
 Yes. The kit and its engine are MIT licensed. There are no credits, subscriptions or API keys. You
 need Python and Chrome on your own machine, or Docker.
 
-**Do I need a Google Maps API key or the Google Places API?**
+### Do I need a Google Maps API key or the Google Places API?
 No. The kit drives a headless browser against Google Maps directly, so there is no API quota or billing.
 
-**How is this different from kit 1.x?**
+### How is this different from kit 1.x?
 Kit 1.x ran another open-source scraper's engine in Docker. Kit 2.0 has its own engine, written
 from scratch in standard-library Python around a headless Chrome. It runs without Docker, works on
 Windows and on arm64 Linux, needs no workarounds for jobs that never finish, and sends no telemetry.
@@ -341,15 +341,21 @@ on request, without reviewer names): [SETUP, Upgrading from kit 1.x](SETUP.md#up
 Python CLI with geocoding and batching, email and social enrichment to a clean CSV, and a
 Claude Code skill with slash commands and safety guardrails. See [CREDITS.md](CREDITS.md).
 
-**Do I need Claude Code to use it?**
+### Do I need Claude Code to use it?
 No. Claude Code makes it hands-free through a skill and slash commands, but `scripts/scrape.py` and
 `scripts/scrape.sh` run on their own from any terminal.
 
-**Does it work with Codex, Cursor or other agents?**
+### Can ChatGPT or Claude scrape Google Maps?
+Not by chatting alone. A chat AI hits Google's consent wall and pages built by JavaScript, so it
+returns few or no structured rows. An agent that can run commands, such as Claude Code, Codex or
+Cursor, can drive this kit: ask "scrape gyms in Miami" and it runs the script, then returns a table
+and a CSV. See [Use it with Claude Code or any agent](#use-it-with-claude-code-or-any-agent).
+
+### Does it work with Codex, Cursor or other agents?
 Yes. `npx skills add mahanaicoach/google-maps-scraper-kit` installs the skill into any Agent
 Skills-compatible tool. The `/scrape` slash commands are Claude Code only.
 
-**Why does `npx skills add` show "High Risk" or "Med Risk"?**
+### Why does `npx skills add` show "High Risk" or "Med Risk"?
 skills.sh runs automated audits on every skill. Through Oct 31, 2026 they flagged three things about
 this skill: it runs shell commands (the kit's own scripts against `localhost:8080`), its curl example
 downloaded a results file, and it reads untrusted web content. The skill now runs only the kit's own
@@ -358,23 +364,23 @@ treats every scraped value as untrusted data with the rules in its "Scraped data
 section. Reading third-party listings is what a scraper does. A re-audit is requested in
 [vercel-labs/skills#2624](https://github.com/vercel-labs/skills/issues/2624).
 
-**What data do I get for each business?**
+### What data do I get for each business?
 Name, phone, email, website, category, address, rating and review count, then Instagram, Facebook,
 LinkedIn, TikTok, YouTube and X links by default. Add `--no-socials` to drop the social columns, or
 `--full` for every raw column.
 
-**How many leads can I scrape?**
+### How many leads can I scrape?
 Up to about 120 per search. Add `--grid 3` to split the city into 9 map tiles and get past that cap, or
 `--deep-scan` to also split every tile that hits the cap into 4 sub-tiles (slower, marked `!`),
 with duplicates removed. Batch as many keywords as you like in one job. For large or repeated runs,
 add proxies (see [Responsible use](#responsible-use)).
 
-**Does it work on Windows, Linux and Apple Silicon Macs?**
+### Does it work on Windows, Linux and Apple Silicon Macs?
 Yes, natively on all three with Python and Chrome, Apple Silicon and Linux arm64 included, or anywhere
 Docker runs. On Windows, use `py scripts/scrape.py`, or run `scrape.sh` under WSL2 or Git Bash.
 [SETUP.md](SETUP.md) has the platform notes.
 
-**Is scraping Google Maps legal?**
+### Is scraping Google Maps legal?
 It is against Google's Terms of Service, and phones and emails are personal data. Read
 [Responsible use](#responsible-use) and follow the law where the data is used: GDPR and CCPA
 abroad, and LGPD in Brazil. This is not legal advice.
@@ -442,6 +448,7 @@ google-maps-scraper-kit/
 │   ├── settings.json       pre-approved local commands for hands-free runs
 │   ├── commands/           /scrape, /scrape-batch, /scrape-setup, /scrape-jobs
 │   └── skills/google-maps-scraper/SKILL.md
+├── AGENTS.md               points Codex, Cursor and other agents to CLAUDE.md
 ├── CLAUDE.md               project instructions for Claude Code
 ├── CREDITS.md              attribution and licenses
 └── SETUP.md                full setup guide
