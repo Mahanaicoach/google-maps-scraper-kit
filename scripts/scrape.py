@@ -635,8 +635,27 @@ def _fetch_html(url, timeout=10):
 
 @functools.lru_cache(maxsize=256)  # ponytail: homepages only (up to 400 KB each); evicted pages just refetch
 def _fetch_cached(url):
-    """Homepage fetch shared by the email crawl, --socials and --tech (one fetch per site)."""
-    return _fetch_html(url, timeout=8)
+    """Homepage fetch shared by the email crawl, --socials and --tech (one fetch per site). A site that
+    fails as listed is retried on the other scheme and with www. toggled: many apex domains have no A
+    record and many hosts answer on https only. Every retry goes through _fetch_html, so its guards apply."""
+    html = _fetch_html(url, timeout=8)
+    if html:
+        return html
+    try:
+        p = urllib.parse.urlsplit(url if "://" in url else "http://" + url)
+        host, port = p.hostname or "", f":{p.port}" if p.port else ""
+    except ValueError:  # a malformed website value from a listing
+        return ""
+    if not host or p.scheme not in ("http", "https"):
+        return ""
+    tail = p.path + ("?" + p.query if p.query else "")
+    other = host[4:] if host.startswith("www.") else "www." + host
+    scheme2 = "https" if p.scheme == "http" else "http"
+    for variant in (f"{scheme2}://{host}{port}{tail}", f"{p.scheme}://{other}{port}{tail}", f"{scheme2}://{other}{port}{tail}"):
+        html = _fetch_html(variant, timeout=8)
+        if html:
+            return html
+    return ""
 
 _BROWSER_BUDGET = None
 _BROWSER_LOCK = threading.Lock()
@@ -665,6 +684,15 @@ def _render_site(url):
 def _set_fetch_status(r, status):
     r["website_fetch_status"] = _web().merge_status(r.get("website_fetch_status"), status)
 
+
+_SOCIAL_HOSTS = ("facebook.com", "fb.com", "fb.me", "instagram.com", "instagr.am", "linkedin.com", "lnkd.in",
+                 "x.com", "twitter.com", "tiktok.com", "youtube.com", "yelp.com")
+
+def is_social(url):
+    """True when the "website" is a social or review profile, not the business's own site: nothing
+    to crawl for emails or pixels, and no emails to MX-check at facebook.com."""
+    h = _host(url or "")
+    return any(h == s or h.endswith("." + s) for s in _SOCIAL_HOSTS)
 
 def _find_socials(html):
     out = {k: "" for k in SOCIAL_FIELDS}
@@ -706,7 +734,10 @@ def enrich_sites(results, find, fields, label, workers=None, browser_sites=False
         if browser_sites:
             r.setdefault("website_fetch_status", "http" if page else "error")
         r.update(found)
-    todo = [r for r in results if r.get("website")]
+    for r in results:  # a Facebook or Instagram page in the website slot IS the social profile
+        if find is _find_socials and r.get("website") and is_social(r["website"]):
+            r.update({k: v for k, v in _find_socials(r["website"]).items() if v})
+    todo = [r for r in results if r.get("website") and not is_social(r["website"])]
     _each_site(todo, work, label, workers)
     if browser_sites:
         def retry(r):
@@ -840,20 +871,34 @@ _TLD = (r"(?:com|net|org|co|io|biz|info|us|uk|ca|au|de|fr|es|it|nl|eu|edu|gov|me
         r"shop|online|store|xyz|ai)")
 _DEOBF_RE = re.compile(rf"(?<!{_LOCAL})({_LOCAL}+)\s*{_AT}\s*([A-Za-z0-9.\-]+?)\s*{_DOT}\s*({_TLD})\b", re.I)
 
+_CFEMAIL_RE = re.compile(r'data-cfemail="([0-9a-fA-F]+)"|/cdn-cgi/l/email-protection#([0-9a-fA-F]+)')
+
+def _cf_decode(hexstr):
+    """Cloudflare's email protection: a hex string whose first byte is the key every other byte is
+    XORed with. Many sites 'have no email' only because of it."""
+    try:
+        key = int(hexstr[:2], 16)
+        return bytes(int(hexstr[i:i + 2], 16) ^ key for i in range(2, len(hexstr) - 1, 2)).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return ""
+
+def _on_site(e, site):
+    return bool(site) and (e.endswith("@" + site) or e.endswith("." + site))
+
 def extract_emails(html, site_host):
-    """Emails from mailto: links, plain text and obfuscated spans, junk dropped, site-domain first,
-    max 3. HTML entities are decoded first, so info&#64;site.com counts."""
+    """Emails from mailto: links, plain text, obfuscated spans and Cloudflare-protected links, junk
+    dropped, site-domain first, max 3. HTML entities are decoded first, so info&#64;site.com counts."""
     site = _host(site_host or "")
     text = _html.unescape(html or "")[:400_000]
     found = []
     deobf = [f"{m[0]}@{m[1]}.{m[2]}" for m in _DEOBF_RE.findall(text)]
+    deobf += [_cf_decode(a or b) for a, b in _CFEMAIL_RE.findall(text)]
     for e in MAILTO_RE.findall(text) + EMAIL_RE.findall(text) + deobf:
         e = _ESCAPE_PREFIX.sub("", urllib.parse.unquote(e).strip().lower())
         if not is_real_email(e) or e in found:
             continue
         found.append(e)
-    on_site = lambda e: site and (e.endswith("@" + site) or e.endswith("." + site))
-    return sorted(found, key=lambda e: not on_site(e))[:3]
+    return sorted(found, key=lambda e: not _on_site(e, site))[:3]
 
 def contact_links(html, base_url):
     """Up to 3 same-site contact/about URLs: discovered links first, then fixed fallbacks."""
@@ -863,7 +908,7 @@ def contact_links(html, base_url):
     if not host:  # malformed or empty website: nothing to join the paths onto
         return out
     for href, text in HREF_RE.findall(html or ""):
-        if not re.search(r"contact|about|team|staff|support", href + " " + text, re.I):
+        if not re.search(r"contact|about|team|staff|support|location|impressum|kontakt", href + " " + text, re.I):
             continue
         try:
             url = urllib.parse.urldefrag(urllib.parse.urljoin(base_url, href.strip()))[0]
@@ -871,25 +916,36 @@ def contact_links(html, base_url):
             continue
         if url.startswith(("http://", "https://")) and _host(url) == host and url not in out:
             out.append(url)
-    for path in ("/contact", "/contact-us", "/about", "/about-us"):
+    for path in ("/contact", "/contact-us", "/about", "/about-us", "/locations", "/team", "/impressum", "/kontakt"):
         url = urllib.parse.urljoin(base_url, path)
         if len(out) < 3 and url not in out:
             out.append(url)
     return out[:3]
 
+def _own(found, site):
+    """True when the list (site-domain first, see extract_emails) holds an address on the site's own domain."""
+    return bool(found) and _on_site(found[0], _host(site))
+
+def _add_emails(found, html, site):
+    """The emails so far plus those on one more page, site-domain first, max 3."""
+    return sorted(dict.fromkeys(found + extract_emails(html, site)), key=lambda e: not _on_site(e, _host(site)))[:3]
+
 def enrich_emails(results, deep=True, workers=None, browser_sites=False):
-    """Finish all HTTP email lookups before bounded browser retries for still-empty rows."""
+    """Finish all HTTP email lookups before bounded browser retries for still-empty rows. The contact
+    crawl goes on until an address on the site's own domain turns up: a gmail on the homepage is not the end."""
     def work(r):
         site = r["website"]
         home = _fetch_cached(site)
         found = extract_emails(home, site)
-        if deep and home and not found:
-            pages = "\n".join(_fetch_html(u, timeout=8) for u in contact_links(home, site))
-            found = extract_emails(pages, site)
+        if deep and home:
+            for u in contact_links(home, site):
+                if _own(found, site):
+                    break
+                found = _add_emails(found, _fetch_html(u, timeout=8), site)
         if browser_sites:
             r.setdefault("website_fetch_status", "http" if home else "error")
         r["emails"] = ", ".join(found)
-    todo = [r for r in results if r.get("website") and not r.get("emails")]
+    todo = [r for r in results if r.get("website") and not r.get("emails") and not is_social(r["website"])]
     _each_site(todo, work, "emails", workers)
     if browser_sites:
         def retry(r):
@@ -898,15 +954,15 @@ def enrich_emails(results, deep=True, workers=None, browser_sites=False):
             _set_fetch_status(r, rendered["status"])
             home = rendered["html"]
             found = extract_emails(home, site)
-            if deep and home and not found:
+            if deep and home:
                 for url in contact_links(home, site):
+                    if _own(found, site):
+                        break
                     contact = _render_site(url)
                     if contact["status"] == "budget_exhausted":
                         _set_fetch_status(r, "budget_exhausted")
                         break
-                    found = extract_emails(contact["html"], site)
-                    if found:
-                        break
+                    found = _add_emails(found, contact["html"], site)
             r["emails"] = ", ".join(found)
         _each_site([r for r in todo if not r.get("emails")], retry, "browser emails", workers=2)
 
