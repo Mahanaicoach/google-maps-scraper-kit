@@ -287,32 +287,32 @@ finds emails, social profiles and ad pixels by default, for free, without the da
 
 ✅ built in and free · 🟡 partial, manual or paid · ❌ no · ➖ not applicable or not stated
 
-| | **This kit** | [gosom](https://github.com/gosom/google-maps-scraper) | [omkar&shy;cloud](https://github.com/omkarcloud/google-maps-scraper) | [zohaib&shy;bashir](https://github.com/zohaibbashir/Google-Maps-Scrapper) | [gaspa93](https://github.com/gaspa93/googlemaps-scraper) | [conor](https://github.com/conor-is-my-name/google-maps-scraper) | Apify, Outscraper | Chat AI |
-|---|---|---|---|---|---|---|---|---|
-| Price | ✅ Free | ✅ Free | 🟡 Freemium | ✅ Free | ✅ Free | ✅ Free | ❌ Per result | ✅ Free tier |
-| Data stays local | ✅ | ✅ | 🟡 Cloud enrichment | ✅ | ✅ | ✅ | ❌ | ❌ |
-| Setup | ✅ Python, Chrome | 🟡 Docker or binary | 🟡 App, account | 🟡 pip, Playwright | 🟡 pip, Chrome&shy;driver | 🟡 Docker | 🟡 Account, key | 🟡 Account |
-| Past Google's 120 cap | ✅ `--grid`, `--deep-scan` | 🟡 Manual bbox | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ |
-| Emails | ✅ On by default | 🟡 Flag, off by default | 🟡 Paid | ❌ | ❌ | ❌ | 🟡 Paid add-on | ❌ |
-| Email check (MX) | ✅ `--verify-emails` | ❌ | 🟡 Paid | ❌ | ❌ | ❌ | 🟡 Paid add-on | ❌ |
-| Social profiles | ✅ 6 networks, on by default | ❌ | 🟡 Paid | ❌ | ❌ | ❌ | 🟡 Paid add-on | ❌ |
-| Ad pixels and lead score | ✅ `--tech`, `intent_score` | ❌ | 🟡 Yes/no ads field | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Lead filters | ✅ 6 filters and `--exclude` | 🟡 `-resume` only | ✅ | ❌ | ❌ | ❌ | 🟡 Varies | ❌ |
-| Reviews | 🟡 5 per place and histogram | ✅ About 300 per place | ✅ | 🟡 Count | ✅ Reviews only | 🟡 Count | ✅ | ❌ |
-| Proxy rotation | ✅ Rotates on block | ✅ | ➖ | ❌ | ❌ | ❌ | ✅ | ❌ |
-| Web UI | ✅ | ✅ | ✅ App | ❌ | ❌ | ❌ | ✅ | ➖ |
-| REST API | ✅ Localhost only | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ |
-| AI agent | ✅ Skill and 4 commands | 🟡 Needs Docker and Node | ❌ | ❌ | ❌ | ❌ | 🟡 Apify MCP | ➖ |
-| Published speed | ✅ 100 leads with emails in 44 s | 🟡 ~120 a minute, emails off | ❌ | ❌ | ❌ | ❌ | ➖ | ➖ |
-| Scale-out | ❌ One machine | ✅ PostgreSQL, S3 | ➖ | ❌ | 🟡 MongoDB | ❌ | ✅ | ❌ |
-| **✅ count** | **14** | 7 | 5 | 2 | 3 | 3 | 6 | 1 |
+| | **This kit** | [gosom](https://github.com/gosom/google-maps-scraper) | [omkar&shy;cloud](https://github.com/omkarcloud/google-maps-scraper) | [zohaib&shy;bashir](https://github.com/zohaibbashir/Google-Maps-Scrapper) | [gaspa93](https://github.com/gaspa93/googlemaps-scraper) | [conor](https://github.com/conor-is-my-name/google-maps-scraper) | Apify, Outscraper |
+|---|---|---|---|---|---|---|---|
+| Price | ✅ Free | ✅ Free | 🟡 Freemium | ✅ Free | ✅ Free | ✅ Free | ❌ Per result |
+| Data stays local | ✅ | ✅ | 🟡 Cloud enrichment | ✅ | ✅ | ✅ | ❌ |
+| Setup | ✅ Python, Chrome | 🟡 Docker or binary | 🟡 App, account | 🟡 pip, Playwright | 🟡 pip, Chrome&shy;driver | 🟡 Docker | 🟡 Account, key |
+| Past Google's 120 cap | ✅ `--grid`, `--deep-scan` | 🟡 Manual bbox | ✅ | ❌ | ❌ | ❌ | ✅ |
+| Emails | ✅ On by default | 🟡 Flag, off by default | 🟡 Paid | ❌ | ❌ | ❌ | 🟡 Paid add-on |
+| Email check (MX) | ✅ `--verify-emails` | ❌ | 🟡 Paid | ❌ | ❌ | ❌ | 🟡 Paid add-on |
+| Social profiles | ✅ 6 networks, on by default | ❌ | 🟡 Paid | ❌ | ❌ | ❌ | 🟡 Paid add-on |
+| Ad pixels and lead score | ✅ `--tech`, `intent_score` | ❌ | 🟡 Yes/no ads field | ❌ | ❌ | ❌ | ❌ |
+| Lead filters | ✅ 6 filters and `--exclude` | 🟡 `-resume` only | ✅ | ❌ | ❌ | ❌ | 🟡 Varies |
+| Reviews | 🟡 5 per place and histogram | ✅ About 300 per place | ✅ | 🟡 Count | ✅ Reviews only | 🟡 Count | ✅ |
+| Proxy rotation | ✅ Rotates on block | ✅ | ➖ | ❌ | ❌ | ❌ | ✅ |
+| Web UI | ✅ | ✅ | ✅ App | ❌ | ❌ | ❌ | ✅ |
+| REST API | ✅ Localhost only | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ |
+| AI agent | ✅ Skill and 4 commands | 🟡 Needs Docker and Node | ❌ | ❌ | ❌ | ❌ | 🟡 Apify MCP |
+| Published speed | ✅ 100 leads with emails in 44 s | 🟡 ~120 a minute, emails off | ❌ | ❌ | ❌ | ❌ | ➖ |
+| Scale-out | ❌ One machine | ✅ PostgreSQL, S3 | ➖ | ❌ | 🟡 MongoDB | ❌ | ✅ |
+| **✅ count** | **14** | 7 | 5 | 2 | 3 | 3 | 6 |
 
 Facts about other tools come from their own README on 2026-11-02. The kit's numbers are measured, with
 the commands to reproduce them, in [Measured, not estimated](#measured-not-estimated). The full
 comparison is in [docs/best-google-maps-scrapers.md](docs/best-google-maps-scrapers.md).
 
 Ask a chat AI to "scrape Google Maps" and it hits a consent wall and JavaScript-rendered pages, so
-you get close to zero structured rows. This kit runs a real headless scraping engine locally and gives
+you get close to zero structured rows: on the table above it would score 1, for its free tier. This kit runs a real headless scraping engine locally and gives
 the agent a precise operating manual for it.
 
 ---
