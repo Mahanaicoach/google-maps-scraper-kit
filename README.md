@@ -287,7 +287,7 @@ finds emails, social profiles and ad pixels by default, for free, without the da
 
 ✅ built in and free · 🟡 partial, manual or paid · ❌ no · ➖ not applicable or not stated
 
-| | **This kit** | [gosom](https://github.com/gosom/google-maps-scraper) | [omkar&shy;cloud](https://github.com/omkarcloud/google-maps-scraper) | [zohaib&shy;bashir](https://github.com/zohaibbashir/Google-Maps-Scrapper) | [gaspa93](https://github.com/gaspa93/googlemaps-scraper) | [conor](https://github.com/conor-is-my-name/google-maps-scraper) | Apify, Outscraper |
+| | **This kit** | [gosom](https://github.com/gosom/google-maps-scraper) | [omkar&shy;cloud](https://github.com/omkarcloud/google-maps-scraper) | [zohaib&shy;bashir](https://github.com/zohaibbashir/Google-Maps-Scrapper) | [gaspa93](https://github.com/gaspa93/googlemaps-scraper) | [conor](https://github.com/conor-is-my-name/google-maps-scraper) | Apify, Out&shy;scraper |
 |---|---|---|---|---|---|---|---|
 | Price | ✅ Free | ✅ Free | 🟡 Freemium | ✅ Free | ✅ Free | ✅ Free | ❌ Per result |
 | Data stays local | ✅ | ✅ | 🟡 Cloud enrichment | ✅ | ✅ | ✅ | ❌ |
@@ -296,7 +296,7 @@ finds emails, social profiles and ad pixels by default, for free, without the da
 | Emails | ✅ On by default | 🟡 Flag, off by default | 🟡 Paid | ❌ | ❌ | ❌ | 🟡 Paid add-on |
 | Email check (MX) | ✅ `--verify-emails` | ❌ | 🟡 Paid | ❌ | ❌ | ❌ | 🟡 Paid add-on |
 | Social profiles | ✅ 6 networks, on by default | ❌ | 🟡 Paid | ❌ | ❌ | ❌ | 🟡 Paid add-on |
-| Ad pixels and lead score | ✅ `--tech`, `intent_score` | ❌ | 🟡 Yes/no ads field | ❌ | ❌ | ❌ | ❌ |
+| Ad pixels and lead score | ✅ `--tech` ranks leads | ❌ | 🟡 Yes/no ads field | ❌ | ❌ | ❌ | ❌ |
 | Lead filters | ✅ 6 filters and `--exclude` | 🟡 `-resume` only | ✅ | ❌ | ❌ | ❌ | 🟡 Varies |
 | Reviews | 🟡 5 per place and histogram | ✅ About 300 per place | ✅ | 🟡 Count | ✅ Reviews only | 🟡 Count | ✅ |
 | Proxy rotation | ✅ Rotates on block | ✅ | ➖ | ❌ | ❌ | ❌ | ✅ |
