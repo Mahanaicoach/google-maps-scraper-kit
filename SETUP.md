@@ -101,6 +101,10 @@ separate job lists, so jobs started in one do not show in the other.
 python3 scripts/engine.py status  # should print ✓ Running on http://localhost:8080
 ```
 
+When a newer kit is released, `status` adds a line (`↑ Kit v2.3.0 is out ... bash scripts/update.sh`) and the
+web UI shows the same under its title. Both ask GitHub's releases endpoint once a day, with nothing about
+you in the request; `SCRAPER_NO_UPDATE_CHECK=1` in `.env` turns the check off. Nothing updates itself.
+
 It prints `✓ Running on http://localhost:<port>` only when the kit's own engine answers (it checks the
 engine's `X-Engine` header, so another program on the port cannot fool it). The engine also serves a
 web UI and API docs in the browser:

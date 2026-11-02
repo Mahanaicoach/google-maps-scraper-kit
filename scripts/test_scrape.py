@@ -1217,5 +1217,66 @@ class BrowserSites(unittest.TestCase):
         self.assertEqual(rows[0]["website_fetch_status"], "http")
 
 
+_espec = importlib.util.spec_from_file_location(
+    "enginepy", os.path.join(os.path.dirname(os.path.abspath(__file__)), "engine.py"))
+enginepy = importlib.util.module_from_spec(_espec)
+_espec.loader.exec_module(enginepy)
+
+
+class UpdateNotice(unittest.TestCase):
+    """`engine.py status` says when a newer kit is released: once a day, cached, silent on any failure."""
+
+    def test_newer_compares_the_first_three_numbers(self):
+        self.assertTrue(enginepy.newer("v2.3.0", "2.2.0"))
+        self.assertTrue(enginepy.newer("v3.0.0", "2.9.9"))
+        self.assertFalse(enginepy.newer("v2.2.0", "2.2.0"))
+        self.assertFalse(enginepy.newer("v2.1.9", "2.2.0"))
+        self.assertFalse(enginepy.newer("v2.2.0", "2.2.0-dev.4"))
+        self.assertTrue(enginepy.newer("v2.2.1", "2.2.0-dev.4"))
+        self.assertFalse(enginepy.newer("garbage", "2.2.0"))
+
+    def test_hint_prints_once_a_day_from_one_request_and_never_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            cache = os.path.join(d, "update-check.json")
+            answer = io.BytesIO(json.dumps({"tag_name": "v9.9.9"}).encode())
+            answer.__enter__, answer.__exit__ = lambda: answer, lambda *a: None
+            with mock.patch.object(enginepy, "UPDATE_CACHE", cache), mock.patch.object(enginepy, "HOME", d), \
+                 mock.patch.object(enginepy, "local_version", return_value="2.2.0"), \
+                 mock.patch.object(enginepy.urllib.request, "urlopen", return_value=answer) as urlopen, \
+                 mock.patch.dict(os.environ, {"SCRAPER_NO_UPDATE_CHECK": ""}):
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    enginepy.update_hint()
+                    enginepy.update_hint()  # the second call reads the cache
+                self.assertEqual(urlopen.call_count, 1)
+                self.assertEqual(out.getvalue().count("↑ Kit v9.9.9 is out (this copy is v2.2.0). Update: bash scripts/update.sh"), 2)
+                self.assertEqual(json.load(open(cache))["tag"], "v9.9.9")
+            # nothing newer: silent
+            with mock.patch.object(enginepy, "UPDATE_CACHE", cache), mock.patch.object(enginepy, "local_version", return_value="9.9.9"):
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    enginepy.update_hint()
+                self.assertEqual(out.getvalue(), "")
+            # offline: silent, and nothing cached
+            os.remove(cache)
+            with mock.patch.object(enginepy, "UPDATE_CACHE", cache), mock.patch.object(enginepy, "HOME", d), \
+                 mock.patch.object(enginepy, "local_version", return_value="2.2.0"), \
+                 mock.patch.object(enginepy.urllib.request, "urlopen", side_effect=OSError("offline")):
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    enginepy.update_hint()
+                self.assertEqual(out.getvalue(), "")
+                self.assertFalse(os.path.exists(cache))
+            # opted out: no request at all
+            with mock.patch.object(enginepy, "UPDATE_CACHE", cache), \
+                 mock.patch.object(enginepy.urllib.request, "urlopen") as urlopen, \
+                 mock.patch.dict(os.environ, {"SCRAPER_NO_UPDATE_CHECK": "1"}):
+                enginepy.update_hint()
+                urlopen.assert_not_called()
+
+    def test_local_version_reads_serve_py(self):
+        self.assertRegex(enginepy.local_version(), r"^\d+\.\d+\.\d+")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

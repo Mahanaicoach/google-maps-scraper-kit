@@ -54,7 +54,8 @@ individuals, spam). The skill has the full guidance.
 ## Setup
 Check the engine first with `python3 scripts/engine.py status`. It prints `✓ Running on http://localhost:<port>`
 only when the kit's own engine answers (it checks the engine's `X-Engine` header, so another program on
-the port cannot fool it), and that URL is the base to use. It also names the browser the engine will use.
+the port cannot fool it), and that URL is the base to use. It also names the browser the engine will use, and prints `↑ Kit vX.Y.Z is out` when a newer
+release exists: mention it once; never run `scripts/update.sh` unasked.
 If the engine is not running, run `python3 scripts/engine.py start` (or `docker compose up -d` when the
 user runs Docker), then run `status` again. If `status` finds no browser, `start` would download Chrome for
 Testing (about 100 MB, pinned by SHA-256): ask the user first, or suggest installing Google Chrome or

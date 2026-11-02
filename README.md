@@ -200,7 +200,7 @@ scrapes Google Maps business listings only. It does not scrape social platforms 
 | **Batch jobs** | Many keywords, one job, one CSV. The engine lists a place found by several keywords once. |
 | **Proxies** | For large or repeated runs: `--proxy URL` with `http`, `https`, `socks5` or `socks5h`, and `user:pass@` on `http` and `https`. Repeat it and the keywords take turns; a keyword Google refuses is retried through the next proxy. |
 | **Agent-native** | A skill plus four slash commands. The agent runs the script and presents the lead fields; it never hand-builds API calls. |
-| **Safe defaults** | API bound to `127.0.0.1`, and the engine refuses requests from other websites in your browser (DNS rebinding, cross-site posts); an optional API key. No telemetry: the engine talks to Google Maps, and to the businesses' websites and `dns.google` only for jobs that ask. Proxy passwords show as `***`. A cell that a spreadsheet would run as a formula gets a leading `'` in the engine's CSV download and in the script's file. Results git-ignored; website fetches skip private addresses; rate-limit and data-law guardrails built into the skill. |
+| **Safe defaults** | API bound to `127.0.0.1`, and the engine refuses requests from other websites in your browser (DNS rebinding, cross-site posts); an optional API key. No telemetry: the engine talks to Google Maps, and to the businesses' websites and `dns.google` only for jobs that ask. The web UI and `engine.py status` ask GitHub once a day whether a newer release is out, with nothing about you in the request (`SCRAPER_NO_UPDATE_CHECK=1` in `.env` turns it off); nothing updates itself. Proxy passwords show as `***`. A cell that a spreadsheet would run as a formula gets a leading `'` in the engine's CSV download and in the script's file. Results git-ignored; website fetches skip private addresses; rate-limit and data-law guardrails built into the skill. |
 
 ### Measured, not estimated
 
@@ -451,7 +451,9 @@ google-maps-scraper-kit/
 
 ## Updating
 
-Pull the latest fixes with one command. It works in a clone of this repo or of your fork, and it
+The web UI shows a line under its title when a newer release is out, and `python3 scripts/engine.py status`
+prints one (both check GitHub's releases once a day; `SCRAPER_NO_UPDATE_CHECK=1` in `.env` turns it off).
+Nothing updates by itself. Pull the latest fixes with one command. It works in a clone of this repo or of your fork, and it
 keeps your own commits:
 
 ```bash

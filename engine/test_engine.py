@@ -505,8 +505,10 @@ class Api(Server):
         self.assertIn(f'<script nonce="{nonce}">', body.decode())
         self.assertIn("github.com/Mahanaicoach/google-maps-scraper-kit", body.decode())
         self.assertIn("frame-ancestors 'none'", csp)
-        self.assertIn("connect-src 'self' https://raw.githubusercontent.com;", csp)  # sponsors.json, nothing else
+        # sponsors.json from raw.githubusercontent.com and the latest release from api.github.com, nothing else
+        self.assertIn("connect-src 'self' https://raw.githubusercontent.com https://api.github.com;", csp)
         self.assertIn("assets/sponsors/sponsors.json", body.decode())
+        self.assertIn("/releases/latest", body.decode())
         self.assertNotRegex(body.decode(), r"\{[a-z_]+\}")  # every placeholder filled
         code, body, _ = self.call("GET", "/api/openapi.json")
         self.assertEqual(json.loads(body)["paths"]["/api/v1/jobs"]["post"]["requestBody"]["content"]["application/json"]
@@ -1286,6 +1288,11 @@ class ApiP3(Server):
         for rule in ("s.ui === true", "s.url.startsWith('https://')", ".slice(0, 4)", "noopener noreferrer sponsored"):
             self.assertIn(rule, ui)
         self.assertNotIn(".innerHTML", ui)  # sponsor text is set as text, never parsed as HTML
+        # update notice: hidden by default, filled from GitHub's latest release once a day, shown only when newer
+        self.assertIn('<div class="update" id="update" role="status" hidden>', ui)
+        for rule in ("gmskit-update", "api.github.com/repos/Mahanaicoach/google-maps-scraper-kit/releases/latest",
+                     "newer(tag, mine)", "bash scripts/update.sh"):
+            self.assertIn(rule, ui)
         script = re.search(r"<script nonce=[^>]+>(.*)</script>", ui, re.S).group(1)
         self.assertNotIn("'\n'", script)  # PAGE must say \\n: a bare newline in a JS string breaks the page
 

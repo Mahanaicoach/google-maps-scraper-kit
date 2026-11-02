@@ -42,7 +42,7 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):   # not a reconfigurable stream (pytest capture, a pipe wrapper)
         pass
 
-ENV_KEYS = ("SCRAPER_BASE_URL", "SCRAPER_PORT", "SCRAPER_API_KEY")
+ENV_KEYS = ("SCRAPER_BASE_URL", "SCRAPER_PORT", "SCRAPER_API_KEY", "SCRAPER_NO_UPDATE_CHECK")
 
 
 def _env_value(v):
