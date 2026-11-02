@@ -916,7 +916,7 @@ def contact_links(html, base_url):
             continue
         if url.startswith(("http://", "https://")) and _host(url) == host and url not in out:
             out.append(url)
-    for path in ("/contact", "/contact-us", "/about", "/about-us", "/locations", "/team", "/impressum", "/kontakt"):
+    for path in ("/contact", "/contact-us", "/about", "/about-us"):  # /team, /impressum, ...: found by link text above
         url = urllib.parse.urljoin(base_url, path)
         if len(out) < 3 and url not in out:
             out.append(url)
