@@ -28,7 +28,7 @@ for _stream in (sys.stdout, sys.stderr):  # ✓ and accented names on a Windows 
     except (AttributeError, ValueError):
         pass
 
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 MARK = f"gmskit-engine/{VERSION}"  # X-Engine header: tells scripts/engine.py this engine from others
 REPO = "https://github.com/Mahanaicoach/google-maps-scraper-kit"
 # The web UI's sponsor box: the browser reads this static file from GitHub (cached a day, no
@@ -206,6 +206,8 @@ OPENAPI = {
                                "stage: queued, search, reviews, websites or done)"},
             "delete": {"summary": "Delete a job and its results (stops it if it is running)"}},
         "/api/v1/jobs/{id}/download": {"get": {"summary": "The job's CSV, the rows so far while it works; "
+                                                          "?format=leads for the 8 lead fields and socials with junk "
+                                                          "emails dropped, as scripts/scrape.py writes them; "
                                                           "?format=json for a JSON array of the same rows"}},
         "/api/v1/cities": {"get": {"summary": "Up to 20 cities for the web UI's Where box, each {label, lat, lon, "
                                               "country}: ?q=aus gives the biggest whose \"name, region, country\" "
@@ -474,10 +476,10 @@ function say(t, kind) {{ $('msg').textContent = t; $('msg').className = kind || 
 function cell(tr, text, cls) {{ const td = document.createElement('td'); td.textContent = text; if (cls) td.className = cls; tr.appendChild(td); return td; }}
 function button(td, label, fn) {{ const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.addEventListener('click', fn); td.appendChild(b); }}
 async function download(j, fmt) {{
-  const r = await api('GET', '/api/v1/jobs/' + j.ID + '/download' + (fmt === 'json' ? '?format=json' : ''));
+  const r = await api('GET', '/api/v1/jobs/' + j.ID + '/download' + (fmt === 'csv' ? '' : '?format=' + fmt));
   if (!r.ok) return say('No results yet for this job.', 'bad');
   const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob());
-  a.download = fileName(j) + '.' + fmt; document.body.appendChild(a); a.click(); a.remove();
+  a.download = fileName(j) + (fmt === 'leads' ? '-leads.csv' : '.' + fmt); document.body.appendChild(a); a.click(); a.remove();
 }}
 function fileName(j) {{  // "bakery-in-portland-or-c063a815": after the search, plus the job id's start
   const s = (j.Name || '').normalize('NFKD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase()
@@ -516,7 +518,9 @@ async function load() {{
         bar.setAttribute('aria-label', 'Progress of ' + j.Name); st.appendChild(bar);
       }}
       const act = cell(tr, ''), row = document.createElement('div'); row.className = 'row'; act.appendChild(row);
-      if (j.Status !== 'pending' || (j.Progress || {{}}).places) {{ button(row, 'CSV', () => download(j, 'csv')); button(row, 'JSON', () => download(j, 'json')); }}
+      if (j.Status !== 'pending' || (j.Progress || {{}}).places) {{
+        button(row, 'Leads CSV', () => download(j, 'leads')); button(row, 'Full CSV', () => download(j, 'csv')); button(row, 'JSON', () => download(j, 'json'));
+      }}
       button(row, 'Delete', () => remove(j));
       tb.appendChild(tr);
     }}
@@ -772,8 +776,11 @@ class Handler(BaseHTTPRequestHandler):
             rows = list(csv.DictReader(io.StringIO(data.decode("utf-8", "replace"))))
             return self.reply(200, json.dumps(rows, ensure_ascii=False).encode(), "application/json; charset=utf-8",
                               [("Content-Disposition", f'attachment; filename="{name}.json"')])
+        if fmt == "leads":
+            return self.reply(200, jobs.leads_csv(data), "text/csv; charset=utf-8",
+                              [("Content-Disposition", f'attachment; filename="{name}-leads.csv"')])
         if fmt != "csv":
-            return self.fail(400, "format must be csv or json")
+            return self.fail(400, "format must be csv, leads or json")
         self.reply(200, jobs.guard_csv(data), "text/csv; charset=utf-8",  # a spreadsheet opens it: no formulas
                    [("Content-Disposition", f'attachment; filename="{name}.csv"')])
 

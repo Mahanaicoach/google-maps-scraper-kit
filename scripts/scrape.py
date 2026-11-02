@@ -778,9 +778,14 @@ _JUNK_EXT = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".avif", ".css", 
 _JUNK_DOMAIN = ("example", "sentry", "wixpress", "wix.com", "godaddy", "squarespace", "wordpress",
                 "domain.com", "email.com", "yourdomain", "mysite.com", "schema.org", "w3.org", "sentry.io",
                 # link-in-bio pages and website agencies: their support address is not the business's
-                "linktr.ee", "linkin.bio", "beacons.ai", "officite")
+                "linktr.ee", "linkin.bio", "beacons.ai", "officite",
+                # government addresses and marketing or review vendors: not the business's inbox (from PR #46)
+                "gov", "mil", "hubspot", "mailchimp", "constantcontact", "sendgrid", "yext", "birdeye", "podium", "zocdoc")
 _JUNK_LOCAL = {"name", "email", "user", "you", "someone", "example", "username",
-               "youremail", "yourname", "firstname", "lastname", "sample"}
+               "youremail", "yourname", "firstname", "lastname", "sample",
+               "noreply", "no-reply", "donotreply", "do-not-reply", "mailer-daemon", "postmaster"}
+_TOKEN = re.compile(r"[0-9a-f]{16,}")  # a 16+ hex local part is a tracking token, not an inbox
+# engine/jobs.py keeps the same three lists and token rule (a test checks).
 # A JSON-escaped <, >, ", ' or & glued to the address (">orders@x.com" in page source),
 # which the regex reads as part of the local part: u003eorders@x.com.
 _ESCAPE_PREFIX = re.compile(r"^(?:u00(?:3c|3e|22|27|26))+")
@@ -817,9 +822,10 @@ def clean_website(url):
 
 def is_real_email(e):
     """False for anything not worth sending to: a template placeholder (user@domain.com,
-    example@gmail.com), a vendor/boilerplate domain, or an image path that parsed as an address."""
+    example@gmail.com), a vendor/boilerplate domain, a no-reply inbox, a tracking token, or an image
+    path that parsed as an address."""
     local, _, dom = e.rpartition("@")
-    if not EMAIL_RE.fullmatch(e) or e.endswith(_JUNK_EXT):
+    if not EMAIL_RE.fullmatch(e) or e.endswith(_JUNK_EXT) or _TOKEN.fullmatch(local):
         return False
     return local not in _JUNK_LOCAL and not junk_domain(dom)
 
