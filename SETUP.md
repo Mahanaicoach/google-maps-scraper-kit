@@ -125,12 +125,12 @@ profiles", under "Collect". Both read each business's homepage. Three collapsed 
 - **Proxies:** one per line. `http://` and `https://` work with or without `user:pass`; `socks5://`
   works without a login.
 
-The job list shows each job's status with a progress bar, and CSV, JSON and Delete buttons. Job times
-show in your local time, and a review stage reads "reading reviews 7 of 20". A job's error, if any,
-shows under its name. The page downloads the
-engine's raw rows, the rows so far while a job works, in a file named after the search (for example
-`bakery-in-portland-or-c063a815.csv`). The scripts give you the cleaned 8 lead fields and find more
-emails.
+The job list shows each job's status with a progress bar, and Leads CSV, Full CSV, JSON and Delete
+buttons. Job times show in your local time, and a review stage reads "reading reviews 7 of 20". A
+job's error, if any, shows under its name. Downloads hold the rows so far while a job works, in a file
+named after the search (for example `bakery-in-portland-or-c063a815-leads.csv`). Leads CSV is the
+outreach list: the 8 lead fields, then the social columns, with the scripts' junk-email rules. Full CSV
+and JSON hold every raw column. The scripts also crawl contact pages, so they find more emails.
 
 > **Rate limits and the law.** The engine sends real requests to Google Maps. Light use is fine. Big
 > jobs back to back, high `depth`, many keywords or scheduled runs without proxies can get your IP

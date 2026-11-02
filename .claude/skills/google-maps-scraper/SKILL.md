@@ -173,7 +173,7 @@ the engine's answers and its errors; the engine also serves it at `http://localh
 - `GET /api/v1/jobs` lists jobs (`null` when there are none). `DELETE /api/v1/jobs/{id}` deletes a
   job and frees disk. With `SCRAPER_API_KEY` set in `.env`, every call except `/`, `/api/docs` and
   `/api/openapi.json` needs it in an `X-API-Key` header; the script sends it.
-- Web UI: `http://localhost:8080` (a form, the job list with progress, CSV, JSON and Delete).
+- Web UI: `http://localhost:8080` (a form, the job list with progress, Leads CSV, Full CSV, JSON and Delete).
 
 CSV columns (36): `input_id, link, title, category, address, open_hours, popular_times, website, phone,
 plus_code, review_count, review_rating, reviews_per_rating, latitude, longitude, cid, status,

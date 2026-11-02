@@ -66,7 +66,8 @@ engine is running, stop it first (`python3 scripts/engine.py stop`). The two kee
 so jobs started in one do not show in the other. The first run builds the engine image, about a
 minute. It is the same engine on the same port, so every other command stays the same.
 
-Prefer clicking? http://localhost:8080 has a form; it returns the engine's raw CSV or JSON.
+Prefer clicking? http://localhost:8080 has a form; each job gives a Leads CSV (the 8 lead fields and
+socials, junk emails dropped), the full raw CSV or JSON.
 Already running another copy of the kit on this machine? Set `SCRAPER_PORT` in `.env` first
 (SETUP §6, "second copy").
 
@@ -260,10 +261,11 @@ One keyword per line. One job. One CSV.
   Three collapsed sections hold the rest: "Location
   and language", "Advanced options" and "Proxies". The job list shows each job's status with a
   progress bar (a review stage reads "reading reviews 7 of 20"), its times in your local time, and
-  CSV, JSON and Delete buttons. Downloads are named after the search, for example
-  `bakery-in-portland-or-c063a815.csv`. It downloads the raw CSV or JSON, and its email and
-  social options read homepages only, so the scripts find more emails and return the clean lead
-  fields. Its What and Where boxes take only picks from their lists: about 4,100 business types
+  Leads CSV, Full CSV, JSON and Delete buttons. Downloads are named after the search, for example
+  `bakery-in-portland-or-c063a815-leads.csv`. Leads CSV has the script's 8 lead fields and the social
+  columns, with the same junk-email rules; Full CSV and JSON have every raw column. Its email and
+  social options read homepages only, so the scripts, which also crawl contact pages, find more
+  emails. Its What and Where boxes take only picks from their lists: about 4,100 business types
   (the kit's 201 popular ones in `engine/presets/business-types.json`, add a niche there, then
   Google's own category names) and about 168,000 cities from GeoNames, so a search never names a
   place or a type that does not exist. Each type is searched in each city, one job per city, with

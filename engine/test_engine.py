@@ -397,6 +397,9 @@ class Emails(unittest.TestCase):
         self.assertEqual(jobs.find_emails(text, "shop.com"), ["info@shop.com", "a@gmail.com"])
         self.assertEqual(jobs.find_emails("info@sentryinsurance.com me@myemail.com user@email.com x@example.co.uk"),
                          ["info@sentryinsurance.com", "me@myemail.com"])  # whole labels, not substrings
+        junk = ("no-reply@shop.com 5f2b9c0e1d7a4b3c8e6f@shop.com a@b.wixpress.com x@city.gov "
+                "help@podium.com support@linktr.ee name@company.org logo@cafe.avif")
+        self.assertEqual(jobs.find_emails(junk + " hello@shop.com", "shop.com"), ["hello@shop.com"])
 
     def test_public_only(self):
         self.assertFalse(jobs._public_ip("127.0.0.1"))
@@ -1205,6 +1208,9 @@ class Websites(unittest.TestCase):
         self.assertEqual(jobs.SOCIALS, scrape.SOCIAL_FIELDS)
         self.assertEqual(jobs.SKIP_HANDLE, scrape._SKIP_HANDLE)
         self.assertEqual(jobs.FORMULA.pattern, scrape.FORMULA.pattern)  # the download and the file quote alike
+        self.assertEqual(jobs.LEAD, scrape.LEAD)  # the web UI's leads file has the script's columns
+        self.assertEqual((jobs.JUNK_SUFFIX, jobs.JUNK_DOMAIN, jobs.JUNK_LOCAL, jobs.TOKEN.pattern),
+                         (scrape._JUNK_EXT, scrape._JUNK_DOMAIN, scrape._JUNK_LOCAL, scrape._TOKEN.pattern))
         site = '<a href="https://instagram.com/squarespace">built with</a> <a href="https://instagram.com/realcafe">us</a>'
         self.assertEqual(jobs.find_socials(site)["instagram"], "https://instagram.com/realcafe")  # not the builder's own
 
@@ -1235,6 +1241,20 @@ class ApiP3(Server):
         self.assertEqual(json.loads(self.call("GET", f"/api/v1/jobs/{jid}/download?format=json")[1])[1]["title"],
                          '=HYPERLINK("http://x")')
         self.assertEqual(self.store.read_rows(jid)[1]["title"], '=HYPERLINK("http://x")')
+        # The web UI's Leads CSV: the script's 8 lead fields, junk emails dropped, formulas still quoted.
+        code, body, r = self.call("GET", f"/api/v1/jobs/{jid}/download?format=leads")
+        self.assertEqual((code, r.getheader("Content-Type")), (200, "text/csv; charset=utf-8"))
+        self.assertTrue(r.getheader("Content-Disposition").endswith('-leads.csv"'))
+        got = list(csv.DictReader(io.StringIO(body.decode())))
+        self.assertEqual((list(got[0]), got[1]["title"], len(got)), (jobs.LEAD, '\'=HYPERLINK("http://x")', 2))
+        self.assertEqual(self.call("GET", f"/download?id={jid}&format=leads")[1], body)
+        sid = json.loads(self.call("POST", "/api/v1/jobs", dict(GOOD, socials=True))[1])["id"]
+        row = dict(jobs.to_row(place(3), "k"), emails="noreply@cafe.com, a@b.wixpress.com, hi@cafe.com",
+                   instagram="https://instagram.com/cafe")
+        self.store.append(sid, [row], jobs.fields({"socials": True}))
+        got = list(csv.DictReader(io.StringIO(self.call("GET", f"/api/v1/jobs/{sid}/download?format=leads")[1].decode())))
+        self.assertEqual((list(got[0]), got[0]["emails"], got[0]["instagram"]),
+                         (jobs.LEAD + jobs.SOCIALS, "hi@cafe.com", "https://instagram.com/cafe"))
         for s, want in (("@SUM(1)", "'@SUM(1)"), ("-2+3", "'-2+3"), ("\tx", "'\tx"), ("+44 20 7946 0958", "+44 20 7946 0958"),
                         ("Joe's", "Joe's"), ("-", "-"), (None, ""), ("'-x", "''-x"), ("'plain", "'plain"),
                         ("+1 512-555-0100 ext. 12", "+1 512-555-0100 ext. 12"), ("+1 512-555-0100 x12", "+1 512-555-0100 x12")):
@@ -1276,7 +1296,8 @@ class ApiP3(Server):
             self.assertIn(rule, ui)
         for gone in ('id="keywords"', 'id="coords"', 'id="kwpick"', "<datalist", "Start anyway"):
             self.assertNotIn(gone, ui)
-        self.assertIn("a.download = fileName(j) + '.' + fmt", ui)
+        self.assertIn("a.download = fileName(j) + (fmt === 'leads' ? '-leads.csv' : '.' + fmt)", ui)
+        self.assertIn("button(row, 'Leads CSV', () => download(j, 'leads'))", ui)
         self.assertIn("toLocaleString", ui)
         self.assertIn('<link rel="icon" href="data:image/svg+xml,', ui)
         # as gosom: a star button, and a sponsor box that can be closed; paid sponsors in it only when
