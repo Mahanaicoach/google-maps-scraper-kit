@@ -316,6 +316,15 @@ class ExtractEmails(unittest.TestCase):
     def test_prose_is_not_an_email(self):
         self.assertEqual(scrape.extract_emails("Meet us at noon dot com, look at me dot org", "x.com"), [])
 
+    def test_cloudflare_protected_emails_are_decoded_and_ranked(self):
+        enc = "".join(f"{b ^ 0x5a:02x}" for b in b"hello@acme.com")
+        html = f'<a href="/cdn-cgi/l/email-protection#5a{enc}">[email protected]</a>'
+        self.assertEqual(scrape.extract_emails(html, "https://acme.com"), ["hello@acme.com"])
+        html2 = f'<span class="__cf_email__" data-cfemail="5a{enc}">[email protected]</span> <a href="mailto:sales@other.net">x</a>'
+        self.assertEqual(scrape.extract_emails(html2, "acme.com"), ["hello@acme.com", "sales@other.net"])
+        for bad in ("zz", "5a", "", "ff00"):  # not hex, no payload, empty, not UTF-8
+            self.assertEqual(scrape._cf_decode(bad), "", bad)
+
 
 class PublicHostGuard(unittest.TestCase):
     def test_private_addresses_blocked(self):
@@ -409,6 +418,27 @@ class EmailCrawl(unittest.TestCase):
             scrape.enrich_emails(rows, deep=True)
         self.assertEqual(rows[0]["emails"], "sales@acme.com")
 
+    def test_crawl_goes_on_until_an_own_domain_address(self):
+        fetched = []
+        pages = {"https://acme.com/contact": "write to boss@gmail.com", "https://acme.com/contact-us": "team@acme.com"}
+        def fake_html(url, timeout=8):
+            fetched.append(url)
+            return pages.get(url, "")
+        rows = [{"website": "https://acme.com", "emails": ""}, {"website": "https://beta.org", "emails": ""},
+                {"website": "https://gamma.io", "emails": ""}]
+        homes = {"https://acme.com": 'owner@gmail.com <a href="/contact">c</a><a href="/contact-us">c</a>',
+                 "https://beta.org": 'only <a href="mailto:owner@gmail.com">g</a>',
+                 "https://gamma.io": 'info@gamma.io <a href="/contact">c</a>'}
+        with mock.patch.object(scrape, "_fetch_cached", lambda u: homes[u]), \
+             mock.patch.object(scrape, "_fetch_html", fake_html), redirect_stdout(io.StringIO()):
+            scrape.enrich_emails(rows, deep=True)
+        self.assertEqual(rows[0]["emails"], "team@acme.com, owner@gmail.com, boss@gmail.com")  # own first, the rest kept
+        self.assertEqual(rows[1]["emails"], "owner@gmail.com")  # kept, but the contact pages were tried
+        self.assertEqual(rows[2]["emails"], "info@gamma.io")  # own address on the homepage: no more fetches
+        self.assertEqual([u for u in fetched if "gamma" in u], [])
+        self.assertEqual(sum(u.startswith("https://beta.org") for u in fetched), 3)
+        self.assertEqual([u for u in fetched if "acme" in u], ["https://acme.com/contact", "https://acme.com/contact-us"])
+
     def test_engine_never_asked_for_emails(self):
         sent = []
         def fake_run_job(body):
@@ -470,11 +500,89 @@ class ContactLinks(unittest.TestCase):
         self.assertEqual(out[2], "https://acme.com/contact")  # first fixed fallback
         self.assertFalse(any("facebook" in u or "mailto" in u for u in out))
 
+    def test_locations_team_impressum_kontakt(self):
+        html = """<a href="/standorte">Our Locations</a> <a href="/rechtliches">Impressum</a>
+                  <a href="/kontakt-uns">Kontakt</a> <a href="/team">Meet the team</a> <a href="/menu">Menu</a>"""
+        self.assertEqual(scrape.contact_links(html, "https://acme.de"),
+                         ["https://acme.de/standorte", "https://acme.de/rechtliches", "https://acme.de/kontakt-uns"])
+        self.assertEqual(scrape.contact_links('<a href="/locations">Branches</a>', "https://acme.com")[0],
+                         "https://acme.com/locations")
+
     def test_fallbacks_and_max(self):
         self.assertEqual(scrape.contact_links("", "acme.com"),
                          ["http://acme.com/contact", "http://acme.com/contact-us", "http://acme.com/about"])
         many = "".join(f'<a href="/contact{i}">x</a>' for i in range(6))
         self.assertEqual(len(scrape.contact_links(many, "http://acme.com")), 3)
+
+
+class SocialWebsite(unittest.TestCase):
+    def test_profile_in_website_slot_is_not_crawled(self):
+        rows = [{"website": "https://www.facebook.com/joespizza", "emails": ""},
+                {"website": "https://instagram.com/joes.pizza/", "emails": ""},
+                {"website": "https://joespizza.com", "emails": ""}]
+        fetched = []
+        def fake_fetch(url):
+            fetched.append(url)
+            return '<a href="https://instagram.com/from_site">ig</a>'
+        with mock.patch.object(scrape, "_fetch_cached", fake_fetch), redirect_stdout(io.StringIO()):
+            scrape.enrich_sites(rows, scrape._find_socials, scrape.SOCIAL_FIELDS, "socials")
+            scrape.enrich_sites(rows, scrape._find_tech, scrape.TECH_FIELDS, "tech")
+            scrape.enrich_emails(rows, deep=False)
+        self.assertEqual(fetched, ["https://joespizza.com"] * 3)  # one fetch per real site and pass, never the profiles
+        self.assertEqual(rows[0]["facebook"], "https://www.facebook.com/joespizza")
+        self.assertEqual(rows[1]["instagram"], "https://instagram.com/joes.pizza")
+        self.assertEqual(rows[2]["instagram"], "https://instagram.com/from_site")
+        self.assertNotIn("facebook", scrape._find_tech(""))  # the tech pass does not touch social columns
+        self.assertEqual((rows[0]["emails"], rows[0]["fb_pixel"]), ("", ""))
+
+    def test_profile_is_not_rendered_in_a_browser_either(self):
+        rows = [{"website": "https://www.facebook.com/joespizza", "emails": ""}]
+        with mock.patch.object(scrape, "_fetch_cached", return_value=""), \
+             mock.patch.object(scrape, "_render_site") as render, redirect_stdout(io.StringIO()):
+            scrape.enrich_emails(rows, browser_sites=True)
+            scrape.enrich_sites(rows, scrape._find_socials, scrape.SOCIAL_FIELDS, "socials", browser_sites=True)
+        render.assert_not_called()
+        self.assertEqual(rows[0]["facebook"], "https://www.facebook.com/joespizza")
+
+    def test_is_social(self):
+        for u in ("https://www.facebook.com/x", "m.facebook.com/x", "instagram.com/x", "https://www.linkedin.com/company/x"):
+            self.assertTrue(scrape.is_social(u), u)
+        for u in ("facebook.com.evil.biz", "https://notfacebook.com", "https://joespizza.com/facebook.com", "", None):
+            self.assertFalse(scrape.is_social(u), u)
+
+    def test_social_website_is_never_mx_checked(self):
+        rows = [{"website": "https://www.facebook.com/joespizza", "emails": ""}]
+        with mock.patch.object(scrape, "_fetch_cached", return_value="info@facebook.com"), \
+             mock.patch.object(scrape, "_doh_mx") as doh, redirect_stdout(io.StringIO()):
+            scrape.enrich_emails(rows, deep=True)
+            scrape.verify_emails(rows)
+        doh.assert_not_called()
+
+    def test_homepage_retried_on_other_scheme_and_www(self):
+        tried = []
+        def fake(url, timeout=8):
+            tried.append(url)
+            return "<html>ok</html>" if url == "https://www.acme.com" else ""
+        scrape._fetch_cached.cache_clear()
+        with mock.patch.object(scrape, "_fetch_html", fake):
+            self.assertEqual(scrape._fetch_cached("http://acme.com"), "<html>ok</html>")
+            self.assertEqual(scrape._fetch_cached("http://acme.com"), "<html>ok</html>")  # cached
+            tried.clear()
+            self.assertEqual(scrape._fetch_cached("acme.com:8080/shop?a=1"), "")  # bare host, port and path kept
+        self.assertEqual(tried, ["acme.com:8080/shop?a=1", "https://acme.com:8080/shop?a=1",
+                                 "http://www.acme.com:8080/shop?a=1", "https://www.acme.com:8080/shop?a=1"])
+        scrape._fetch_cached.cache_clear()
+
+    def test_retries_keep_every_guard(self):
+        scrape._fetch_cached.cache_clear()
+        with mock.patch.object(scrape._OPENER, "open") as opened, \
+             mock.patch.object(scrape, "_is_public_host", return_value=False) as public:  # no DNS in an offline test
+            self.assertEqual(scrape._fetch_cached("http://localhost:8080/api/v1/jobs"), "")
+            self.assertEqual(scrape._fetch_cached("ftp://acme.com/"), "")  # not a web URL: no retries at all
+        opened.assert_not_called()
+        self.assertEqual([c.args[0] for c in public.call_args_list],  # every variant went through the guarded fetch
+                         ["localhost", "localhost", "www.localhost", "www.localhost", "ftp"])
+        scrape._fetch_cached.cache_clear()
 
 
 # ── End to end against a mock engine ──
@@ -869,6 +977,9 @@ class HostileInput(unittest.TestCase):
         self.assertEqual(scrape._host(self.BAD), "")
         self.assertEqual(scrape.extract_emails("a@b.com", self.BAD), ["a@b.com"])
         self.assertEqual(scrape._fetch_html(self.BAD), "")
+        self.assertEqual(scrape._fetch_cached(self.BAD), "")
+        with mock.patch.object(scrape, "_is_public_host", return_value=False):  # no DNS in an offline test
+            self.assertEqual(scrape._fetch_cached("http://acme.com:99999999"), "")
         links = scrape.contact_links('<a href="http://[x">contact</a><a href="/contact">c</a>', self.BAD)
         self.assertTrue(all(isinstance(u, str) for u in links))
 
@@ -1202,6 +1313,21 @@ class BrowserSites(unittest.TestCase):
              mock.patch.object(scrape, "_render_site", side_effect=render), redirect_stdout(io.StringIO()):
             scrape.enrich_emails(rows, browser_sites=True)
         self.assertEqual(rows[0]["emails"], "hello@fixture-business.test")
+
+    def test_rendered_crawl_goes_on_past_a_non_own_address(self):
+        rows = [{"website": "https://fixture-business.test", "emails": ""}]
+        pages = {"https://fixture-business.test": '<a href="/contact">c</a><a href="/contact-us">c</a> boss@gmail.com',
+                 "https://fixture-business.test/contact": "nothing",
+                 "https://fixture-business.test/contact-us": "hello@fixture-business.test"}
+        rendered = []
+        def render(url):
+            rendered.append(url)
+            return {"html": pages.get(url, "later@fixture-business.test"), "status": "rendered"}
+        with mock.patch.object(scrape, "_fetch_cached", return_value=""), \
+             mock.patch.object(scrape, "_render_site", side_effect=render), redirect_stdout(io.StringIO()):
+            scrape.enrich_emails(rows, browser_sites=True)
+        self.assertEqual(rows[0]["emails"], "hello@fixture-business.test, boss@gmail.com")
+        self.assertEqual(len(rendered), 3)  # the home, /contact and /contact-us; an own address stops the crawl
 
     def test_http_success_never_starts_browser(self):
         rows = [{"website": "https://fixture-business.test", "emails": ""}]
