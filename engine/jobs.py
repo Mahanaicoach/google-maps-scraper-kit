@@ -30,6 +30,7 @@ COLUMNS = ["input_id", "link", "title", "category", "address", "open_hours", "po
            "user_reviews", "user_reviews_extended", "emails"]
 EXTRA = ["categories"]
 SOCIALS = ["instagram", "facebook", "linkedin", "tiktok", "youtube", "x"]  # the names scripts/scrape.py --socials uses
+LEAD = ["title", "phone", "emails", "website", "category", "address", "review_rating", "review_count"]  # scrape.py's too
 RENAME = {"open_state": "status", "description": "descriptions"}  # details.FIELDS name -> CSV column
 
 # Seconds past max_time before the watchdog kills Chrome. maps.collect's page load and first waits
@@ -250,6 +251,17 @@ def guard_csv(data):
     for row in csv.reader(io.StringIO(data.decode("utf-8", "replace"), newline="")):
         w.writerow([csv_safe(v) for v in row])
     return buf.getvalue().encode("utf-8")
+
+
+def leads_csv(data):
+    """A stored CSV as the lead list scripts/scrape.py writes: the 8 lead fields, then the social and
+    email_host columns the job filled, junk emails dropped (also from jobs scraped before a rule was
+    added), formulas quoted. A job's rows are already one per place."""
+    rows = list(csv.DictReader(io.StringIO(data.decode("utf-8", "replace"), newline="")))
+    cols = LEAD + [c for c in SOCIALS + ["email_host"] if rows and c in rows[0]]
+    for r in rows:
+        r["emails"] = ", ".join(e for e in (r.get("emails") or "").split(", ") if real_email(e))
+    return to_csv([{c: csv_safe(r.get(c)) for c in cols} for r in rows], cols)
 
 
 def to_csv(rows, cols=None, header=True):
@@ -873,8 +885,17 @@ class Worker(threading.Thread):
 
 # ── Website pass (email, socials, verify_emails): each business homepage over plain HTTP ──
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,24}")
-JUNK_SUFFIX = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".css", ".js")
-JUNK_DOMAIN = ("example", "sentry", "wixpress.com", "domain.com", "yourdomain", "email.com")
+# Image names, placeholders, vendor and platform domains, no-reply inboxes and tracking tokens: the same
+# lists and rule as scripts/scrape.py (a test checks), so the web UI's leads file is as clean as the script's.
+JUNK_SUFFIX = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".avif", ".css", ".js")
+JUNK_DOMAIN = ("example", "sentry", "wixpress", "wix.com", "godaddy", "squarespace", "wordpress",
+               "domain.com", "email.com", "yourdomain", "mysite.com", "schema.org", "w3.org", "sentry.io",
+               "linktr.ee", "linkin.bio", "beacons.ai", "officite",
+               "gov", "mil", "hubspot", "mailchimp", "constantcontact", "sendgrid", "yext", "birdeye", "podium", "zocdoc")
+JUNK_LOCAL = {"name", "email", "user", "you", "someone", "example", "username",
+              "youremail", "yourname", "firstname", "lastname", "sample",
+              "noreply", "no-reply", "donotreply", "do-not-reply", "mailer-daemon", "postmaster"}
+TOKEN = re.compile(r"[0-9a-f]{16,}")
 
 
 def junk_domain(dom, junk=JUNK_DOMAIN):
@@ -882,6 +903,13 @@ def junk_domain(dom, junk=JUNK_DOMAIN):
     and user@email.com are junk, sentryinsurance.com and myemail.com are not. scripts/scrape.py has the same."""
     labels = dom.split(".")
     return any(dom == j or dom.endswith("." + j) if "." in j else j in labels for j in junk)
+
+
+def real_email(e):
+    """False for an image name, a placeholder, a vendor's or a no-reply address or a tracking token."""
+    local, _, dom = e.rpartition("@")
+    return (bool(EMAIL_RE.fullmatch(e)) and not e.endswith(JUNK_SUFFIX) and local not in JUNK_LOCAL
+            and not TOKEN.fullmatch(local) and not junk_domain(dom))
 UA = "Mozilla/5.0 (compatible; google-maps-scraper-kit; +https://github.com/Mahanaicoach/google-maps-scraper-kit)"
 # The same patterns as scripts/scrape.py --socials (a test keeps them in step).
 SOCIAL_RE = {
@@ -1124,8 +1152,7 @@ def find_emails(text, site=""):
     found = []
     for e in EMAIL_RE.findall(html.unescape(text or "")):
         e = urllib.parse.unquote(e).lower()
-        dom = e.rpartition("@")[2]
-        if not EMAIL_RE.fullmatch(e) or e.endswith(JUNK_SUFFIX) or junk_domain(dom) or e in found:
+        if not real_email(e) or e in found:
             continue  # "a%0Ab@x.com" unquotes to a newline: not an address
         found.append(e)
     own = lambda e: site and (e.endswith("@" + site) or e.endswith("." + site))

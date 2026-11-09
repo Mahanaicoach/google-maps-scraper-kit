@@ -428,9 +428,12 @@ class IsRealEmail(unittest.TestCase):
     def test_placeholders_and_vendors(self):
         for e in ("user@domain.com", "example@gmail.com", "youremail@yourdomain.com",
                   "name@company.org", "a@b.wixpress.com", "logo@2x.png",
-                  "support@linktr.ee", "help@sites.officite.com"):  # seen in audit runs
+                  "support@linktr.ee", "help@sites.officite.com",  # seen in audit runs
+                  "no-reply@cafe.test", "donotreply@cafe.test", "5f2b9c0e1d7a4b3c8e6f@cafe.test",
+                  "clerk@city.gov", "x@agency.gov.uk", "reviews@birdeye.com", "a@b.hubspot.com"):
             self.assertFalse(scrape.is_real_email(e), e)
-        for e in ("info@acmeplumbing.test", "owner@gmail.com", "hello@cafe-one.co.test"):
+        for e in ("info@acmeplumbing.test", "owner@gmail.com", "hello@cafe-one.co.test",
+                  "info@gov-tech.test", "cafe1234@cafe.test", "replies@cafe.test"):
             self.assertTrue(scrape.is_real_email(e), e)
 
 
