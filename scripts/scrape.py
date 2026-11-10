@@ -753,8 +753,10 @@ def _each_site(todo, work, label, workers=None):
             print(f"\r  {label}: {done}/{len(todo)} checked", end="", flush=True)
     print(f"  ({failed} skipped after an error)" if failed else "")
 
-def enrich_sites(results, find, fields, label, workers=None, browser_sites=False):
-    """Finish the HTTP pass before browser retries, so retries never occupy HTTP worker slots."""
+def enrich_sites(results, find, fields, label, workers=None, browser_sites=False, deep=False):
+    """Finish the HTTP pass before browser retries, so retries never occupy HTTP worker slots. With
+    deep, a homepage that yields nothing sends the search on to its contact and about pages: many
+    small sites link their Instagram or Facebook only there."""
     for r in results:
         for k in fields:
             r.setdefault(k, "")
@@ -765,7 +767,15 @@ def enrich_sites(results, find, fields, label, workers=None, browser_sites=False
         if not owns_site(page, r):
             _NOT_THEIRS.add(r["website"])
             page = ""
-        r.update(find(page))
+        found = find(page)
+        if deep and page and not any(found.values()):
+            # ponytail: refetches the contact pages the email crawl may already have read; cache them if it shows
+            for u in contact_links(page, r["website"]):
+                more = find(_fetch_html(u, timeout=8))
+                if any(more.values()):
+                    found = more
+                    break
+        r.update(found)
     for r in results:  # a Facebook or Instagram page in the website slot IS the social profile
         if find is _find_socials and r.get("website") and is_social(r["website"]):
             r.update({k: v for k, v in _find_socials(r["website"]).items() if v})
@@ -1167,7 +1177,7 @@ def main():
     ap.add_argument("--no-email", dest="email", action="store_false", default=True,
                     help="skip the website crawl for emails (emails are on by default)")
     ap.add_argument("--no-deep-emails", dest="deep_emails", action="store_false",
-                    help="check homepages only, not contact and about pages")
+                    help="check homepages only, not contact and about pages (for emails and socials)")
     ap.add_argument("--grid", type=int, metavar="N",
                     help="split the --city area into N x N map tiles, one job each, deduped "
                          "(breaks Google's ~120 per search cap; max 10)")
@@ -1384,8 +1394,9 @@ def main():
 
     # Enrichment runs on the raw rows, which always carry the website, whatever --fields keeps.
     if a.socials:
-        print("▶ Finding socials (Instagram / Facebook / LinkedIn / TikTok / YouTube / X) on each website…")
-        enrich_sites(rows, _find_socials, SOCIAL_FIELDS, "socials", browser_sites=a.browser_sites)
+        where = "homepage, then contact and about pages" if a.deep_emails else "homepage only"
+        print(f"▶ Finding socials (Instagram / Facebook / LinkedIn / TikTok / YouTube / X) on each website ({where})…")
+        enrich_sites(rows, _find_socials, SOCIAL_FIELDS, "socials", browser_sites=a.browser_sites, deep=a.deep_emails)
         fields = fields + SOCIAL_FIELDS
         found = sum(1 for r in rows if any(r.get(k) for k in SOCIAL_FIELDS))
         print(f"  socials found for {found}/{len(rows)} businesses")

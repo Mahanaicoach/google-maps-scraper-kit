@@ -493,6 +493,36 @@ class OwnsSite(unittest.TestCase):
         self.assertIn("1 website(s) skipped", out.getvalue())
 
 
+class SocialsFromContactPages(unittest.TestCase):
+    # Seen in a benchmark against another scraper: 2 of 4 sites "without socials" linked them only
+    # on the contact or about page.
+    def setUp(self):
+        scrape._NOT_THEIRS.clear()
+
+    def test_contact_page_socials_when_the_homepage_has_none(self):
+        rows = [{"website": "https://acme.test"}, {"website": "https://beta.test"}]
+        homes = {"https://acme.test": '<a href="/contact">Contact</a>',
+                 "https://beta.test": '<a href="https://instagram.com/betaplumbing">ig</a> <a href="/about">About</a>'}
+        fetched = []
+        def page(url, timeout=8):
+            fetched.append(url)
+            return '<a href="https://www.facebook.com/acmeplumbing">fb</a>' if url == "https://acme.test/contact" else ""
+        with mock.patch.object(scrape, "_fetch_cached", lambda u: homes[u]), \
+             mock.patch.object(scrape, "_fetch_html", page), redirect_stdout(io.StringIO()):
+            scrape.enrich_sites(rows, scrape._find_socials, scrape.SOCIAL_FIELDS, "socials", deep=True)
+        self.assertEqual(rows[0]["facebook"], "https://www.facebook.com/acmeplumbing")
+        self.assertEqual(rows[1]["instagram"], "https://instagram.com/betaplumbing")
+        self.assertEqual([u for u in fetched if "beta" in u], [])  # homepage had one: no extra fetches
+        self.assertEqual(fetched[0], "https://acme.test/contact")
+
+    def test_homepage_only_without_deep(self):
+        rows = [{"website": "https://acme.test"}]
+        with mock.patch.object(scrape, "_fetch_cached", return_value='<a href="/contact">c</a>'), \
+             mock.patch.object(scrape, "_fetch_html") as pages, redirect_stdout(io.StringIO()):
+            scrape.enrich_sites(rows, scrape._find_socials, scrape.SOCIAL_FIELDS, "socials")
+        pages.assert_not_called()
+
+
 class IsRealEmail(unittest.TestCase):
     def test_placeholders_and_vendors(self):
         for e in ("user@domain.com", "example@gmail.com", "youremail@yourdomain.com",

@@ -248,7 +248,8 @@ One keyword per line. One job. One CSV.
   (`--full`), with no extra page loads. Rather run a real window, with the agent unchanged? [SETUP §3](SETUP.md#review-counts-hours-and-reviews).
 - **Emails only when a business publishes one.** The script reads the business homepage, then its
   contact and about pages. Listings with no site, or a site with no visible
-  email, return an empty `emails` cell. Instagram bios are not read. Expect emails on a fraction of
+  email, return an empty `emails` cell. Social links come from the homepage, or from the contact
+  and about pages when the homepage has none. Instagram bios are not read. Expect emails on a fraction of
   rows, not all of them.
 - **A wrong website on the listing gives no emails or socials.** Some listings point at another
   business's site (a plumber listed with a bank's homepage). A homepage that shows neither the
