@@ -255,6 +255,13 @@ class StopsWhenBlocked(unittest.TestCase):
         with open(out, newline="", encoding="utf-8-sig") as f:
             return run.call_count, [r["title"] for r in csv.DictReader(f)], log.getvalue()
 
+    def test_no_scraped_value_reaches_the_output(self):
+        # An agent reads this output: scraped text stays in the file (skills.sh / Snyk W011).
+        _, titles, text = self.run_main(["plumbers in Austin TX", "30.2", "-97.7"], [("job-1", [_row("A")])])
+        self.assertEqual(titles, ["Biz A"])
+        self.assertNotIn("Biz A", text)
+        self.assertIn("saved →", text)
+
     def test_grid_stops_at_the_blocked_cell(self):
         calls, titles, text = self.run_main(["plumbers", "--city", "Austin, TX", "--grid", "2"],
                                             [("job-1", [_row("A"), _row("B")]), scrape.Blocked("✗ Job failed.")])

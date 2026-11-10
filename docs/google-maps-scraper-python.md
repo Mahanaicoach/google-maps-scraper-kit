@@ -49,7 +49,7 @@ On Windows, run the same commands with `py` in place of `python3`. The engine ne
 | `--limit N` | Stop at N rows after filtering. |
 | `--verify-emails` | Checks each email domain's MX record over DNS (dns.google, no key). Drops addresses on domains that do not exist and adds `email_host`: `google_workspace`, `microsoft_365`, `other` or `none` (blank when the row has no email). |
 
-The script creates the job, polls until it finishes, downloads the CSV and keeps the 8 lead fields, then the six social columns. While it polls it prints the job's progress, e.g. `keyword 2/3, 41 places, 50%`, and it keeps polling through a short engine restart (about 1 minute), because the engine resumes the job. It prints a short preview and saves the full results to a file.
+The script creates the job, polls until it finishes, downloads the CSV and keeps the 8 lead fields, then the six social columns. While it polls it prints the job's progress, e.g. `keyword 2/3, 41 places, 50%`, and it keeps polling through a short engine restart (about 1 minute), because the engine resumes the job. It saves the full results to a file and prints counts, not rows, so an AI agent running it never reads scraped text.
 
 ## Example output
 
