@@ -454,13 +454,53 @@ class EmailCrawl(unittest.TestCase):
         self.assertEqual(sent[0]["name"], "dentists in Austin TX")  # the web UI lists this name
 
 
+# Seen in a real Austin run: Google lists a bank's homepage as the website of a plumber called
+# "Chase LLC", and the crawl returned the bank's report address and social profiles for the plumber.
+BANK = ("<html><head><title>Credit cards, mortgages, banking | Bank</title><script>var t='plumbing'</script>"
+        "</head><body>" + "Open a checking account, compare credit cards and apply for a mortgage today. " * 4 +
+        '<a href="mailto:phishing@bank.test">Report fraud</a> <a href="https://instagram.com/bigbank">IG</a>'
+        "</body></html>")
+PLUMBER_ROW = {"website": "https://bank.test", "emails": "", "phone": "(512) 890-2933", "category": "Plumber"}
+
+
+class OwnsSite(unittest.TestCase):
+    def setUp(self):
+        scrape._NOT_THEIRS.clear()
+
+    def test_someone_elses_site_is_turned_down(self):
+        self.assertFalse(scrape.owns_site(BANK, PLUMBER_ROW))  # words inside <script> do not count
+
+    def test_trade_word_or_phone_digits_keep_the_site(self):
+        filler = "We serve all of Travis County with fast, friendly work and upfront prices. " * 4
+        self.assertTrue(scrape.owns_site(f"<p>{filler} Drain and plumbing repair.</p>", PLUMBER_ROW))
+        self.assertTrue(scrape.owns_site(f'<p>{filler}</p><a href="tel:+15128902933">Call</a>', PLUMBER_ROW))
+        self.assertTrue(scrape.owns_site(f"<p>{filler} Call 512.890.2933</p>", PLUMBER_ROW))
+
+    def test_unsure_keeps_the_site(self):
+        self.assertTrue(scrape.owns_site("", PLUMBER_ROW))
+        self.assertTrue(scrape.owns_site("<div id=app></div><script>" + "x" * 5000 + "</script>", PLUMBER_ROW))
+        self.assertTrue(scrape.owns_site(BANK, {"website": "https://bank.test", "phone": "", "category": ""}))
+
+    def test_crawl_skips_someone_elses_site(self):
+        rows = [dict(PLUMBER_ROW)]
+        with mock.patch.object(scrape, "_fetch_cached", return_value=BANK), \
+             mock.patch.object(scrape, "_fetch_html") as pages, redirect_stdout(io.StringIO()) as out:
+            scrape.enrich_emails(rows, deep=True)
+            scrape.enrich_sites(rows, scrape._find_socials, scrape.SOCIAL_FIELDS, "socials")
+        pages.assert_not_called()  # no contact pages of the wrong site either
+        self.assertEqual(rows[0]["emails"], "")
+        self.assertEqual(rows[0]["instagram"], "")
+        self.assertIn("1 website(s) skipped", out.getvalue())
+
+
 class IsRealEmail(unittest.TestCase):
     def test_placeholders_and_vendors(self):
         for e in ("user@domain.com", "example@gmail.com", "youremail@yourdomain.com",
                   "name@company.org", "a@b.wixpress.com", "logo@2x.png",
                   "support@linktr.ee", "help@sites.officite.com",  # seen in audit runs
                   "no-reply@cafe.test", "donotreply@cafe.test", "5f2b9c0e1d7a4b3c8e6f@cafe.test",
-                  "clerk@city.gov", "x@agency.gov.uk", "reviews@birdeye.com", "a@b.hubspot.com"):
+                  "clerk@city.gov", "x@agency.gov.uk", "reviews@birdeye.com", "a@b.hubspot.com",
+                  "phishing@bank.test", "abuse@cafe.test"):  # a bank's report inbox, seen on a plumber's row
             self.assertFalse(scrape.is_real_email(e), e)
         for e in ("info@acmeplumbing.test", "owner@gmail.com", "hello@cafe-one.co.test",
                   "info@gov-tech.test", "cafe1234@cafe.test", "replies@cafe.test"):
