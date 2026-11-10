@@ -936,7 +936,7 @@ UA = "Mozilla/5.0 (compatible; google-maps-scraper-kit; +https://github.com/Maha
 # The same patterns as scripts/scrape.py --socials (a test keeps them in step).
 SOCIAL_RE = {
     "instagram": re.compile(r"https?://(?:www\.)?instagram\.com/([A-Za-z0-9_.]+)", re.I),
-    "facebook":  re.compile(r"https?://(?:www\.|m\.|web\.)?facebook\.com/([A-Za-z0-9_.\-]+)", re.I),
+    "facebook":  re.compile(r"https?://(?:www\.|m\.|web\.)?facebook\.com/(profile\.php\?id=\d+|[A-Za-z0-9_.\-]+)", re.I),
     "linkedin":  re.compile(r"https?://(?:[a-z]{2,3}\.)?linkedin\.com/(?:company|in|school)/([A-Za-z0-9_.\-%]+)", re.I),
     "tiktok":    re.compile(r"https?://(?:www\.)?tiktok\.com/@([A-Za-z0-9_.]+)", re.I),
     "youtube":   re.compile(r"https?://(?:www\.)?youtube\.com/(?:@|channel/|c/|user/)([A-Za-z0-9_.\-]+)", re.I),

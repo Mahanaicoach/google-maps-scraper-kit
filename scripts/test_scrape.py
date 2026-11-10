@@ -437,7 +437,9 @@ class EmailCrawl(unittest.TestCase):
         self.assertEqual(rows[2]["emails"], "info@gamma.io")  # own address on the homepage: no more fetches
         self.assertEqual([u for u in fetched if "gamma" in u], [])
         self.assertEqual(sum(u.startswith("https://beta.org") for u in fetched), 3)
-        self.assertEqual([u for u in fetched if "acme" in u], ["https://acme.com/contact", "https://acme.com/contact-us"])
+        # its 3 contact pages are read at once (same result, no slow chain), each once
+        self.assertEqual(sorted(u for u in fetched if "acme" in u),
+                         ["https://acme.com/about", "https://acme.com/contact", "https://acme.com/contact-us"])
 
     def test_engine_never_asked_for_emails(self):
         sent = []
@@ -498,6 +500,7 @@ class SocialsFromContactPages(unittest.TestCase):
     # on the contact or about page.
     def setUp(self):
         scrape._NOT_THEIRS.clear()
+        scrape._PAGE_SOCIALS.clear()
 
     def test_contact_page_socials_when_the_homepage_has_none(self):
         rows = [{"website": "https://acme.test"}, {"website": "https://beta.test"}]
@@ -514,6 +517,25 @@ class SocialsFromContactPages(unittest.TestCase):
         self.assertEqual(rows[1]["instagram"], "https://instagram.com/betaplumbing")
         self.assertEqual([u for u in fetched if "beta" in u], [])  # homepage had one: no extra fetches
         self.assertEqual(fetched[0], "https://acme.test/contact")
+
+    def test_page_read_by_the_email_crawl_is_not_fetched_again(self):
+        rows = [{"website": "https://acme.test", "emails": ""}]
+        fetched = []
+        def page(url, timeout=8):
+            fetched.append(url)
+            return '<a href="https://www.facebook.com/acmeplumbing">fb</a>' if url == "https://acme.test/contact" else ""
+        with mock.patch.object(scrape, "_fetch_cached", return_value='<a href="/contact">Contact</a>'), \
+             mock.patch.object(scrape, "_fetch_html", page), redirect_stdout(io.StringIO()):
+            scrape.enrich_emails(rows, deep=True)
+            scrape.enrich_sites(rows, scrape._find_socials, scrape.SOCIAL_FIELDS, "socials", deep=True)
+        self.assertEqual(rows[0]["facebook"], "https://www.facebook.com/acmeplumbing")
+        self.assertEqual(fetched.count("https://acme.test/contact"), 1)
+
+    def test_facebook_page_without_a_vanity_name(self):
+        # Many small businesses have only facebook.com/profile.php?id=...; it was skipped as a generic link.
+        page = '<a href="https://www.facebook.com/profile.php?id=61556916315095&amp;ref=site">fb</a>'
+        self.assertEqual(scrape._find_socials(page)["facebook"], "https://www.facebook.com/profile.php?id=61556916315095")
+        self.assertEqual(scrape._find_socials('<a href="https://facebook.com/profile.php">x</a>')["facebook"], "")
 
     def test_homepage_only_without_deep(self):
         rows = [{"website": "https://acme.test"}]
@@ -573,10 +595,18 @@ class ContactLinks(unittest.TestCase):
     def test_locations_team_impressum_kontakt(self):
         html = """<a href="/standorte">Our Locations</a> <a href="/rechtliches">Impressum</a>
                   <a href="/kontakt-uns">Kontakt</a> <a href="/team">Meet the team</a> <a href="/menu">Menu</a>"""
-        self.assertEqual(scrape.contact_links(html, "https://acme.de"),
-                         ["https://acme.de/standorte", "https://acme.de/rechtliches", "https://acme.de/kontakt-uns"])
+        self.assertEqual(scrape.contact_links(html, "https://acme.de"),  # contact pages first, then team
+                         ["https://acme.de/rechtliches", "https://acme.de/kontakt-uns", "https://acme.de/team"])
         self.assertEqual(scrape.contact_links('<a href="/locations">Branches</a>', "https://acme.com")[0],
                          "https://acme.com/locations")
+
+    def test_contact_before_about_and_one_page_counts_once(self):
+        # Seen in a benchmark: /about-us/, /about-us and a location page used all 3 reads before /contact-us/.
+        html = ('<a href="/about-us/">About</a> <a href="/about-us">About us</a> '
+                '<a href="/location/arlington/">Arlington location</a> <a href="/contact-us/">Contact us</a> '
+                '<a href="https://www.aaa.test/contact-us/">Contact</a>')  # the same page with www.
+        self.assertEqual(scrape.contact_links(html, "https://aaa.test/"),
+                         ["https://aaa.test/contact-us/", "https://aaa.test/about-us/", "https://aaa.test/location/arlington/"])
 
     def test_fallbacks_and_max(self):
         self.assertEqual(scrape.contact_links("", "acme.com"),
