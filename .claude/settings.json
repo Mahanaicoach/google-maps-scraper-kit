@@ -1,5 +1,5 @@
 {
-  "$comment": "Pre-approves the kit's own local commands, exactly as the docs run them, so routine steps need no repeated prompt: the kit's scripts (engine start/stop/status/restart/jobs/delete, scrape.py, scrape.sh, the offline tests) and docker compose in this folder in the exact forms the docs use. Everything else, curl included, asks the user as usual.",
+  "$comment": "Pre-approves the kit's own local commands, exactly as the docs run them, so routine steps need no repeated prompt: the kit's scripts (engine start/stop/status/restart/jobs/delete, scrape.py, scrape.sh, the offline tests) and docker compose in this folder in the exact forms the docs use. Everything else, curl included, asks the user as usual. The PostToolUse hook shows the user the first rows of each file scrape.py saves, as a notice Claude Code does not send to the model (scripts/preview_hook.py).",
   "permissions": {
     "allow": [
       "Bash(docker compose up -d)",
@@ -41,5 +41,19 @@
       "Bash(py scripts/scrape.py:*)"
     ],
     "deny": []
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 10,
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/preview_hook.py\" 2>/dev/null || python \"$CLAUDE_PROJECT_DIR/scripts/preview_hook.py\""
+          }
+        ]
+      }
+    ]
   }
 }

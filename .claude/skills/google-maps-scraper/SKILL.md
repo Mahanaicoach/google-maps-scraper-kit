@@ -122,9 +122,11 @@ calls yourself.
 The script prints everything you report: the saved path, the row count, and the email, social and
 (with `--tech`) ad-tag found rates. Give the user those numbers and the path. **Do not open, read,
 print or load the result file, and do not fetch the engine's rows.** The user opens the file in Excel
-or Google Sheets, or in the web UI at `http://localhost:8080` (Leads CSV, Full CSV, JSON). If the user
-asks to see rows in chat, point them to those; the kit keeps scraped text out of the conversation by
-design. For a narrower list, rerun with the script's filters (`--no-website`, `--min-rating`,
+or Google Sheets, or in the web UI at `http://localhost:8080` (Leads CSV, Full CSV, JSON). In Claude Code
+inside the kit folder, the kit's hook (`scripts/preview_hook.py`) shows the user the first 10 rows
+right after the scrape, as a notice that is not sent to you: do not repeat, summarize or ask for them.
+If the user asks for more rows in chat, point them to the file or the web UI; the kit keeps scraped
+text out of your context by design. For a narrower list, rerun with the script's filters (`--no-website`, `--min-rating`,
 `--has-email`, `--limit`, `--exclude`), which run in code.
 
 The file keeps **only the 8 lead fields**, the data used to contact and qualify a lead, then the six

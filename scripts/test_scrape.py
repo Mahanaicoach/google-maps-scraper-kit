@@ -1414,5 +1414,35 @@ class UpdateNotice(unittest.TestCase):
         self.assertRegex(enginepy.local_version(), r"^\d+\.\d+\.\d+")
 
 
+class PreviewHook(unittest.TestCase):
+    """scripts/preview_hook.py shows the user the saved rows as a systemMessage, cleaned of escapes."""
+    HOOK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "preview_hook.py")
+
+    def hook(self, command, stdout):
+        import subprocess
+        event = {"tool_name": "Bash", "tool_input": {"command": command}, "tool_response": {"stdout": stdout}}
+        return subprocess.run([sys.executable, self.HOOK], input=json.dumps(event), capture_output=True,
+                              text=True, timeout=10).stdout
+
+    def test_shows_rows_to_the_user(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "results-abc.csv")
+            with open(path, "w", newline="", encoding="utf-8-sig") as f:
+                w = csv.DictWriter(f, fieldnames=scrape.LEAD)
+                w.writeheader()
+                w.writerow({"title": "Biz A\x1b[31m\u202e", "phone": "+1 512-555-0100", "emails": "a@a.com"})
+            out = self.hook("python3 scripts/scrape.py plumbers", f"  saved → {path}  (opens in Excel)\n")
+        msg = json.loads(out)["systemMessage"]
+        self.assertIn("Biz A", msg)
+        self.assertIn("+1 512-555-0100", msg)
+        self.assertNotIn("\x1b", msg)
+        self.assertNotIn("\u202e", msg)
+        self.assertIn("first 1 of 1 rows", msg)
+
+    def test_silent_for_other_commands_and_missing_files(self):
+        self.assertEqual(self.hook("ls", "  saved → /nope.csv  (x)\n"), "")
+        self.assertEqual(self.hook("python3 scripts/scrape.py x", "  saved → /nope.csv  (x)\n"), "")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
