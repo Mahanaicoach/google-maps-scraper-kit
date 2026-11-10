@@ -707,6 +707,36 @@ def _find_socials(html):
             break
     return out
 
+# A listing's website can be someone else's: Google lists chase.com for a plumber named "Chase LLC".
+# A homepage that shows neither the listing's phone (its last 7 digits) nor a word of its category
+# is not taken as the business's own, so its emails, social links and tech are not the business's
+# either. engine/jobs.py has the same rule (a test checks).
+_CATEGORY_STOP = {"store", "shop", "service", "services", "company", "center", "centre", "agency",
+                  "office", "business", "and", "the", "for", "with"}
+_TAG_RE = re.compile(r"<(script|style)\b[^>]{0,1000}>.{0,200000}?</\1>|<[^>]{0,2000}>", re.I | re.S)
+_NOT_THEIRS = set()  # websites owns_site() turned down in this run, for the summary line
+
+def owns_site(html, row):
+    """False only when the homepage plainly belongs to someone else (see above). True when unsure: no
+    page, a page with under 200 characters of text (built by script, or a bot check), or a row with
+    neither a phone nor a category."""
+    page = (html or "")[:400_000]
+    text = " ".join(_html.unescape(_TAG_RE.sub(" ", page)).split()).lower()
+    if len(text) < 200:
+        return True
+    digits = re.sub(r"\D", "", row.get("phone") or "")
+    stems = {w[:4] for w in re.findall(r"[^\W\d_]{4,}", (row.get("category") or "").lower())
+             if w not in _CATEGORY_STOP}
+    if len(digits) < 7 and not stems:
+        return True
+    return (len(digits) >= 7 and digits[-7:] in re.sub(r"\D", "", page)) or any(s in text for s in stems)
+
+def _not_theirs_note(todo):
+    n = sum(r.get("website") in _NOT_THEIRS for r in todo)
+    if n:
+        print(f"  {n} website(s) skipped: they show neither the listing's phone nor its trade, "
+              "so they are likely another business's site")
+
 def _each_site(todo, work, label, workers=None):
     """Run work(row) over the rows, SITE_WORKERS at a time, with one progress line. One row that
     blows up (a malformed website, an odd page) is skipped; it never aborts the run."""
@@ -730,21 +760,25 @@ def enrich_sites(results, find, fields, label, workers=None, browser_sites=False
             r.setdefault(k, "")
     def work(r):
         page = _fetch_cached(r["website"])
-        found = find(page)
         if browser_sites:
             r.setdefault("website_fetch_status", "http" if page else "error")
-        r.update(found)
+        if not owns_site(page, r):
+            _NOT_THEIRS.add(r["website"])
+            page = ""
+        r.update(find(page))
     for r in results:  # a Facebook or Instagram page in the website slot IS the social profile
         if find is _find_socials and r.get("website") and is_social(r["website"]):
             r.update({k: v for k, v in _find_socials(r["website"]).items() if v})
     todo = [r for r in results if r.get("website") and not is_social(r["website"])]
     _each_site(todo, work, label, workers)
+    _not_theirs_note(todo)
     if browser_sites:
         def retry(r):
             rendered = _render_site(r["website"])
             _set_fetch_status(r, rendered["status"])
-            r.update({k: v for k, v in find(rendered["html"]).items() if v})
-        _each_site([r for r in todo if not any(r.get(k) for k in fields)],
+            if owns_site(rendered["html"], r):
+                r.update({k: v for k, v in find(rendered["html"]).items() if v})
+        _each_site([r for r in todo if not any(r.get(k) for k in fields) and r["website"] not in _NOT_THEIRS],
                    retry, "browser " + label, workers=2)
 
 
@@ -814,7 +848,9 @@ _JUNK_DOMAIN = ("example", "sentry", "wixpress", "wix.com", "godaddy", "squaresp
                 "gov", "mil", "hubspot", "mailchimp", "constantcontact", "sendgrid", "yext", "birdeye", "podium", "zocdoc")
 _JUNK_LOCAL = {"name", "email", "user", "you", "someone", "example", "username",
                "youremail", "yourname", "firstname", "lastname", "sample",
-               "noreply", "no-reply", "donotreply", "do-not-reply", "mailer-daemon", "postmaster"}
+               "noreply", "no-reply", "donotreply", "do-not-reply", "mailer-daemon", "postmaster",
+               # abuse and fraud-report inboxes: never a sales contact (phishing@ of a bank's site)
+               "abuse", "phishing", "spoof", "spam", "fraud", "dmca", "hostmaster"}
 _TOKEN = re.compile(r"[0-9a-f]{16,}")  # a 16+ hex local part is a tracking token, not an inbox
 # engine/jobs.py keeps the same three lists and token rule (a test checks).
 # A JSON-escaped <, >, ", ' or & glued to the address (">orders@x.com" in page source),
@@ -942,23 +978,30 @@ def enrich_emails(results, deep=True, workers=None, browser_sites=False):
     def work(r):
         site = r["website"]
         home = _fetch_cached(site)
+        if browser_sites:
+            r.setdefault("website_fetch_status", "http" if home else "error")
+        if not owns_site(home, r):
+            _NOT_THEIRS.add(site)
+            r["emails"] = ""
+            return
         found = extract_emails(home, site)
         if deep and home:
             for u in contact_links(home, site):
                 if _own(found, site):
                     break
                 found = _add_emails(found, _fetch_html(u, timeout=8), site)
-        if browser_sites:
-            r.setdefault("website_fetch_status", "http" if home else "error")
         r["emails"] = ", ".join(found)
     todo = [r for r in results if r.get("website") and not r.get("emails") and not is_social(r["website"])]
     _each_site(todo, work, "emails", workers)
+    _not_theirs_note(todo)
     if browser_sites:
         def retry(r):
             site = r["website"]
             rendered = _render_site(site)
             _set_fetch_status(r, rendered["status"])
             home = rendered["html"]
+            if not owns_site(home, r):
+                return
             found = extract_emails(home, site)
             if deep and home:
                 for url in contact_links(home, site):
@@ -970,7 +1013,8 @@ def enrich_emails(results, deep=True, workers=None, browser_sites=False):
                         break
                     found = _add_emails(found, contact["html"], site)
             r["emails"] = ", ".join(found)
-        _each_site([r for r in todo if not r.get("emails")], retry, "browser emails", workers=2)
+        _each_site([r for r in todo if not r.get("emails") and r["website"] not in _NOT_THEIRS],
+                   retry, "browser emails", workers=2)
 
 
 # ── Optional email domain check (--verify-emails): can the domain receive mail, and who hosts it ──

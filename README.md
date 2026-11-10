@@ -250,6 +250,10 @@ One keyword per line. One job. One CSV.
   contact and about pages. Listings with no site, or a site with no visible
   email, return an empty `emails` cell. Instagram bios are not read. Expect emails on a fraction of
   rows, not all of them.
+- **A wrong website on the listing gives no emails or socials.** Some listings point at another
+  business's site (a plumber listed with a bank's homepage). A homepage that shows neither the
+  listing's phone number nor a word of its category is skipped for emails, social links and tech
+  flags, and the run says how many were skipped. Report, abuse and phishing inboxes are dropped too.
 - **Rate limits are real.** Heavy use without proxies can get your IP temporarily rate-limited by
   Google for minutes to hours. When Google answers with its unusual-traffic page, the engine waits
   and retries the keyword up to 2 times, then stops the job and keeps the rows found before that.
