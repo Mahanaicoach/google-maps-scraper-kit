@@ -28,7 +28,7 @@ for _stream in (sys.stdout, sys.stderr):  # ✓ and accented names on a Windows 
     except (AttributeError, ValueError):
         pass
 
-VERSION = "2.3.2"
+VERSION = "2.3.3"
 MARK = f"gmskit-engine/{VERSION}"  # X-Engine header: tells scripts/engine.py this engine from others
 REPO = "https://github.com/Mahanaicoach/google-maps-scraper-kit"
 # The web UI's sponsor box: the browser reads this static file from GitHub (cached a day, no
@@ -634,7 +634,7 @@ load(); setInterval(load, 3000);
   const num = v => (String(v).replace(/^v/, '').split('.').slice(0, 3).map(x => parseInt(x, 10) || 0));
   const newer = (a, b) => {{ const x = num(a), y = num(b); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i]; return false; }};
   function show(tag) {{
-    if (!/^v?\d+\.\d+\.\d+/.test(tag || '') || !newer(tag, mine)) return;
+    if (!/^v?\\d+\\.\\d+\\.\\d+/.test(tag || '') || !newer(tag, mine)) return;
     $('up-v').textContent = String(tag).replace(/^v/, '').slice(0, 20);
     $('up-link').href = '{repo}/releases/tag/' + encodeURIComponent(tag);
     $('update').hidden = false;

@@ -43,6 +43,7 @@ SITE_HARD = 30        # seconds a website request may take in all, then its sock
 EMAIL_MIN_SECONDS = 60  # the website pass gets at least this long, even after a job used its max_time
 BACKOFF = (30, 90)    # seconds to wait before each retry of a keyword Google refused; then the job stops
 ROTATE_WAIT = 3       # seconds before the retry when the next proxy can take it instead
+BLOCK_COOLDOWN = 600  # seconds a proxy Google blocked sits out, in its own job and the jobs after it
 MAX_RESUMES = 3       # restarts of the engine mid-job before the job is failed instead of resumed
 LOGIN_REFUSED = "proxy login refused: the proxy answered 407 to its username and password"
 # Chrome's errors for a proxy that failed, and ours. Matched as written: an error also holds the
@@ -538,6 +539,7 @@ class Worker(threading.Thread):
         self.stopped = threading.Event()
         self._running = (None, None)  # (job id, stop event) of the job in progress
         self._browser = None
+        self.blocked_at = {}  # proxy -> when Google last blocked it, so the next grid tile skips it too
 
     def run(self):
         while not self.stopped.is_set():
@@ -609,11 +611,16 @@ class Worker(threading.Thread):
         notes, blocked, retries, rot, refused = [], p.get("blocked", False), p.get("retried", 0), 0, set()
         bad, relaunched, timed_out = set(), 0, {"yes": p.get("timed_out", False)}  # bad: proxies that failed
 
-        def pick(i):  # the keyword's proxy in turn, past the ones that failed (all failed: in turn anyway)
-            if not proxies:
+        def pick(i):  # the keyword's proxy in turn, past the failed ones, then past the ones Google
+            if not proxies:  # blocked lately (all of them: in turn anyway)
                 return None
             turn = [proxies[(i + rot + k) % len(proxies)] for k in range(len(proxies))]
-            return next((x for x in turn if x not in bad), turn[0])
+            live = [x for x in turn if x not in bad] or turn
+            now = time.monotonic()
+            return next((x for x in live if now - self.blocked_at.get(x, now - BLOCK_COOLDOWN) >= BLOCK_COOLDOWN),
+                        live[0])
+        # With several proxies a refused keyword moves through all of them; alone, it waits BACKOFF.
+        tries = max(len(BACKOFF), len(set(proxies)) - 1) if len(proxies) > 1 else len(BACKOFF)
         cur = {"i": done, "kw": ""}
         if done or p.get("resumes"):
             self.log(f"job {jid} resumed at keyword {done + 1}/{len(kws)} with {len(rows)} places, {budget:.0f} s left")
@@ -704,12 +711,14 @@ class Worker(threading.Thread):
                 if stop.is_set():  # deleted, or the engine is exiting: this keyword did not finish
                     break
                 if reason == "blocked":  # Google limits this IP: wait, try again, then give up
-                    if retries < len(BACKOFF) and not stop.is_set():
+                    if proxy:
+                        self.blocked_at[proxy] = time.monotonic()
+                    if retries < tries and not stop.is_set():
                         wait = ROTATE_WAIT if len(proxies) > 1 else BACKOFF[retries]
                         if time.monotonic() + wait < deadline:
                             retries, rot = retries + 1, rot + 1
                             self.log(f"job {jid} keyword {i + 1}/{len(kws)}: Google's unusual-traffic page; "
-                                     f"retry {retries}/{len(BACKOFF)} in {wait} s"
+                                     f"retry {retries}/{tries} in {wait} s"
                                      + (" through the next proxy" if len(proxies) > 1 else ""))
                             save()
                             if stop.wait(wait):

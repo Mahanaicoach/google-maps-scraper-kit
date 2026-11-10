@@ -900,6 +900,22 @@ class Backoff(Fakes):
         self.assertEqual(FakeBrowser.made[0].contexts, ["http://a:1", "http://b:2"])
         self.assertTrue(any("retry 1/2 in 0.01 s through the next proxy" in l for l in self.lines))
 
+    def test_a_blocked_proxy_sits_out_the_next_job(self):
+        RESULTS["cafes in Austin"] = ([place(1)], ["blocked", "end-of-list"])
+        self.run_one(proxies=["http://a:1", "http://b:2", "http://c:3"])
+        RESULTS["cafes in Austin"] = ([place(1)], "end-of-list")
+        self.run_one(proxies=["http://a:1", "http://b:2", "http://c:3"])  # the next grid tile
+        self.assertEqual(FakeBrowser.made[0].contexts, ["http://a:1", "http://b:2"])
+        self.assertEqual(FakeBrowser.made[1].contexts, ["http://b:2"])  # not a, which Google blocked
+
+    def test_a_refused_keyword_tries_every_proxy(self):
+        pool = [f"http://p{n}:1" for n in range(5)]
+        RESULTS["cafes in Austin"] = ([place(1)], ["blocked"] * 4 + ["end-of-list"])
+        jid, job = self.run_one(proxies=pool)
+        self.assertEqual((job["Status"], job["Error"]), ("ok", ""))
+        self.assertEqual(FakeBrowser.made[0].contexts, pool)
+        self.assertTrue(any("retry 4/4 in 0.01 s through the next proxy" in l for l in self.lines))
+
     def test_gives_up_after_bounded_retries(self):
         RESULTS["cafes in Austin"] = ([], ["blocked"])
         _, job = self.run_one()
