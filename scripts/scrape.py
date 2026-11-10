@@ -87,7 +87,7 @@ UA = "google-maps-scraper-kit/2.0 (https://github.com/Mahanaicoach/google-maps-s
 # different small sites, not Google, so this does not raise the rate-limit risk.
 SITE_WORKERS = 16
 
-POLL_EVERY = 3            # seconds between status checks (the engine is local, a check is cheap)
+POLL_EVERY = 1            # seconds between status checks (the engine is local, a check is cheap; 3 s cost up to 3 s per job)
 POLL_GRACE = 120          # past max_time: the engine's watchdog stops Chrome 90 s after it at the latest
 POLL_CEILING = 7200       # never wait longer than 2h, whatever --max-time asked for
 PY = "py" if os.name == "nt" else "python3"  # what the user types; the README says `py` on Windows
@@ -453,7 +453,7 @@ def collect_keywords(a):
 # Pure code (HTTP + regex) → ZERO LLM tokens. Visits each business website once.
 SOCIAL_RE = {
     "instagram": re.compile(r"https?://(?:www\.)?instagram\.com/([A-Za-z0-9_.]+)", re.I),
-    "facebook":  re.compile(r"https?://(?:www\.|m\.|web\.)?facebook\.com/([A-Za-z0-9_.\-]+)", re.I),
+    "facebook":  re.compile(r"https?://(?:www\.|m\.|web\.)?facebook\.com/(profile\.php\?id=\d+|[A-Za-z0-9_.\-]+)", re.I),
     "linkedin":  re.compile(r"https?://(?:[a-z]{2,3}\.)?linkedin\.com/(?:company|in|school)/([A-Za-z0-9_.\-%]+)", re.I),
     "tiktok":    re.compile(r"https?://(?:www\.)?tiktok\.com/@([A-Za-z0-9_.]+)", re.I),
     "youtube":   re.compile(r"https?://(?:www\.)?youtube\.com/(?:@|channel/|c/|user/)([A-Za-z0-9_.\-]+)", re.I),
@@ -715,6 +715,7 @@ _CATEGORY_STOP = {"store", "shop", "service", "services", "company", "center", "
                   "office", "business", "and", "the", "for", "with"}
 _TAG_RE = re.compile(r"<(script|style)\b[^>]{0,1000}>.{0,200000}?</\1>|<[^>]{0,2000}>", re.I | re.S)
 _NOT_THEIRS = set()  # websites owns_site() turned down in this run, for the summary line
+_PAGE_SOCIALS = {}  # contact/about page URL -> its social links, read once by the email crawl (small: no HTML kept)
 
 def owns_site(html, row):
     """False only when the homepage plainly belongs to someone else (see above). True when unsure: no
@@ -753,8 +754,10 @@ def _each_site(todo, work, label, workers=None):
             print(f"\r  {label}: {done}/{len(todo)} checked", end="", flush=True)
     print(f"  ({failed} skipped after an error)" if failed else "")
 
-def enrich_sites(results, find, fields, label, workers=None, browser_sites=False):
-    """Finish the HTTP pass before browser retries, so retries never occupy HTTP worker slots."""
+def enrich_sites(results, find, fields, label, workers=None, browser_sites=False, deep=False):
+    """Finish the HTTP pass before browser retries, so retries never occupy HTTP worker slots. With
+    deep, a homepage that yields nothing sends the search on to its contact and about pages: many
+    small sites link their Instagram or Facebook only there."""
     for r in results:
         for k in fields:
             r.setdefault(k, "")
@@ -765,7 +768,15 @@ def enrich_sites(results, find, fields, label, workers=None, browser_sites=False
         if not owns_site(page, r):
             _NOT_THEIRS.add(r["website"])
             page = ""
-        r.update(find(page))
+        found = find(page)
+        if deep and page and not any(found.values()):
+            for u in contact_links(page, r["website"]):
+                # the email crawl already read this page: its links are kept, so it is not fetched again
+                more = _PAGE_SOCIALS[u] if find is _find_socials and u in _PAGE_SOCIALS else find(_fetch_html(u, timeout=8))
+                if any(more.values()):
+                    found = more
+                    break
+        r.update(found)
     for r in results:  # a Facebook or Instagram page in the website slot IS the social profile
         if find is _find_socials and r.get("website") and is_social(r["website"]):
             r.update({k: v for k, v in _find_socials(r["website"]).items() if v})
@@ -942,27 +953,38 @@ def extract_emails(html, site_host):
         found.append(e)
     return sorted(found, key=lambda e: not _on_site(e, site))[:3]
 
+# Contact pages hold the address far more often than about or location pages, and only 3 pages are
+# read, so they go first: a site linking /about-us, /about-us/ and a location page before /contact-us
+# used to spend all 3 reads and miss its address (seen in a benchmark).
+_CONTACT_RANK = (re.compile(r"contact|kontakt|impressum", re.I), re.compile(r"about|team|staff", re.I),
+                 re.compile(r"support|location", re.I))
+
 def contact_links(html, base_url):
-    """Up to 3 same-site contact/about URLs: discovered links first, then fixed fallbacks."""
+    """Up to 3 same-site contact/about URLs: discovered links by rank (contact, then about and team,
+    then support and locations; page order within a rank), then fixed fallbacks. One page counts once,
+    with or without www. and a trailing slash."""
     if not base_url.startswith(("http://", "https://")):
         base_url = "http://" + base_url
-    host, out = _host(base_url), []
+    host, out, seen, found = _host(base_url), [], set(), []
     if not host:  # malformed or empty website: nothing to join the paths onto
         return out
     for href, text in HREF_RE.findall(html or ""):
-        if not re.search(r"contact|about|team|staff|support|location|impressum|kontakt", href + " " + text, re.I):
+        rank = next((i for i, rx in enumerate(_CONTACT_RANK) if rx.search(href + " " + text)), None)
+        if rank is None:
             continue
         try:
             url = urllib.parse.urldefrag(urllib.parse.urljoin(base_url, href.strip()))[0]
         except ValueError:  # a malformed href on the page
             continue
-        if url.startswith(("http://", "https://")) and _host(url) == host and url not in out:
+        if url.startswith(("http://", "https://")) and _host(url) == host:
+            found.append((rank, url))
+    fallbacks = [urllib.parse.urljoin(base_url, p) for p in ("/contact", "/contact-us", "/about", "/about-us")]
+    for url in [u for _, u in sorted(found, key=lambda f: f[0])] + fallbacks:  # sorted() keeps page order in a rank
+        key = re.sub(r"^https?://(?:www\.)?", "", url).rstrip("/").lower()
+        if len(out) < 3 and key not in seen:
+            seen.add(key)
             out.append(url)
-    for path in ("/contact", "/contact-us", "/about", "/about-us"):  # /team, /impressum, ...: found by link text above
-        url = urllib.parse.urljoin(base_url, path)
-        if len(out) < 3 and url not in out:
-            out.append(url)
-    return out[:3]
+    return out
 
 def _own(found, site):
     """True when the list (site-domain first, see extract_emails) holds an address on the site's own domain."""
@@ -985,11 +1007,19 @@ def enrich_emails(results, deep=True, workers=None, browser_sites=False):
             r["emails"] = ""
             return
         found = extract_emails(home, site)
-        if deep and home:
-            for u in contact_links(home, site):
+        if deep and home and not _own(found, site):
+            # The (at most 3) contact pages are fetched at once: one at a time, a slow site's chain set
+            # the pace of the whole pass (7.6 s for one site in a benchmark, 2 s for the rest).
+            links = contact_links(home, site)
+            with ThreadPoolExecutor(max_workers=len(links) or 1) as ex:
+                pages = list(ex.map(lambda u: _fetch_html(u, timeout=8), links))
+            for u, html in zip(links, pages):
+                if html:  # a failed fetch is not kept: the socials pass may try the page again
+                    _PAGE_SOCIALS[u] = _find_socials(html)
+            for html in pages:  # same result as one at a time: merged in order until an own-domain address
                 if _own(found, site):
                     break
-                found = _add_emails(found, _fetch_html(u, timeout=8), site)
+                found = _add_emails(found, html, site)
         r["emails"] = ", ".join(found)
     todo = [r for r in results if r.get("website") and not r.get("emails") and not is_social(r["website"])]
     _each_site(todo, work, "emails", workers)
@@ -1167,7 +1197,7 @@ def main():
     ap.add_argument("--no-email", dest="email", action="store_false", default=True,
                     help="skip the website crawl for emails (emails are on by default)")
     ap.add_argument("--no-deep-emails", dest="deep_emails", action="store_false",
-                    help="check homepages only, not contact and about pages")
+                    help="check homepages only, not contact and about pages (for emails and socials)")
     ap.add_argument("--grid", type=int, metavar="N",
                     help="split the --city area into N x N map tiles, one job each, deduped "
                          "(breaks Google's ~120 per search cap; max 10)")
@@ -1384,8 +1414,9 @@ def main():
 
     # Enrichment runs on the raw rows, which always carry the website, whatever --fields keeps.
     if a.socials:
-        print("▶ Finding socials (Instagram / Facebook / LinkedIn / TikTok / YouTube / X) on each website…")
-        enrich_sites(rows, _find_socials, SOCIAL_FIELDS, "socials", browser_sites=a.browser_sites)
+        where = "homepage, then contact and about pages" if a.deep_emails else "homepage only"
+        print(f"▶ Finding socials (Instagram / Facebook / LinkedIn / TikTok / YouTube / X) on each website ({where})…")
+        enrich_sites(rows, _find_socials, SOCIAL_FIELDS, "socials", browser_sites=a.browser_sites, deep=a.deep_emails)
         fields = fields + SOCIAL_FIELDS
         found = sum(1 for r in rows if any(r.get(k) for k in SOCIAL_FIELDS))
         print(f"  socials found for {found}/{len(rows)} businesses")
