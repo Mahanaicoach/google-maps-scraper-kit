@@ -1184,6 +1184,20 @@ class Websites(unittest.TestCase):
         self.assertEqual((rows[0]["instagram"], rows[0]["facebook"]), ("https://www.instagram.com/shopco", "https://facebook.com/shopco"))
         self.assertEqual(rows[1]["emails"], "")  # its only address is on a domain that does not exist
 
+    def test_someone_elses_site_gives_nothing(self):
+        # Google lists a bank's homepage for a plumber named "Chase LLC" (seen in a real Austin run).
+        bank = ("<title>Credit cards, mortgages, banking</title>" + "Compare credit cards and open an account. " * 6 +
+                '<a href="mailto:hello@bank.test">mail</a> <a href="https://instagram.com/bigbank">ig</a>')
+        rows = [{"website": "https://bank.test", "emails": "", "phone": "(512) 890-2933", "category": "Plumber"}]
+        self.assertEqual(jobs.add_site_data(rows, 10, socials=True, get=lambda url: bank), (0, 0))
+        self.assertEqual((rows[0]["emails"], rows[0].get("instagram", "")), ("", ""))
+        sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts"))
+        import scrape  # the same rule as the script (owns_site in both files)
+        self.assertEqual((jobs.CATEGORY_STOP, jobs.TAG_RE.pattern), (scrape._CATEGORY_STOP, scrape._TAG_RE.pattern))
+        ok = "We fix leaks fast across Austin with upfront prices and same-day visits. " * 4
+        for page in (bank, ok + " plumbing", ok + " 512-890-2933", ok, "", "<p>short</p>"):
+            self.assertEqual(jobs.owns_site(page, rows[0]), scrape.owns_site(page, rows[0]), page[:40])
+
     def test_mx_answers(self):
         def doh(answer):
             r = unittest.mock.MagicMock()
