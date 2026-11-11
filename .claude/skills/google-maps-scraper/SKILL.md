@@ -90,7 +90,7 @@ python3 scripts/scrape.py "<business type> in <City, ST>" --city "<City, ST>" --
 
 > **Harness rule:** a scrape takes one to several minutes and the Bash tool blocks foreground waits.
 > Use the Bash tool's background option (`run_in_background: true`) so the long run does not block,
-> and read its output file when notified. The script prints its progress (`keyword 1/3`, `reading
+> and read the run's log when notified; the log holds only the script's own output. The script prints its progress (`keyword 1/3`, `reading
 > reviews 7/20`, the email and social found rates) and the saved path; it exits 0 when the file is
 > complete. It prints no scraped value; its `Error` lines are the engine's own status text.
 
@@ -170,8 +170,8 @@ commands but is not needed). Do not fetch the websites yourself.
   socials. Say so if the user expects 100%.
 
 ## The job API (reference, not a flow to run by hand)
-`scripts/scrape.py`, the web UI and the slash commands all use it. Documented here so you can read
-the engine's answers and its errors; the engine also serves it at `http://localhost:8080/api/docs`
+`scripts/scrape.py`, the web UI and the slash commands all use it. Documented here so the engine's
+status codes and errors are clear; the engine also serves it at `http://localhost:8080/api/docs`
 (an HTML page) and `http://localhost:8080/api/openapi.json`.
 
 - `POST /api/v1/jobs` creates a job and answers `201 {"id":"<uuid>"}` (lowercase `id`). Required body
