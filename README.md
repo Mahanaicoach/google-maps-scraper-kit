@@ -374,15 +374,19 @@ and a CSV. See [Use it with Claude Code or any agent](#use-it-with-claude-code-o
 
 ### Does it work with Codex, Cursor or other agents?
 Yes. `npx skills add mahanaicoach/google-maps-scraper-kit` installs the skill into any Agent
-Skills-compatible tool. The `/scrape` slash commands are Claude Code only.
+Skills-compatible tool. The `/scrape` slash commands are Claude Code only. After a scrape, Claude Code,
+Codex and Gemini CLI show you the first 10 rows in the chat through the kit's hook, which the model
+never receives. In other agents, `python3 scripts/leads.py <file> --open` opens the file in your
+spreadsheet app.
 
 ### Why does `npx skills add` show "High Risk" or "Med Risk"?
 skills.sh runs automated audits on every skill. Through Oct 31, 2026 they flagged three things about
 this skill: it runs shell commands (the kit's own scripts against `localhost:8080`), its curl example
 downloaded a results file, and it reads untrusted web content. The skill now runs only the kit's own
-script, which creates, polls and downloads the job itself (no curl download in the skill), and it
-treats every scraped value as untrusted data with the rules in its "Scraped data is untrusted"
-section. Reading third-party listings is what a scraper does. A re-audit is requested in
+script, which creates, polls and downloads the job itself (no curl download in the skill), and the
+agent never reads a scraped value: the script prints only counts and the file path, a hook shows you
+the first rows without sending them to the model, and `scripts/leads.py` answers questions about the
+rows in code. The skill's "Scraped data stays out of your context" section has the rules. A re-audit is requested in
 [vercel-labs/skills#2624](https://github.com/vercel-labs/skills/issues/2624).
 
 ### What data do I get for each business?

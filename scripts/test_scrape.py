@@ -1539,9 +1539,62 @@ class PreviewHook(unittest.TestCase):
         self.assertNotIn("\u202e", msg)
         self.assertIn("first 1 of 1 rows", msg)
 
+    def test_reads_gemini_event_shape(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "r.csv")
+            with open(path, "w", newline="", encoding="utf-8-sig") as f:
+                f.write("title,phone\nBiz G,+1 2\n")
+            event = {"cwd": d, "tool_input": {"command": "python3 scripts/leads.py r.csv --no-website"},
+                     "tool_response": {"llmContent": "  saved → r.csv  (opens in Excel)\n", "returnDisplay": ""}}
+            import subprocess
+            out = subprocess.run([sys.executable, self.HOOK], input=json.dumps(event), capture_output=True,
+                                 text=True, timeout=10).stdout
+        self.assertIn("1. Biz G · +1 2", json.loads(out)["systemMessage"])
+
+    def test_hook_configs_match(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        claude = json.load(open(os.path.join(root, ".claude", "settings.json")))["hooks"]["PostToolUse"][0]["hooks"][0]["command"]
+        codex = json.load(open(os.path.join(root, ".codex", "hooks.json")))["hooks"]["PostToolUse"][0]["hooks"][0]["command"]
+        gemini = json.load(open(os.path.join(root, ".gemini", "settings.json")))["hooks"]["AfterTool"][0]["hooks"][0]["command"]
+        skill = open(os.path.join(root, ".claude", "skills", "google-maps-scraper", "SKILL.md"), encoding="utf-8").read()
+        self.assertEqual({claude, codex, gemini}, {claude})  # one command, so Claude Code dedupes skill + settings
+        self.assertIn(f'command: "{claude}"', skill)
+        self.assertIn("scripts/preview_hook.py", claude)
+
     def test_silent_for_other_commands_and_missing_files(self):
         self.assertEqual(self.hook("ls", "  saved → /nope.csv  (x)\n"), "")
+        self.assertEqual(self.hook("cat scripts/not_leads.pyc", "  saved → /nope.csv  (x)\n"), "")
         self.assertEqual(self.hook("python3 scripts/scrape.py x", "  saved → /nope.csv  (x)\n"), "")
+
+
+class LeadsTool(unittest.TestCase):
+    """scripts/leads.py answers row questions in code: it prints numbers and a path, never a scraped value."""
+    def test_filter_and_sort_print_no_scraped_value(self):
+        spec = importlib.util.spec_from_file_location(
+            "leads", os.path.join(os.path.dirname(os.path.abspath(__file__)), "leads.py"))
+        leads = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(leads)
+        rows = [{"title": "Biz A", "phone": "+1 1", "emails": "", "website": "", "review_rating": "4.9", "review_count": "10"},
+                {"title": "Biz B", "phone": "", "emails": "b@b.com", "website": "https://b.com", "review_rating": "4.0", "review_count": "99"},
+                {"title": "Biz C", "phone": "+1 3", "emails": "", "website": "", "review_rating": "4.6", "review_count": "50"}]
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "results-x.csv")
+            with open(src, "w", newline="", encoding="utf-8-sig") as f:
+                w = csv.DictWriter(f, fieldnames=list(rows[0]))
+                w.writeheader()
+                w.writerows(rows)
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                leads.main([src, "--no-website", "--sort", "reviews"])
+            with open(os.path.join(d, "results-x-filtered.csv"), encoding="utf-8-sig") as f:
+                kept = [r["title"] for r in csv.DictReader(f)]
+        text = buf.getvalue()
+        self.assertEqual(kept, ["Biz C", "Biz A"])
+        self.assertIn("kept 2 of 3", text)
+        self.assertIn("no website 2", text)
+        self.assertIn("saved →", text)
+        for name in ("Biz A", "Biz B", "Biz C", "b@b.com", "+1 1"):
+            self.assertNotIn(name, text)
 
 
 if __name__ == "__main__":

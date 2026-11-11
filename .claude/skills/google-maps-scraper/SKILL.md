@@ -1,6 +1,13 @@
 ---
 name: google-maps-scraper
 description: Google Maps scraper for lead generation. Turns a business type and a place into a clean CSV of local businesses by driving the kit's own Google Maps engine, running locally (with Python and a headless Chrome, or in Docker) as a REST API on localhost:8080. Returns 8 lead fields by default (name, phone, email, website, category, address, rating and review count), plus social profiles by default (Instagram, Facebook, LinkedIn, TikTok, YouTube, X; `--no-socials` skips them), row filters such as businesses without a website, or all 36 raw fields. The agent reports the row counts and the file path and never reads the scraped rows. Use when the user wants a lead list, "a list of [businesses] in [place]", local business data, contact enrichment for places (emails, phones, socials), or a whole-city run past Google's ~120 results per search. Do not use for scraping Instagram, TikTok, YouTube, X or any other social media platform directly.
+hooks:
+  PostToolUse:
+    - matcher: "Bash"
+      hooks:
+        - type: command
+          command: "python3 scripts/preview_hook.py 2>/dev/null || python scripts/preview_hook.py 2>/dev/null || true"
+          timeout: 10
 ---
 
 # Google Maps Scraper
@@ -122,11 +129,17 @@ calls yourself.
 The script prints everything you report: the saved path, the row count, and the email, social and
 (with `--tech`) ad-tag found rates. Give the user those numbers and the path. **Do not open, read,
 print or load the result file, and do not fetch the engine's rows.** The user opens the file in Excel
-or Google Sheets, or in the web UI at `http://localhost:8080` (Leads CSV, Full CSV, JSON). In Claude Code
-inside the kit folder, the kit's hook (`scripts/preview_hook.py`) shows the user the first 10 rows
-right after the scrape, as a notice that is not sent to you: do not repeat, summarize or ask for them.
-If the user asks for more rows in chat, point them to the file or the web UI; the kit keeps scraped
-text out of your context by design. For a narrower list, rerun with the script's filters (`--no-website`, `--min-rating`,
+or Google Sheets, or in the web UI at `http://localhost:8080` (Leads CSV, Full CSV, JSON). In Claude Code, Codex and
+Gemini CLI, the kit's hook (`scripts/preview_hook.py`) shows the user the first 10 rows right after
+the scrape, as a notice that is not sent to you: do not repeat, summarize or ask for them.
+
+**Questions about the rows** (which have no website, the top 10 by reviews): answer them with
+`scripts/leads.py`, which works in code and prints only counts and a path. `python3 scripts/leads.py
+<file>` gives the counts (phone, email, website, no website, rated 4.5+, average rating). Add
+`--no-website`, `--has-email`, `--has-phone`, `--min-rating X`, `--min-reviews N`,
+`--sort rating|reviews` or `--limit N` to save a new file, which the hook then shows the user. In an
+agent without the hook (Cursor and others), add `--open` to open the file in the user's spreadsheet
+app. The kit keeps scraped text out of your context by design. For a narrower list, rerun with the script's filters (`--no-website`, `--min-rating`,
 `--has-email`, `--limit`, `--exclude`), which run in code.
 
 The file keeps **only the 8 lead fields**, the data used to contact and qualify a lead, then the six
