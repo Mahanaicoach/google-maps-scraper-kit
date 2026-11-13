@@ -393,7 +393,10 @@ and a CSV. See [Use it with Claude Code or any agent](#use-it-with-claude-code-o
 
 ### Does it work with Codex, Cursor or other agents?
 Yes. `npx skills add mahanaicoach/google-maps-scraper-kit` installs the skill into any Agent
-Skills-compatible tool. The `/scrape` slash commands are Claude Code only.
+Skills-compatible tool. The `/scrape` slash commands are Claude Code only. After a scrape, Claude Code,
+Codex and Gemini CLI show you the first 10 rows in the chat through the kit's hook, which the model
+never receives. In other agents, `python3 scripts/leads.py <file> --open` opens the file in your
+spreadsheet app.
 
 ### What data do I get for each business?
 Name, phone, email, website, category, address, rating and review count, then Instagram, Facebook,

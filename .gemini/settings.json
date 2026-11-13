@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "AfterTool": [
+      {
+        "matcher": "run_shell_command",
+        "hooks": [
+          {
+            "name": "leads-preview",
+            "type": "command",
+            "command": "python3 scripts/preview_hook.py 2>/dev/null || python scripts/preview_hook.py 2>/dev/null || true",
+            "timeout": 10000,
+            "description": "Shows the user the first rows of a file scrape.py or leads.py saved; the model does not receive them."
+          }
+        ]
+      }
+    ]
+  }
+}

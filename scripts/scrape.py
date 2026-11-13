@@ -263,8 +263,8 @@ FAILED_RETRY_WAIT = 60     # seconds before the one retry of a "failed" job (usu
 
 
 def shown(v, n=60):
-    """Third-party text (a scraped value, the engine's Error) as one printable line of at most n
-    characters, for what the script prints into an agent's context."""
+    """The engine's Error as one printable line of at most n characters, for what the script prints
+    into an agent's context. The script prints no scraped value."""
     return "".join(c if c.isprintable() else " " for c in str(v))[:n]
 
 
@@ -1460,10 +1460,8 @@ def main():
         write(out)
     for w in dict.fromkeys(WARNINGS):
         print(f"⚠ {w}")
+    # No preview rows: an agent reads this output, and scraped text stays in the file, never in its context.
     print(f"  saved → {os.path.abspath(out)}  (opens in Excel or Google Sheets)")
-    for r in results[:5]:  # scraped text: one short printable line per field, never a line of its own
-        tail = f" | IG:{shown(r.get('instagram','')) or '—'}" if a.socials else f" | {shown(r.get('website',''))}"
-        print(f"  • {shown(r.get('title',''))} | {shown(r.get('phone',''))} | {shown(r.get('emails',''))}{tail}")
     if blocked:  # a non-zero exit, so an agent or a scheduled run knows the scrape was cut short
         sys.exit("⚠ Incomplete: Google is rate-limiting this IP, so the scrape stopped; the file has the "
                  "rows found before that. Wait (minutes to hours) or add proxies, then rerun with "

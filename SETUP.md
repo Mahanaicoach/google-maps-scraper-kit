@@ -155,8 +155,12 @@ Or the bash script. Its arguments are `"<keyword>" <lat> <lon> [depth]`:
 bash scripts/scrape.sh "coffee shops in Austin TX" 30.2672 -97.7431 5
 ```
 
-Both scripts create the job, poll until it is done, download the CSV, keep the 8 lead fields and
-print a short preview. The Python CLI also prints the job's progress while it polls, e.g.
+Both scripts create the job, poll until it is done, download the CSV and keep the 8 lead fields. The
+bash script prints a short preview; the Python CLI prints counts and the path but no scraped value, so
+an AI agent that runs it never reads third-party text. In Claude Code, Codex and Gemini CLI, the kit's hook
+(`scripts/preview_hook.py`) shows you the first 10 rows in the chat, and the agent never receives them.
+Codex and Gemini CLI ask you to trust the project's hook the first time. `scripts/leads.py` answers
+questions about a saved file (counts, filters, sorting) the same way, and `--open` opens the file. The Python CLI also prints the job's progress while it polls, e.g.
 `keyword 2/3, 41 places, 50%`. It also adds the six social columns (`--no-socials` drops them). The full results go to a file. Each `depth` step loads one more batch of about
 20 places, so depth 5 returns up to about 100, near Google's cap of about 120 per search.
 

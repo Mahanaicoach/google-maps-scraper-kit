@@ -41,7 +41,7 @@ Or use a slash command in Claude Code:
 1. Runs `python3 scripts/engine.py status`, which prints the engine's URL (`localhost:8080` unless you changed `SCRAPER_PORT`) only when the kit's own engine answers, and starts it with `python3 scripts/engine.py start` (or `docker compose up -d` if you run Docker) if it is down.
 2. Runs `python3 scripts/scrape.py "<business type> in <City, ST>" --city "<City, ST>"` as a background command. The script geocodes the city, creates the job, waits for it and collects its rows, with emails and social profiles on by default. It skips the social profiles only if you say you do not want them.
 3. Keeps the 8 lead fields (name, phone, email, website, category, address, rating and review count), then the six social columns: Instagram, Facebook, LinkedIn, TikTok, YouTube and X.
-4. Saves the file, then presents a short table and the CSV path instead of dumping every row into chat.
+4. Saves the file, then reports the counts and the CSV path. Scraped rows never enter the chat, so text planted on a listing or a website cannot steer Claude.
 
 The kit's own scripts, the exact `docker compose` forms SETUP.md uses are pre-approved in `.claude/settings.json`; everything else asks as usual.
 
