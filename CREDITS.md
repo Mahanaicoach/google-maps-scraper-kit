@@ -3,7 +3,18 @@
 This page lists who built what in the Google Maps Scraper Kit, and the licenses of the parts it uses.
 
 The kit, its Google Maps engine (`engine/`), the scripts, the skill and the slash commands are designed
-and built by Mahan ([@Mahanaicoach](https://github.com/Mahanaicoach)), MIT licensed (see [LICENSE](LICENSE)).
+and built by Mahan ([@Mahanaicoach](https://github.com/Mahanaicoach)). From the first release after
+v2.3.2 they are licensed under the AGPL-3.0 (see [LICENSE](LICENSE)), with a commercial licence
+available (see [COMMERCIAL.md](COMMERCIAL.md)).
+
+## Licence history and earlier contributions
+
+Every release up to and including v2.3.2, feature and patch releases alike (v2.3.2, v2.3.1, v2.3.0,
+v2.2.0 and all earlier ones), was released under the MIT License, Copyright (c) 2026 Mahan
+(github.com/Mahanaicoach), and stays available under it at its tag. Code contributed under that
+licence by nathanpissinatti12-cell, Won Ecosystem, Ranshoshan (ranpatcheck), DOLIVEIRA Solutions and
+Boulanouar Walid is included in this version on the MIT terms it was given under. The MIT text is
+kept in [LICENSES/MIT-v2.3.2-and-earlier.txt](LICENSES/MIT-v2.3.2-and-earlier.txt).
 
 ## History: gosom/google-maps-scraper
 
@@ -44,8 +55,8 @@ because that repository has no license file. Until the browser has fetched it on
 
 The `--tech` detection patterns, the intent score and the obfuscated-email patterns in
 `scripts/scrape.py`, and its private-address guard, are adapted from OpenLeadFinder, Mahan's
-self-hosted lead finder. It is released under the MIT License, Copyright (c) 2026 OpenLeadFinder
-contributors, with the license text below.
+self-hosted lead finder. Those parts were taken from it under the MIT License, Copyright (c) 2026
+OpenLeadFinder contributors, with the license text below.
 
 ## MIT License text (OpenLeadFinder)
 
