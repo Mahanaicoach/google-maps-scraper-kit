@@ -4,16 +4,17 @@ This page lists who built what in the Google Maps Scraper Kit, and the licenses 
 
 The kit, its Google Maps engine (`engine/`), the scripts, the skill and the slash commands are designed
 and built by Mahan ([@Mahanaicoach](https://github.com/Mahanaicoach)). From the first release after
-v2.3.0 they are licensed under the AGPL-3.0 (see [LICENSE](LICENSE)), with a commercial licence
+v2.3.2 they are licensed under the AGPL-3.0 (see [LICENSE](LICENSE)), with a commercial licence
 available (see [COMMERCIAL.md](COMMERCIAL.md)).
 
 ## Licence history and earlier contributions
 
-Versions up to and including v2.3.0 were released under the MIT License, Copyright (c) 2026 Mahan
-(github.com/Mahanaicoach), and stay available under it at their tags. Code contributed under that
+Every release up to and including v2.3.2, feature and patch releases alike (v2.3.2, v2.3.1, v2.3.0,
+v2.2.0 and all earlier ones), was released under the MIT License, Copyright (c) 2026 Mahan
+(github.com/Mahanaicoach), and stays available under it at its tag. Code contributed under that
 licence by nathanpissinatti12-cell, Won Ecosystem, Ranshoshan (ranpatcheck), DOLIVEIRA Solutions and
 Boulanouar Walid is included in this version on the MIT terms it was given under. The MIT text is
-kept in [LICENSES/MIT-v2.3.0-and-earlier.txt](LICENSES/MIT-v2.3.0-and-earlier.txt).
+kept in [LICENSES/MIT-v2.3.2-and-earlier.txt](LICENSES/MIT-v2.3.2-and-earlier.txt).
 
 ## History: gosom/google-maps-scraper
 

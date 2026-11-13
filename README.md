@@ -512,5 +512,5 @@ Contributions: [CONTRIBUTING.md](CONTRIBUTING.md). Security reports: [SECURITY.m
 
 Built by [Mahan](https://github.com/Mahanaicoach). Dual licensed: [AGPL-3.0](LICENSE), free to use,
 change and self-host, with changes to a hosted or shared version published under the same licence;
-or a [commercial licence](COMMERCIAL.md) for closed, hosted or white-label use. Versions up to
-v2.3.0 remain MIT. Third-party components: [CREDITS.md](CREDITS.md).
+or a [commercial licence](COMMERCIAL.md) for closed, hosted or white-label use. All releases up
+to and including v2.3.2, feature and patch releases alike, remain MIT. Third-party components: [CREDITS.md](CREDITS.md).

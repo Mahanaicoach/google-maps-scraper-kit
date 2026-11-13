@@ -1,6 +1,6 @@
 # Commercial licence
 
-From the first release after v2.3.0, the Google Maps Scraper Kit is dual licensed.
+From the first release after v2.3.2, the Google Maps Scraper Kit is dual licensed.
 
 1. **AGPL-3.0** (see [LICENSE](LICENSE)). Free. You may use, change and self-host the kit, also
    inside a business, and keep everything you scrape. If you change the kit and let other people
@@ -20,11 +20,12 @@ From the first release after v2.3.0, the Google Maps Scraper Kit is dual license
 - You run it for yourself, your clients' lead lists or your own team, changed or unchanged.
 - You publish your changes under the AGPL-3.0.
 
-## Versions up to v2.3.0
+## Versions up to v2.3.2
 
-Versions up to and including v2.3.0 were released under the MIT License and stay available under
-it at their tags. That licence text is kept in
-[LICENSES/MIT-v2.3.0-and-earlier.txt](LICENSES/MIT-v2.3.0-and-earlier.txt).
+Every release up to and including v2.3.2, feature and patch releases alike (v2.3.2, v2.3.1, v2.3.0,
+v2.2.0 and all earlier ones), was released under the MIT License and stays available under it at
+its tag. That licence text is kept in
+[LICENSES/MIT-v2.3.2-and-earlier.txt](LICENSES/MIT-v2.3.2-and-earlier.txt).
 
 ## How to get one
 
