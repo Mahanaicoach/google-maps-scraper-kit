@@ -894,8 +894,30 @@ JUNK_DOMAIN = ("example", "sentry", "wixpress", "wix.com", "godaddy", "squarespa
                "gov", "mil", "hubspot", "mailchimp", "constantcontact", "sendgrid", "yext", "birdeye", "podium", "zocdoc")
 JUNK_LOCAL = {"name", "email", "user", "you", "someone", "example", "username",
               "youremail", "yourname", "firstname", "lastname", "sample",
-              "noreply", "no-reply", "donotreply", "do-not-reply", "mailer-daemon", "postmaster"}
+              "noreply", "no-reply", "donotreply", "do-not-reply", "mailer-daemon", "postmaster",
+              "abuse", "phishing", "spoof", "spam", "fraud", "dmca", "hostmaster"}
 TOKEN = re.compile(r"[0-9a-f]{16,}")
+# A homepage that shows neither the listing's phone nor a word of its category is someone else's site
+# (Google lists chase.com for a plumber named "Chase LLC"): the same rule as scripts/scrape.py's
+# owns_site (a test checks).
+CATEGORY_STOP = {"store", "shop", "service", "services", "company", "center", "centre", "agency",
+                 "office", "business", "and", "the", "for", "with"}
+TAG_RE = re.compile(r"<(script|style)\b[^>]{0,1000}>.{0,200000}?</\1>|<[^>]{0,2000}>", re.I | re.S)
+
+
+def owns_site(page, row):
+    """False only when the homepage plainly belongs to someone else; True when unsure (no page, under
+    200 characters of text, or a row with neither a phone nor a category)."""
+    page = (page or "")[:400_000]
+    text = " ".join(html.unescape(TAG_RE.sub(" ", page)).split()).lower()
+    if len(text) < 200:
+        return True
+    digits = re.sub(r"\D", "", row.get("phone") or "")
+    stems = {w[:4] for w in re.findall(r"[^\W\d_]{4,}", (row.get("category") or "").lower())
+             if w not in CATEGORY_STOP}
+    if len(digits) < 7 and not stems:
+        return True
+    return (len(digits) >= 7 and digits[-7:] in re.sub(r"\D", "", page)) or any(s in text for s in stems)
 
 
 def junk_domain(dom, junk=JUNK_DOMAIN):
@@ -914,7 +936,7 @@ UA = "Mozilla/5.0 (compatible; google-maps-scraper-kit; +https://github.com/Maha
 # The same patterns as scripts/scrape.py --socials (a test keeps them in step).
 SOCIAL_RE = {
     "instagram": re.compile(r"https?://(?:www\.)?instagram\.com/([A-Za-z0-9_.]+)", re.I),
-    "facebook":  re.compile(r"https?://(?:www\.|m\.|web\.)?facebook\.com/([A-Za-z0-9_.\-]+)", re.I),
+    "facebook":  re.compile(r"https?://(?:www\.|m\.|web\.)?facebook\.com/(profile\.php\?id=\d+|[A-Za-z0-9_.\-]+)", re.I),
     "linkedin":  re.compile(r"https?://(?:[a-z]{2,3}\.)?linkedin\.com/(?:company|in|school)/([A-Za-z0-9_.\-%]+)", re.I),
     "tiktok":    re.compile(r"https?://(?:www\.)?tiktok\.com/@([A-Za-z0-9_.]+)", re.I),
     "youtube":   re.compile(r"https?://(?:www\.)?youtube\.com/(?:@|channel/|c/|user/)([A-Za-z0-9_.\-]+)", re.I),
@@ -1166,8 +1188,13 @@ def add_site_data(rows, seconds, email=True, socials=False, verify=False, get=No
     if browser_sites:
         from website_browser import Budget, merge_status
 
+    not_theirs = set()
+
     def extract(r, page):
         out = {}
+        if not owns_site(page, r):
+            not_theirs.add(id(r))
+            page = ""
         if email and not r.get("emails"):
             found = find_emails(page, site_host(r["website"]))
             if verify:
@@ -1218,8 +1245,8 @@ def add_site_data(rows, seconds, email=True, socials=False, verify=False, get=No
                 out = extract(r, rendered["html"])
                 out["website_fetch_status"] = merge_status(r.get("website_fetch_status"), rendered["status"])
                 return out
-            missing = [r for r in completed if (email and not r.get("emails"))
-                       or (socials and not any(r.get(k) for k in SOCIALS))]
+            missing = [r for r in completed if id(r) not in not_theirs and ((email and not r.get("emails"))
+                       or (socials and not any(r.get(k) for k in SOCIALS)))]
             # HTTP already checked these rows: retries the budget cut off are not "not checked".
             run(missing, retry, 2, min(end, time.monotonic() + 30), "budget_exhausted")
     return len(enriched), pending

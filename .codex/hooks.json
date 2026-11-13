@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 scripts/preview_hook.py 2>/dev/null || python scripts/preview_hook.py 2>/dev/null || true",
+            "timeout": 10,
+            "statusMessage": "Leads preview"
+          }
+        ]
+      }
+    ]
+  }
+}

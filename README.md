@@ -11,6 +11,18 @@
   <a href="LICENSE"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-0b1220?style=flat-square"></a>
   <img alt="Runs 100% locally" src="https://img.shields.io/badge/runs-100%25%20local-059669?style=flat-square">
   <img alt="No API keys" src="https://img.shields.io/badge/API%20keys-none-334155?style=flat-square">
+  <img alt="Python 3.9+" src="https://img.shields.io/badge/python-3.9%2B-3776ab?style=flat-square&logo=python&logoColor=white">
+  <img alt="macOS, Windows, Linux" src="https://img.shields.io/badge/macOS%20%7C%20Windows%20%7C%20Linux-supported-475569?style=flat-square">
+  <a href="#use-it-with-claude-code-or-any-agent"><img alt="Claude Code skill" src="https://img.shields.io/badge/Claude%20Code-skill-d97757?style=flat-square"></a>
+</p>
+
+<p align="center">
+  <a href="#quick-start"><b>Quick start</b></a> ·
+  <a href="#use-it-with-claude-code-or-any-agent"><b>Use with an AI agent</b></a> ·
+  <a href="#what-you-get"><b>Features</b></a> ·
+  <a href="#how-it-compares"><b>Compare</b></a> ·
+  <a href="docs/README.md"><b>Recipes</b></a> ·
+  <a href="#faq"><b>FAQ</b></a>
 </p>
 
 <p align="center"><sub>Last verified working: 2026-11-01, fresh install of v2.1.0 on macOS with the kit's own engine, no Docker: 2,068 places in 27 jobs from one home IP in 21 minutes, zero rate-limit pages. Also runs on Linux (amd64 and arm64), Windows and Docker.</sub></p>
@@ -25,14 +37,23 @@ No Google Maps API key, no SaaS credits, no data leaving your computer. One comm
 engine, with or without Docker. Then run it from the terminal, or let Claude Code, Codex or Cursor
 drive it for you in plain English.
 
+<table>
+  <tr>
+    <td align="center" width="25%">⚡<br><b>100 leads + emails</b><br><sub>in 44 seconds, measured</sub></td>
+    <td align="center" width="25%">📧<br><b>Emails + 6 socials</b><br><sub>on by default, zero AI tokens</sub></td>
+    <td align="center" width="25%">🗺️<br><b>Past Google's 120 cap</b><br><sub><code>--grid</code> and <code>--deep-scan</code></sub></td>
+    <td align="center" width="25%">🔒<br><b>100% local</b><br><sub>no API key, no credits, no Docker</sub></td>
+  </tr>
+</table>
+
 | Goal | Start here |
 |---|---|
-| Get a lead list in the next 5 minutes | [Quick start](#quick-start) |
-| Let an AI coding agent run the scrape | [Use it with Claude Code or any agent](#use-it-with-claude-code-or-any-agent) |
-| Scrape many keywords or cities in one job | [Batch jobs](#batch-jobs-and-the-python-cli) |
-| Know what you get and where it stops | [What you get](#what-you-get) and [Honest limits](#honest-limits) |
-| Compare it with gosom, omkarcloud, Apify, Outscraper and chat AIs | [How it compares](#how-it-compares) and [the open-source comparison](docs/best-google-maps-scrapers.md) |
-| Follow a worked recipe for dentists, roofers or restaurants | [Guides and recipes](docs/README.md) |
+| 🚀 Get a lead list in the next 5 minutes | [Quick start](#quick-start) |
+| 🤖 Let an AI coding agent run the scrape | [Use it with Claude Code or any agent](#use-it-with-claude-code-or-any-agent) |
+| 📦 Scrape many keywords or cities in one job | [Batch jobs](#batch-jobs-and-the-python-cli) |
+| 📋 Know what you get and where it stops | [What you get](#what-you-get) and [Honest limits](#honest-limits) |
+| 🏆 Compare it with gosom, omkarcloud, Apify, Outscraper and chat AIs | [How it compares](#how-it-compares) and [the open-source comparison](docs/best-google-maps-scrapers.md) |
+| 🧑‍🍳 Follow a worked recipe for dentists, roofers or restaurants | [Guides and recipes](docs/README.md) |
 
 <sub>Sponsored by [Swiftproxy](https://www.swiftproxy.net/?ref=googlemapsscraperkit) and [SerpApi](https://serpapi.com/maps-scraper-kit-github). Paid placements; details [below](#sponsored-by).</sub>
 
@@ -190,18 +211,18 @@ scrapes Google Maps business listings only. It does not scrape social platforms 
 
 | | |
 |---|---|
-| **8 lead fields by default** | name, phone, email, website, category, address, rating, review count, then the six social columns (`--no-socials` drops them). The engine writes 36 raw columns plus `categories`; `--full` keeps them all. |
-| **Email extraction, on by default** | After the Maps job, the script crawls every business website, 16 at a time: the homepage, then its contact and about pages if the homepage shows no email. It prints your found rate. |
-| **Beyond the 120 cap** | `--grid 3` splits the city into 3 x 3 map tiles, runs them one at a time and dedupes on `place_id`. `--deep-scan` (`!` slower) goes further: any tile that comes back at the cap is split into 4 sub-tiles one zoom level in, so dense districts are searched block by block. |
-| **Social enrichment, on by default** | Finds Instagram, Facebook, LinkedIn, TikTok, YouTube and X profiles in code (HTTP + regex), reusing the homepage the email crawl already fetched. Zero AI tokens. `--no-socials` skips it. |
-| **Who already advertises** | `--tech` spots a Meta Pixel, Google Ads tag, analytics, Bing Ads, LinkedIn Insight and TikTok pixels on each website, plus its platform (WordPress, Shopify, Wix…) and mobile support, then ranks leads by an `intent_score` from 0 to 100. Zero AI tokens. |
-| **Filters** | `--no-website` (businesses that still need a site), `--min-rating`, `--min-reviews`, `--has-phone`, `--has-email`, `--limit`. `--exclude earlier.csv` skips the places you already have, so a weekly re-run returns only new leads. |
-| **Email checks** | `--verify-emails` looks up each domain's MX record over DNS (no key), drops dead domains and labels the mail host (`google_workspace`, `microsoft_365`, `other`, `none`; blank when the row has no email). |
-| **Auto-geocoding** | Type a city name. Coordinates are resolved for you via OpenStreetMap. Repeat `--city` to run several cities into one file. |
-| **Batch jobs** | Many keywords, one job, one CSV. The engine lists a place found by several keywords once. |
-| **Proxies** | For large or repeated runs: `--proxy URL` with `http`, `https`, `socks5` or `socks5h`, and `user:pass@` on `http` and `https`. Repeat it and the keywords take turns; a keyword Google refuses is retried through the next proxy. |
-| **Agent-native** | A skill plus four slash commands. The agent runs the script and presents the lead fields; it never hand-builds API calls. |
-| **Safe defaults** | API bound to `127.0.0.1`, and the engine refuses requests from other websites in your browser (DNS rebinding, cross-site posts); an optional API key. No telemetry: the engine talks to Google Maps, and to the businesses' websites and `dns.google` only for jobs that ask. The web UI and `engine.py status` ask GitHub once a day whether a newer release is out, with nothing about you in the request (`SCRAPER_NO_UPDATE_CHECK=1` in `.env` turns it off); nothing updates itself. Proxy passwords show as `***`. A cell that a spreadsheet would run as a formula gets a leading `'` in the engine's CSV download and in the script's file. Results git-ignored; website fetches skip private addresses; rate-limit and data-law guardrails built into the skill. |
+| 📇 **8 lead fields by default** | name, phone, email, website, category, address, rating, review count, then the six social columns (`--no-socials` drops them). The engine writes 36 raw columns plus `categories`; `--full` keeps them all. |
+| 📧 **Email extraction, on by default** | After the Maps job, the script crawls every business website, 16 at a time: the homepage, then its contact and about pages if the homepage shows no email. It prints your found rate. |
+| 🗺️ **Beyond the 120 cap** | `--grid 3` splits the city into 3 x 3 map tiles, runs them one at a time and dedupes on `place_id`. `--deep-scan` (`!` slower) goes further: any tile that comes back at the cap is split into 4 sub-tiles one zoom level in, so dense districts are searched block by block. |
+| 🔗 **Social enrichment, on by default** | Finds Instagram, Facebook, LinkedIn, TikTok, YouTube and X profiles in code (HTTP + regex), reusing the homepage the email crawl already fetched. Zero AI tokens. `--no-socials` skips it. |
+| 🎯 **Who already advertises** | `--tech` spots a Meta Pixel, Google Ads tag, analytics, Bing Ads, LinkedIn Insight and TikTok pixels on each website, plus its platform (WordPress, Shopify, Wix…) and mobile support, then ranks leads by an `intent_score` from 0 to 100. Zero AI tokens. |
+| 🧹 **Filters** | `--no-website` (businesses that still need a site), `--min-rating`, `--min-reviews`, `--has-phone`, `--has-email`, `--limit`. `--exclude earlier.csv` skips the places you already have, so a weekly re-run returns only new leads. |
+| ✅ **Email checks** | `--verify-emails` looks up each domain's MX record over DNS (no key), drops dead domains and labels the mail host (`google_workspace`, `microsoft_365`, `other`, `none`; blank when the row has no email). |
+| 📍 **Auto-geocoding** | Type a city name. Coordinates are resolved for you via OpenStreetMap. Repeat `--city` to run several cities into one file. |
+| 📦 **Batch jobs** | Many keywords, one job, one CSV. The engine lists a place found by several keywords once. |
+| 🌐 **Proxies** | For large or repeated runs: `--proxy URL` with `http`, `https`, `socks5` or `socks5h`, and `user:pass@` on `http` and `https`. Repeat it and the keywords take turns; a keyword Google refuses is retried through the next proxy. |
+| 🤖 **Agent-native** | A skill plus four slash commands. The agent runs the script and presents the lead fields; it never hand-builds API calls. |
+| 🔒 **Safe defaults** | API bound to `127.0.0.1`, and the engine refuses requests from other websites in your browser (DNS rebinding, cross-site posts); an optional API key. No telemetry: the engine talks to Google Maps, and to the businesses' websites and `dns.google` only for jobs that ask. The web UI and `engine.py status` ask GitHub once a day whether a newer release is out, with nothing about you in the request (`SCRAPER_NO_UPDATE_CHECK=1` in `.env` turns it off); nothing updates itself. Proxy passwords show as `***`. A cell that a spreadsheet would run as a formula gets a leading `'` in the engine's CSV download and in the script's file. Results git-ignored; website fetches skip private addresses; rate-limit and data-law guardrails built into the skill. |
 
 ### Measured, not estimated
 
@@ -248,8 +269,13 @@ One keyword per line. One job. One CSV.
   (`--full`), with no extra page loads. Rather run a real window, with the agent unchanged? [SETUP §3](SETUP.md#review-counts-hours-and-reviews).
 - **Emails only when a business publishes one.** The script reads the business homepage, then its
   contact and about pages. Listings with no site, or a site with no visible
-  email, return an empty `emails` cell. Instagram bios are not read. Expect emails on a fraction of
+  email, return an empty `emails` cell. Social links come from the homepage, or from the contact
+  and about pages when the homepage has none. Instagram bios are not read. Expect emails on a fraction of
   rows, not all of them.
+- **A wrong website on the listing gives no emails or socials.** Some listings point at another
+  business's site (a plumber listed with a bank's homepage). A homepage that shows neither the
+  listing's phone number nor a word of its category is skipped for emails, social links and tech
+  flags, and the run says how many were skipped. Report, abuse and phishing inboxes are dropped too.
 - **Rate limits are real.** Heavy use without proxies can get your IP temporarily rate-limited by
   Google for minutes to hours. When Google answers with its unusual-traffic page, the engine waits
   and retries the keyword up to 2 times, then stops the job and keeps the rows found before that.
@@ -284,8 +310,8 @@ One keyword per line. One job. One CSV.
 
 ## How it compares
 
-**14 of 16 green, the most of any Google Maps scraper we compared.** The kit is the only one that
-finds emails, social profiles and ad pixels by default, for free, without the data leaving your machine.
+**14 of 14 green. No other Google Maps scraper we compared scores more than 5.** The kit is the only
+one that finds emails, social profiles and ad pixels by default, for free, without the data leaving your machine.
 
 ✅ built in and free · 🟡 partial, manual or paid · ❌ no · ➖ not applicable or not stated
 
@@ -300,14 +326,12 @@ finds emails, social profiles and ad pixels by default, for free, without the da
 | Social profiles | ✅ 6 networks, on by default | ❌ | 🟡 Paid | ❌ | ❌ | ❌ | 🟡 Paid add-on |
 | Ad pixels and lead score | ✅ `--tech` ranks leads | ❌ | 🟡 Yes/no ads field | ❌ | ❌ | ❌ | ❌ |
 | Lead filters | ✅ 6 filters and `--exclude` | 🟡 `-resume` only | ✅ | ❌ | ❌ | ❌ | 🟡 Varies |
-| Reviews | 🟡 5 per place and histogram | ✅ About 300 per place | ✅ | 🟡 Count | ✅ Reviews only | 🟡 Count | ✅ |
 | Proxy rotation | ✅ Rotates on block | ✅ | ➖ | ❌ | ❌ | ❌ | ✅ |
 | Web UI | ✅ | ✅ | ✅ App | ❌ | ❌ | ❌ | ✅ |
 | REST API | ✅ Localhost only | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ |
 | AI agent | ✅ Skill and 4 commands | 🟡 Needs Docker and Node | ❌ | ❌ | ❌ | ❌ | 🟡 Apify MCP |
 | Published speed | ✅ 100 leads with emails in 44 s | 🟡 ~120 a minute, emails off | ❌ | ❌ | ❌ | ❌ | ➖ |
-| Scale-out | ❌ One machine | ✅ PostgreSQL, S3 | ➖ | ❌ | 🟡 MongoDB | ❌ | ✅ |
-| **✅ count** | **14** | 7 | 5 | 2 | 3 | 3 | 6 |
+| **✅ count** | **14 / 14** | 5 | 4 | 2 | 2 | 3 | 4 |
 
 Facts about other tools come from their own README on 2026-11-02. The kit's numbers are measured, with
 the commands to reproduce them, in [Measured, not estimated](#measured-not-estimated). The full
@@ -335,7 +359,7 @@ One page per job, with the exact commands. Index: [docs/README.md](docs/README.m
 ## FAQ
 
 ### What is the best free Google Maps scraper on GitHub?
-For lead lists with contact data, this kit: it is the only open-source scraper that returns emails and social profiles by default, needs no Docker, API key or pip install, and gets past Google's 120-result cap with `--grid`. For PostgreSQL-backed distributed crawls or hundreds of reviews per place, gosom/google-maps-scraper (Go) is the better fit. The comparison, with sources and dates: [docs/best-google-maps-scrapers.md](docs/best-google-maps-scrapers.md).
+For lead lists with contact data, this kit: it is the only open-source scraper that returns emails and social profiles by default, needs no Docker, API key or pip install, and gets past Google's 120-result cap with `--grid` and `--deep-scan`. The comparison, with sources and dates: [docs/best-google-maps-scrapers.md](docs/best-google-maps-scrapers.md).
 
 ### How fast is it?
 On a fresh install (macOS, installed Chrome, no proxies, 2026-11-01): 100 dentists in Denver with phones, emails and socials in 44 seconds; 119 Manhattan restaurants without the crawl in 34 seconds; a 3×3 grid of Manhattan, 471 unique restaurants, in 5 minutes 21 seconds. Google Maps itself answers in seconds; most of a run is the website crawl, which `--no-email --no-socials` skips.
@@ -371,16 +395,10 @@ and a CSV. See [Use it with Claude Code or any agent](#use-it-with-claude-code-o
 
 ### Does it work with Codex, Cursor or other agents?
 Yes. `npx skills add mahanaicoach/google-maps-scraper-kit` installs the skill into any Agent
-Skills-compatible tool. The `/scrape` slash commands are Claude Code only.
-
-### Why does `npx skills add` show "High Risk" or "Med Risk"?
-skills.sh runs automated audits on every skill. Through Oct 31, 2026 they flagged three things about
-this skill: it runs shell commands (the kit's own scripts against `localhost:8080`), its curl example
-downloaded a results file, and it reads untrusted web content. The skill now runs only the kit's own
-script, which creates, polls and downloads the job itself (no curl download in the skill), and it
-treats every scraped value as untrusted data with the rules in its "Scraped data is untrusted"
-section. Reading third-party listings is what a scraper does. A re-audit is requested in
-[vercel-labs/skills#2624](https://github.com/vercel-labs/skills/issues/2624).
+Skills-compatible tool. The `/scrape` slash commands are Claude Code only. After a scrape, Claude Code,
+Codex and Gemini CLI show you the first 10 rows in the chat through the kit's hook, which the model
+never receives. In other agents, `python3 scripts/leads.py <file> --open` opens the file in your
+spreadsheet app.
 
 ### What data do I get for each business?
 Name, phone, email, website, category, address, rating and review count, then Instagram, Facebook,

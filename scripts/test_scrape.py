@@ -255,6 +255,13 @@ class StopsWhenBlocked(unittest.TestCase):
         with open(out, newline="", encoding="utf-8-sig") as f:
             return run.call_count, [r["title"] for r in csv.DictReader(f)], log.getvalue()
 
+    def test_no_scraped_value_reaches_the_output(self):
+        # An agent reads this output: scraped text stays in the file (skills.sh / Snyk W011).
+        _, titles, text = self.run_main(["plumbers in Austin TX", "30.2", "-97.7"], [("job-1", [_row("A")])])
+        self.assertEqual(titles, ["Biz A"])
+        self.assertNotIn("Biz A", text)
+        self.assertIn("saved →", text)
+
     def test_grid_stops_at_the_blocked_cell(self):
         calls, titles, text = self.run_main(["plumbers", "--city", "Austin, TX", "--grid", "2"],
                                             [("job-1", [_row("A"), _row("B")]), scrape.Blocked("✗ Job failed.")])
@@ -437,7 +444,9 @@ class EmailCrawl(unittest.TestCase):
         self.assertEqual(rows[2]["emails"], "info@gamma.io")  # own address on the homepage: no more fetches
         self.assertEqual([u for u in fetched if "gamma" in u], [])
         self.assertEqual(sum(u.startswith("https://beta.org") for u in fetched), 3)
-        self.assertEqual([u for u in fetched if "acme" in u], ["https://acme.com/contact", "https://acme.com/contact-us"])
+        # its 3 contact pages are read at once (same result, no slow chain), each once
+        self.assertEqual(sorted(u for u in fetched if "acme" in u),
+                         ["https://acme.com/about", "https://acme.com/contact", "https://acme.com/contact-us"])
 
     def test_engine_never_asked_for_emails(self):
         sent = []
@@ -454,13 +463,103 @@ class EmailCrawl(unittest.TestCase):
         self.assertEqual(sent[0]["name"], "dentists in Austin TX")  # the web UI lists this name
 
 
+# Seen in a real Austin run: Google lists a bank's homepage as the website of a plumber called
+# "Chase LLC", and the crawl returned the bank's report address and social profiles for the plumber.
+BANK = ("<html><head><title>Credit cards, mortgages, banking | Bank</title><script>var t='plumbing'</script>"
+        "</head><body>" + "Open a checking account, compare credit cards and apply for a mortgage today. " * 4 +
+        '<a href="mailto:phishing@bank.test">Report fraud</a> <a href="https://instagram.com/bigbank">IG</a>'
+        "</body></html>")
+PLUMBER_ROW = {"website": "https://bank.test", "emails": "", "phone": "(512) 890-2933", "category": "Plumber"}
+
+
+class OwnsSite(unittest.TestCase):
+    def setUp(self):
+        scrape._NOT_THEIRS.clear()
+
+    def test_someone_elses_site_is_turned_down(self):
+        self.assertFalse(scrape.owns_site(BANK, PLUMBER_ROW))  # words inside <script> do not count
+
+    def test_trade_word_or_phone_digits_keep_the_site(self):
+        filler = "We serve all of Travis County with fast, friendly work and upfront prices. " * 4
+        self.assertTrue(scrape.owns_site(f"<p>{filler} Drain and plumbing repair.</p>", PLUMBER_ROW))
+        self.assertTrue(scrape.owns_site(f'<p>{filler}</p><a href="tel:+15128902933">Call</a>', PLUMBER_ROW))
+        self.assertTrue(scrape.owns_site(f"<p>{filler} Call 512.890.2933</p>", PLUMBER_ROW))
+
+    def test_unsure_keeps_the_site(self):
+        self.assertTrue(scrape.owns_site("", PLUMBER_ROW))
+        self.assertTrue(scrape.owns_site("<div id=app></div><script>" + "x" * 5000 + "</script>", PLUMBER_ROW))
+        self.assertTrue(scrape.owns_site(BANK, {"website": "https://bank.test", "phone": "", "category": ""}))
+
+    def test_crawl_skips_someone_elses_site(self):
+        rows = [dict(PLUMBER_ROW)]
+        with mock.patch.object(scrape, "_fetch_cached", return_value=BANK), \
+             mock.patch.object(scrape, "_fetch_html") as pages, redirect_stdout(io.StringIO()) as out:
+            scrape.enrich_emails(rows, deep=True)
+            scrape.enrich_sites(rows, scrape._find_socials, scrape.SOCIAL_FIELDS, "socials")
+        pages.assert_not_called()  # no contact pages of the wrong site either
+        self.assertEqual(rows[0]["emails"], "")
+        self.assertEqual(rows[0]["instagram"], "")
+        self.assertIn("1 website(s) skipped", out.getvalue())
+
+
+class SocialsFromContactPages(unittest.TestCase):
+    # Seen in a benchmark against another scraper: 2 of 4 sites "without socials" linked them only
+    # on the contact or about page.
+    def setUp(self):
+        scrape._NOT_THEIRS.clear()
+        scrape._PAGE_SOCIALS.clear()
+
+    def test_contact_page_socials_when_the_homepage_has_none(self):
+        rows = [{"website": "https://acme.test"}, {"website": "https://beta.test"}]
+        homes = {"https://acme.test": '<a href="/contact">Contact</a>',
+                 "https://beta.test": '<a href="https://instagram.com/betaplumbing">ig</a> <a href="/about">About</a>'}
+        fetched = []
+        def page(url, timeout=8):
+            fetched.append(url)
+            return '<a href="https://www.facebook.com/acmeplumbing">fb</a>' if url == "https://acme.test/contact" else ""
+        with mock.patch.object(scrape, "_fetch_cached", lambda u: homes[u]), \
+             mock.patch.object(scrape, "_fetch_html", page), redirect_stdout(io.StringIO()):
+            scrape.enrich_sites(rows, scrape._find_socials, scrape.SOCIAL_FIELDS, "socials", deep=True)
+        self.assertEqual(rows[0]["facebook"], "https://www.facebook.com/acmeplumbing")
+        self.assertEqual(rows[1]["instagram"], "https://instagram.com/betaplumbing")
+        self.assertEqual([u for u in fetched if "beta" in u], [])  # homepage had one: no extra fetches
+        self.assertEqual(fetched[0], "https://acme.test/contact")
+
+    def test_page_read_by_the_email_crawl_is_not_fetched_again(self):
+        rows = [{"website": "https://acme.test", "emails": ""}]
+        fetched = []
+        def page(url, timeout=8):
+            fetched.append(url)
+            return '<a href="https://www.facebook.com/acmeplumbing">fb</a>' if url == "https://acme.test/contact" else ""
+        with mock.patch.object(scrape, "_fetch_cached", return_value='<a href="/contact">Contact</a>'), \
+             mock.patch.object(scrape, "_fetch_html", page), redirect_stdout(io.StringIO()):
+            scrape.enrich_emails(rows, deep=True)
+            scrape.enrich_sites(rows, scrape._find_socials, scrape.SOCIAL_FIELDS, "socials", deep=True)
+        self.assertEqual(rows[0]["facebook"], "https://www.facebook.com/acmeplumbing")
+        self.assertEqual(fetched.count("https://acme.test/contact"), 1)
+
+    def test_facebook_page_without_a_vanity_name(self):
+        # Many small businesses have only facebook.com/profile.php?id=...; it was skipped as a generic link.
+        page = '<a href="https://www.facebook.com/profile.php?id=61556916315095&amp;ref=site">fb</a>'
+        self.assertEqual(scrape._find_socials(page)["facebook"], "https://www.facebook.com/profile.php?id=61556916315095")
+        self.assertEqual(scrape._find_socials('<a href="https://facebook.com/profile.php">x</a>')["facebook"], "")
+
+    def test_homepage_only_without_deep(self):
+        rows = [{"website": "https://acme.test"}]
+        with mock.patch.object(scrape, "_fetch_cached", return_value='<a href="/contact">c</a>'), \
+             mock.patch.object(scrape, "_fetch_html") as pages, redirect_stdout(io.StringIO()):
+            scrape.enrich_sites(rows, scrape._find_socials, scrape.SOCIAL_FIELDS, "socials")
+        pages.assert_not_called()
+
+
 class IsRealEmail(unittest.TestCase):
     def test_placeholders_and_vendors(self):
         for e in ("user@domain.com", "example@gmail.com", "youremail@yourdomain.com",
                   "name@company.org", "a@b.wixpress.com", "logo@2x.png",
                   "support@linktr.ee", "help@sites.officite.com",  # seen in audit runs
                   "no-reply@cafe.test", "donotreply@cafe.test", "5f2b9c0e1d7a4b3c8e6f@cafe.test",
-                  "clerk@city.gov", "x@agency.gov.uk", "reviews@birdeye.com", "a@b.hubspot.com"):
+                  "clerk@city.gov", "x@agency.gov.uk", "reviews@birdeye.com", "a@b.hubspot.com",
+                  "phishing@bank.test", "abuse@cafe.test"):  # a bank's report inbox, seen on a plumber's row
             self.assertFalse(scrape.is_real_email(e), e)
         for e in ("info@acmeplumbing.test", "owner@gmail.com", "hello@cafe-one.co.test",
                   "info@gov-tech.test", "cafe1234@cafe.test", "replies@cafe.test"):
@@ -503,10 +602,18 @@ class ContactLinks(unittest.TestCase):
     def test_locations_team_impressum_kontakt(self):
         html = """<a href="/standorte">Our Locations</a> <a href="/rechtliches">Impressum</a>
                   <a href="/kontakt-uns">Kontakt</a> <a href="/team">Meet the team</a> <a href="/menu">Menu</a>"""
-        self.assertEqual(scrape.contact_links(html, "https://acme.de"),
-                         ["https://acme.de/standorte", "https://acme.de/rechtliches", "https://acme.de/kontakt-uns"])
+        self.assertEqual(scrape.contact_links(html, "https://acme.de"),  # contact pages first, then team
+                         ["https://acme.de/rechtliches", "https://acme.de/kontakt-uns", "https://acme.de/team"])
         self.assertEqual(scrape.contact_links('<a href="/locations">Branches</a>', "https://acme.com")[0],
                          "https://acme.com/locations")
+
+    def test_contact_before_about_and_one_page_counts_once(self):
+        # Seen in a benchmark: /about-us/, /about-us and a location page used all 3 reads before /contact-us/.
+        html = ('<a href="/about-us/">About</a> <a href="/about-us">About us</a> '
+                '<a href="/location/arlington/">Arlington location</a> <a href="/contact-us/">Contact us</a> '
+                '<a href="https://www.aaa.test/contact-us/">Contact</a>')  # the same page with www.
+        self.assertEqual(scrape.contact_links(html, "https://aaa.test/"),
+                         ["https://aaa.test/contact-us/", "https://aaa.test/about-us/", "https://aaa.test/location/arlington/"])
 
     def test_fallbacks_and_max(self):
         self.assertEqual(scrape.contact_links("", "acme.com"),
@@ -1405,6 +1512,89 @@ class UpdateNotice(unittest.TestCase):
 
     def test_local_version_reads_serve_py(self):
         self.assertRegex(enginepy.local_version(), r"^\d+\.\d+\.\d+")
+
+
+class PreviewHook(unittest.TestCase):
+    """scripts/preview_hook.py shows the user the saved rows as a systemMessage, cleaned of escapes."""
+    HOOK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "preview_hook.py")
+
+    def hook(self, command, stdout):
+        import subprocess
+        event = {"tool_name": "Bash", "tool_input": {"command": command}, "tool_response": {"stdout": stdout}}
+        return subprocess.run([sys.executable, self.HOOK], input=json.dumps(event), capture_output=True,
+                              text=True, timeout=10).stdout
+
+    def test_shows_rows_to_the_user(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "results-abc.csv")
+            with open(path, "w", newline="", encoding="utf-8-sig") as f:
+                w = csv.DictWriter(f, fieldnames=scrape.LEAD)
+                w.writeheader()
+                w.writerow({"title": "Biz A\x1b[31m\u202e", "phone": "+1 512-555-0100", "emails": "a@a.com"})
+            out = self.hook("python3 scripts/scrape.py plumbers", f"  saved → {path}  (opens in Excel)\n")
+        msg = json.loads(out)["systemMessage"]
+        self.assertIn("Biz A", msg)
+        self.assertIn("+1 512-555-0100", msg)
+        self.assertNotIn("\x1b", msg)
+        self.assertNotIn("\u202e", msg)
+        self.assertIn("first 1 of 1 rows", msg)
+
+    def test_reads_gemini_event_shape(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "r.csv")
+            with open(path, "w", newline="", encoding="utf-8-sig") as f:
+                f.write("title,phone\nBiz G,+1 2\n")
+            event = {"cwd": d, "tool_input": {"command": "python3 scripts/leads.py r.csv --no-website"},
+                     "tool_response": {"llmContent": "  saved → r.csv  (opens in Excel)\n", "returnDisplay": ""}}
+            import subprocess
+            out = subprocess.run([sys.executable, self.HOOK], input=json.dumps(event), capture_output=True,
+                                 text=True, timeout=10).stdout
+        self.assertIn("1. Biz G · +1 2", json.loads(out)["systemMessage"])
+
+    def test_hook_configs_match(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        claude = json.load(open(os.path.join(root, ".claude", "settings.json")))["hooks"]["PostToolUse"][0]["hooks"][0]["command"]
+        codex = json.load(open(os.path.join(root, ".codex", "hooks.json")))["hooks"]["PostToolUse"][0]["hooks"][0]["command"]
+        gemini = json.load(open(os.path.join(root, ".gemini", "settings.json")))["hooks"]["AfterTool"][0]["hooks"][0]["command"]
+        skill = open(os.path.join(root, ".claude", "skills", "google-maps-scraper", "SKILL.md"), encoding="utf-8").read()
+        self.assertEqual({claude, codex, gemini}, {claude})  # one command, so Claude Code dedupes skill + settings
+        self.assertIn(f'command: "{claude}"', skill)
+        self.assertIn("scripts/preview_hook.py", claude)
+
+    def test_silent_for_other_commands_and_missing_files(self):
+        self.assertEqual(self.hook("ls", "  saved → /nope.csv  (x)\n"), "")
+        self.assertEqual(self.hook("cat scripts/not_leads.pyc", "  saved → /nope.csv  (x)\n"), "")
+        self.assertEqual(self.hook("python3 scripts/scrape.py x", "  saved → /nope.csv  (x)\n"), "")
+
+
+class LeadsTool(unittest.TestCase):
+    """scripts/leads.py answers row questions in code: it prints numbers and a path, never a scraped value."""
+    def test_filter_and_sort_print_no_scraped_value(self):
+        spec = importlib.util.spec_from_file_location(
+            "leads", os.path.join(os.path.dirname(os.path.abspath(__file__)), "leads.py"))
+        leads = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(leads)
+        rows = [{"title": "Biz A", "phone": "+1 1", "emails": "", "website": "", "review_rating": "4.9", "review_count": "10"},
+                {"title": "Biz B", "phone": "", "emails": "b@b.com", "website": "https://b.com", "review_rating": "4.0", "review_count": "99"},
+                {"title": "Biz C", "phone": "+1 3", "emails": "", "website": "", "review_rating": "4.6", "review_count": "50"}]
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "results-x.csv")
+            with open(src, "w", newline="", encoding="utf-8-sig") as f:
+                w = csv.DictWriter(f, fieldnames=list(rows[0]))
+                w.writeheader()
+                w.writerows(rows)
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                leads.main([src, "--no-website", "--sort", "reviews"])
+            with open(os.path.join(d, "results-x-filtered.csv"), encoding="utf-8-sig") as f:
+                kept = [r["title"] for r in csv.DictReader(f)]
+        text = buf.getvalue()
+        self.assertEqual(kept, ["Biz C", "Biz A"])
+        self.assertIn("kept 2 of 3", text)
+        self.assertIn("no website 2", text)
+        self.assertIn("saved →", text)
+        for name in ("Biz A", "Biz B", "Biz C", "b@b.com", "+1 1"):
+            self.assertNotIn(name, text)
 
 
 if __name__ == "__main__":

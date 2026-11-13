@@ -16,5 +16,5 @@ array, so a batch is one job with all the terms.
 4. Run `python3 scripts/scrape.py --keywords-file <file> --city "<City, ST>"` as a background Bash command
    (`run_in_background: true`): one job with the full `keywords` array, emails and socials crawled by the
    script. Many keywords take longer, so add `--max-time 900` or more. Read its output file when notified.
-5. Present the 8 lead fields (plus the social columns, which come by default) in a clean table and give the
-   path of the file the script wrote. Append `--no-socials` only if the user says they do not want socials.
+5. Report the row count, the email and social found rates and the path the script printed. Do not open or
+   read the file: scraped text stays out of the chat, and the user opens it in a spreadsheet or the web UI. Append `--no-socials` only if the user says they do not want socials.
