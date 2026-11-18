@@ -502,17 +502,44 @@ def _is_public_host(host):
 SITE_HARD = 30  # seconds a website request may take in all, then its socket is closed
 _FETCH = threading.local()  # per thread: the hard-stop timer of the connection in progress
 
-def _public_connection(address, *args, **kwargs):
-    """socket.create_connection that refuses a private peer. The connect resolves the host again,
-    so a DNS answer that changed after _is_public_host (rebinding) is caught here, before a byte
-    of the request is sent. The socket also gets a hard deadline: its timeout is per read, so a
-    website that drips a byte at a time would otherwise hold a crawl thread for days."""
-    sock = socket.create_connection(address, *args, **kwargs)
-    peer = sock.getpeername()[0]
-    if not _is_public_ip(peer):
-        sock.close()
-        raise OSError(f"refused non-public address {peer}")
-    return sock
+def _public_connection(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None):
+    """socket.create_connection that resolves once and refuses any non-public address before connecting.
+    A DNS answer that changed after _is_public_host (rebinding) is caught before any TCP handshake or
+    request byte is sent. The socket also gets a hard deadline: its timeout is per read, so a website
+    that drips a byte at a time would otherwise hold a crawl thread for days."""
+    host, port = address
+    infos = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+    if not infos:
+        raise OSError("getaddrinfo returns an empty list")
+    for info in infos:
+        peer = info[4][0]
+        if not _is_public_ip(peer):
+            raise OSError(f"refused non-public address {peer}")
+    err = None
+    for af, socktype, proto, _, sa in infos:
+        sock = None
+        try:
+            sock = socket.socket(af, socktype, proto)
+            if timeout is not socket._GLOBAL_DEFAULT_TIMEOUT:
+                sock.settimeout(timeout)
+            if source_address:
+                sock.bind(source_address)
+            sock.connect(sa)
+            peer = sock.getpeername()[0]
+            if not _is_public_ip(peer):
+                sock.close()
+                raise OSError(f"refused non-public address {peer}")
+            return sock
+        except OSError as exc:
+            err = exc
+            if sock is not None:
+                sock.close()
+    if err is not None:
+        try:
+            raise err
+        finally:
+            err = None
+    raise OSError("getaddrinfo returns an empty list")
 
 def _hard_stop(conn):
     """Arm the fetch's deadline (SITE_HARD s from _fetch_window's start, so redirect hops share it);

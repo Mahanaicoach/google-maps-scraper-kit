@@ -414,14 +414,29 @@ class Emails(unittest.TestCase):
     def test_private_peer_and_redirect_refused(self):
         srv = socket.socket()
         srv.bind(("127.0.0.1", 0))
-        srv.listen(1)
+       srv.listen(1)
+        srv.settimeout(0.15)
         with self.assertRaisesRegex(OSError, "non-public"):
             jobs._public_connection(srv.getsockname())
+        with self.assertRaises(socket.timeout):
+            srv.accept()
         srv.close()
         import urllib.request
         req = urllib.request.Request("https://example.com/")
         self.assertIsNone(jobs._Redirects().redirect_request(req, None, 302, "Found", {}, "http://127.0.0.1:8080/api/v1/jobs"))
         self.assertIsNone(jobs._Redirects().redirect_request(req, None, 302, "Found", {}, "http://169.254.169.254/"))
+
+    def test_public_connection_rejects_dual_homed_before_socket(self):
+        import unittest.mock
+        dual = [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", 80)),
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("127.0.0.1", 80)),
+        ]
+        with unittest.mock.patch.object(jobs.socket, "getaddrinfo", return_value=dual), \
+             unittest.mock.patch.object(jobs.socket, "socket") as mock_socket:
+            with self.assertRaisesRegex(OSError, "non-public"):
+                jobs._public_connection(("example.com", 80))
+            mock_socket.assert_not_called()
 
 
 class Server(Fakes):
