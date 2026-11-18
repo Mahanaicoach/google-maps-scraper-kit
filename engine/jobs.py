@@ -986,15 +986,43 @@ def _public_host(host):
 _FETCH = threading.local()  # per thread: the hard-stop timer of the connection in progress
 
 
-def _public_connection(address, *args, **kwargs):
-    """create_connection that refuses a private peer: catches a DNS answer that changed (rebinding).
+def _public_connection(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None):
+    """create_connection that resolves once and refuses any non-public address before connecting:
+    catches a DNS answer that changed (rebinding) without completing a TCP handshake to a private peer.
     The socket also gets a hard deadline (SITE_HARD s): its timeout is per read, so a website that
     drips a byte at a time would otherwise hold a crawl thread, and the engine's exit, for days."""
-    sock = socket.create_connection(address, *args, **kwargs)
-    if not _public_ip(sock.getpeername()[0]):
-        sock.close()
-        raise OSError("refused a non-public address")
-    return sock
+    host, port = address
+    infos = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+    if not infos:
+        raise OSError("getaddrinfo returns an empty list")
+    for info in infos:
+        peer = info[4][0]
+        if not _public_ip(peer):
+            raise OSError(f"refused a non-public address {peer}")
+    err = None
+    for af, socktype, proto, _, sa in infos:
+        sock = None
+        try:
+            sock = socket.socket(af, socktype, proto)
+            if timeout is not socket._GLOBAL_DEFAULT_TIMEOUT:
+                sock.settimeout(timeout)
+            if source_address:
+                sock.bind(source_address)
+            sock.connect(sa)
+            if not _public_ip(sock.getpeername()[0]):
+                sock.close()
+                raise OSError("refused a non-public address")
+            return sock
+        except OSError as exc:
+            err = exc
+            if sock is not None:
+                sock.close()
+    if err is not None:
+        try:
+            raise err
+        finally:
+            err = None
+    raise OSError("getaddrinfo returns an empty list")
 
 
 def _hard_stop(conn):
