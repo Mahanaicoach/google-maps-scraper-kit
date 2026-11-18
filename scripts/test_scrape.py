@@ -334,6 +334,27 @@ class ExtractEmails(unittest.TestCase):
 
 
 class PublicHostGuard(unittest.TestCase):
+    def test_public_connection_refuses_before_tcp_handshake_and_dual_homed(self):
+        srv = socket.socket()
+        try:
+            srv.bind(("127.0.0.1", 0))
+            srv.listen(1)
+            srv.settimeout(0.15)
+            with self.assertRaisesRegex(OSError, "non-public"):
+                scrape._public_connection(srv.getsockname())
+            with self.assertRaises(socket.timeout):
+                srv.accept()
+        finally:
+            srv.close()
+        dual = [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", 80)),
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("127.0.0.1", 80)),
+        ]
+        with mock.patch.object(scrape.socket, "getaddrinfo", return_value=dual), \
+             mock.patch.object(scrape.socket, "socket") as mock_socket:
+            with self.assertRaisesRegex(OSError, "non-public"):
+                scrape._public_connection(("example.com", 80))
+            mock_socket.assert_not_called()
     def test_private_addresses_blocked(self):
         for host in ("localhost", "127.0.0.1", "10.0.0.5", "192.168.1.1", "169.254.169.254", "::1", ""):
             self.assertFalse(scrape._is_public_host(host), host)
