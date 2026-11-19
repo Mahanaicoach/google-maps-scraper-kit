@@ -69,4 +69,4 @@ using Docker. A skill installed on its own has no `scripts/`: ask the user to in
 offline checks, no network and no Chrome. Engine changes go in `engine/`, with a test.
 
 ## Attribution
-The kit and its engine are MIT licensed. `CREDITS.md` names the projects it builds on; keep it and `LICENSE` intact.
+The kit and its engine are AGPL-3.0 licensed, with a commercial licence option (`COMMERCIAL.md`); every release up to and including v2.3.2 (feature and patch releases alike) was MIT. `CREDITS.md` names the projects it builds on; keep it and `LICENSE` intact.

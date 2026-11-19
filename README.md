@@ -8,7 +8,7 @@
   <a href="https://github.com/Mahanaicoach/google-maps-scraper-kit/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/Mahanaicoach/google-maps-scraper-kit?style=flat-square&color=f59e0b"></a>
   <a href="https://github.com/Mahanaicoach/google-maps-scraper-kit/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/Mahanaicoach/google-maps-scraper-kit?style=flat-square&color=0b1220"></a>
   <a href="https://github.com/Mahanaicoach/google-maps-scraper-kit/commits/master"><img alt="Last commit" src="https://img.shields.io/github/last-commit/Mahanaicoach/google-maps-scraper-kit?style=flat-square&color=334155"></a>
-  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-0b1220?style=flat-square"></a>
+  <a href="LICENSE"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-0b1220?style=flat-square"></a>
   <img alt="Runs 100% locally" src="https://img.shields.io/badge/runs-100%25%20local-059669?style=flat-square">
   <img alt="No API keys" src="https://img.shields.io/badge/API%20keys-none-334155?style=flat-square">
   <img alt="Python 3.9+" src="https://img.shields.io/badge/python-3.9%2B-3776ab?style=flat-square&logo=python&logoColor=white">
@@ -365,7 +365,9 @@ For lead lists with contact data, this kit: it is the only open-source scraper t
 On a fresh install (macOS, installed Chrome, no proxies, 2026-11-01): 100 dentists in Denver with phones, emails and socials in 44 seconds; 119 Manhattan restaurants without the crawl in 34 seconds; a 3×3 grid of Manhattan, 471 unique restaurants, in 5 minutes 21 seconds. Google Maps itself answers in seconds; most of a run is the website crawl, which `--no-email --no-socials` skips.
 
 ### Is this Google Maps scraper free?
-Yes. The kit and its engine are MIT licensed. There are no credits, subscriptions or API keys. You
+Yes. The kit and its engine are open source under the AGPL-3.0: free to use, also for business, and
+you keep everything you scrape. There are no credits, subscriptions or API keys. A
+[commercial licence](COMMERCIAL.md) exists for reselling it as a closed service. You
 need Python and Chrome on your own machine, or Docker.
 
 ### Do I need a Google Maps API key or the Google Places API?
@@ -526,4 +528,7 @@ Contributions: [CONTRIBUTING.md](CONTRIBUTING.md). Security reports: [SECURITY.m
 
 ## License
 
-Built by [Mahan](https://github.com/Mahanaicoach). MIT licensed. Third-party components: [CREDITS.md](CREDITS.md).
+Built by [Mahan](https://github.com/Mahanaicoach). Dual licensed: [AGPL-3.0](LICENSE), free to use,
+change and self-host, with changes to a hosted or shared version published under the same licence;
+or a [commercial licence](COMMERCIAL.md) for closed, hosted or white-label use. All releases up
+to and including v2.3.2, feature and patch releases alike, remain MIT. Third-party components: [CREDITS.md](CREDITS.md).

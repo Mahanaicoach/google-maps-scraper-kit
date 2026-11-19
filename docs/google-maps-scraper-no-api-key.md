@@ -35,7 +35,7 @@ Illustrative rows only:
 ## What no API key means for cost
 
 - No quota. There is no daily request allowance to run out of.
-- No billing. There are no credits, subscriptions or per-result charges. The kit and its engine are MIT licensed.
+- No billing. There are no credits, subscriptions or per-result charges. The kit and its engine are open source (AGPL-3.0).
 - No account. You do not sign in to Google or to any SaaS to run a scrape.
 - No data leaving your machine. Results are saved as local files and are git-ignored.
 
