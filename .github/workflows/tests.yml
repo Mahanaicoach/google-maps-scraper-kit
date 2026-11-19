@@ -19,7 +19,7 @@ jobs:
         exclude:  # macOS arm64 runners are scarce; 3.14 on macOS is enough, ubuntu and windows still run 3.12
           - {os: macos-latest, python: "3.12"}
         include:  # every version the docs promise, 3.9 up, once each; macOS's own python3 3.9 is run by hand
-          - {os: ubuntu-latest, python: "3.9"}
+          - {os: ubuntu-24.04, python: "3.9"} # actions/python-versions has no 3.9 build for ubuntu-26.04
           - {os: ubuntu-latest, python: "3.10"}
           - {os: ubuntu-latest, python: "3.11"}
           - {os: ubuntu-latest, python: "3.13"}
