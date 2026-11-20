@@ -538,8 +538,9 @@ function tags(box, list) {{  // each pick is a button; pressing it removes the p
   }});
 }}
 function combo(input, box, source, choose) {{  // a box that takes only picks from its own list: arrows move, Enter or a click picks
-  let items = [], active = -1, stale = false;
+  let items = [], active = -1, stale = false, shut = false;  // shut: the list was closed on purpose; a lookup already on its way must not reopen it
   function show(list) {{
+    if (shut && list.length) return;  // a late answer to an older keystroke
     items = list; active = list.length ? 0 : -1; stale = false; box.replaceChildren();
     list.forEach((it, i) => {{
       const li = document.createElement('li'); li.id = box.id + '-' + i; li.setAttribute('role', 'option'); li.textContent = it.label;
@@ -552,20 +553,21 @@ function combo(input, box, source, choose) {{  // a box that takes only picks fr
     if (active < 0) return input.removeAttribute('aria-activedescendant');
     input.setAttribute('aria-activedescendant', box.id + '-' + active); box.children[active].scrollIntoView({{block: 'nearest'}});
   }}
-  function pick(i) {{ choose(items[i]); input.value = ''; say('', ''); source('', show); }}
+  function pick(i) {{ shut = true; choose(items[i]); input.value = ''; say('', ''); show([]); }}  // closed, so the new tag shows; typing or ArrowDown brings the list back
   input.addEventListener('input', () => {{  // the list shown belongs to the old text until the source answers
-    items = []; active = -1; stale = true; mark(); if ($('msg').className === 'bad') say('', ''); source(input.value.trim(), show); }});
-  input.addEventListener('focus', () => source(input.value.trim(), show));
+    shut = false; items = []; active = -1; stale = true; mark(); if ($('msg').className === 'bad') say('', ''); source(input.value.trim(), show); }});
+  input.addEventListener('focus', () => {{ shut = false; source(input.value.trim(), show); }});
   input.addEventListener('blur', () => show([]));
   input.addEventListener('keydown', ev => {{
     if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {{
-      ev.preventDefault(); if (!items.length) return;
+      ev.preventDefault();
+      if (!items.length) {{ if (ev.key === 'ArrowDown') {{ shut = false; source(input.value.trim(), show); }} return; }}
       active = (active + (ev.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length; mark();
     }} else if (ev.key === 'Enter') {{  // never submits the form
       ev.preventDefault();
       if (active >= 0) pick(active);
       else if (input.value.trim() && !stale) say('"' + input.value.trim() + '" is not in the list. Type a few letters, then pick from it.', 'bad');
-    }} else if (ev.key === 'Escape') show([]);
+    }} else if (ev.key === 'Escape') {{ shut = true; show([]); }}
   }});
 }}
 combo($('what'), $('what-opts'), (q, show) => {{  // names that start with q first, then the rest; 50 at most
