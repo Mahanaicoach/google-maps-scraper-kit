@@ -1195,7 +1195,8 @@ class Websites(unittest.TestCase):
         import scrape  # the same rule as the script (owns_site in both files)
         self.assertEqual((jobs.CATEGORY_STOP, jobs.TAG_RE.pattern), (scrape._CATEGORY_STOP, scrape._TAG_RE.pattern))
         ok = "We fix leaks fast across Austin with upfront prices and same-day visits. " * 4
-        for page in (bank, ok + " plumbing", ok + " 512-890-2933", ok, "", "<p>short</p>"):
+        ar_ok = ("نقدم خدماتنا المميزة في مسقط وسلطنة عمان بأعلى معايير الجودة والاحترافية على مدار الساعة. " * 4) + " ٥١٢-٨٩٠-٢٩٣٣"
+        for page in (bank, ok + " plumbing", ok + " 512-890-2933", ar_ok, ok, "", "<p>short</p>"):
             self.assertEqual(jobs.owns_site(page, rows[0]), scrape.owns_site(page, rows[0]), page[:40])
 
     def test_mx_answers(self):
@@ -1697,6 +1698,7 @@ class AuditGuards(unittest.TestCase):
     def test_ascii_url_encodes_non_ascii_path(self):
         self.assertEqual(jobs.ascii_url("http://h/\u043a?q=\u00e4"), "http://h/%D0%BA?q=%C3%A4")
         self.assertEqual(jobs.ascii_url("http://h/plain?x=1"), "http://h/plain?x=1")
+        self.assertEqual(jobs.ascii_url("https://موقع.عمان/تواصل"), "https://xn--4gbrim.xn--mgb9awbf/%D8%AA%D9%88%D8%A7%D8%B5%D9%84")
 
     def test_read_capped_stops_at_the_deadline(self):
         """A real dripping socket, with no hard stop: read1 lets the deadline check run between bytes."""
