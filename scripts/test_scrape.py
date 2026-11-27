@@ -485,6 +485,12 @@ class OwnsSite(unittest.TestCase):
         self.assertTrue(scrape.owns_site(f'<p>{filler}</p><a href="tel:+15128902933">Call</a>', PLUMBER_ROW))
         self.assertTrue(scrape.owns_site(f"<p>{filler} Call 512.890.2933</p>", PLUMBER_ROW))
 
+    def test_arabic_eastern_digits_and_bilingual_stems_keep_the_site(self):
+        ar_filler = "نقدم خدماتنا المميزة في مسقط وسلطنة عمان بأعلى معايير الجودة والاحترافية على مدار الساعة. " * 4
+        self.assertTrue(scrape.owns_site(f"<p>{ar_filler} اتصل بنا: ٥١٢.٨٩٠.٢٩٣٣</p>", PLUMBER_ROW))
+        self.assertTrue(scrape.owns_site(f"<p>{ar_filler} عِيَادَةُ الأَسْنَانِ التخصصية</p>",
+                                         {"website": "https://clinic.om", "phone": "+968 24 000000", "category": "Dental clinic"}))
+
     def test_unsure_keeps_the_site(self):
         self.assertTrue(scrape.owns_site("", PLUMBER_ROW))
         self.assertTrue(scrape.owns_site("<div id=app></div><script>" + "x" * 5000 + "</script>", PLUMBER_ROW))
@@ -1293,6 +1299,7 @@ class AuditGuards(unittest.TestCase):
 
     def test_non_ascii_path_is_percent_encoded(self):
         self.assertEqual(scrape._ascii_url("http://h/\u043a?q=\u00e4"), "http://h/%D0%BA?q=%C3%A4")
+        self.assertEqual(scrape._ascii_url("https://موقع.عمان/تواصل"), "https://xn--4gbrim.xn--mgb9awbf/%D8%AA%D9%88%D8%A7%D8%B5%D9%84")
 
     def test_hostile_pages_do_not_stall_the_regexes(self):
         t = time.monotonic()

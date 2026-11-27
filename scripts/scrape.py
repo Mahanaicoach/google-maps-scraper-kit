@@ -564,15 +564,19 @@ def _read_capped(resp, cap, seconds):
     return bytes(out)
 
 def _ascii_url(url):
-    """The URL with a non-ASCII path or query percent-encoded (http.client refuses to send them raw):
+    """The URL with an IDN host punycoded and a non-ASCII path or query percent-encoded (http.client refuses to send them raw):
     a site at /контакты was silently skipped."""
     try:
         p = urllib.parse.urlsplit(url)
-        if p.path.isascii() and p.query.isascii():
+        netloc = p.netloc
+        if not netloc.isascii() and p.hostname:
+            host_ascii = p.hostname.encode("idna").decode("ascii")
+            netloc = f"{host_ascii}:{p.port}" if p.port else host_ascii
+        if netloc == p.netloc and p.path.isascii() and p.query.isascii():
             return url
-        return urllib.parse.urlunsplit((p.scheme, p.netloc, urllib.parse.quote(p.path, safe="/%:@&=+$,;~!*'()"),
+        return urllib.parse.urlunsplit((p.scheme, netloc, urllib.parse.quote(p.path, safe="/%:@&=+$,;~!*'()"),
                                         urllib.parse.quote(p.query, safe="=&%+/?:@;,!*'()$"), ""))
-    except ValueError:
+    except (ValueError, UnicodeError):
         return url
 
 class _PublicPeer:
@@ -716,21 +720,45 @@ _CATEGORY_STOP = {"store", "shop", "service", "services", "company", "center", "
 _TAG_RE = re.compile(r"<(script|style)\b[^>]{0,1000}>.{0,200000}?</\1>|<[^>]{0,2000}>", re.I | re.S)
 _NOT_THEIRS = set()  # websites owns_site() turned down in this run, for the summary line
 _PAGE_SOCIALS = {}  # contact/about page URL -> its social links, read once by the email crawl (small: no HTML kept)
+_AR_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
+_AR_DIACRITICS = re.compile(r"[\u064B-\u065F\u0670\u0640]")
+_AR_ALEF = str.maketrans("أإآ", "ااا")
+_BILINGUAL_STEMS = {
+    "dent": {"عياد", "اسنا", "طبيب"}, "clin": {"عياد", "مركز", "طبيب"},
+    "rest": {"مطعم", "ماكو", "مطبخ"}, "cafe": {"مقهى", "كافي", "قهوة"},
+    "hote": {"فندق", "شقق", "اقام"}, "gues": {"نزل", "ضياف", "فندق"},
+    "scho": {"مدرس", "معهد", "اكاد", "تعلي"}, "lang": {"لغات", "تعلي", "معهد"},
+    "beau": {"تجمي", "صالو", "سبا"}, "plum": {"سباك", "صيان"},
+}
+
+def _norm_ar(s):
+    return _AR_DIACRITICS.sub("", (s or "").translate(_AR_DIGITS).translate(_AR_ALEF))
 
 def owns_site(html, row):
     """False only when the homepage plainly belongs to someone else (see above). True when unsure: no
     page, a page with under 200 characters of text (built by script, or a bot check), or a row with
     neither a phone nor a category."""
     page = (html or "")[:400_000]
-    text = " ".join(_html.unescape(_TAG_RE.sub(" ", page)).split()).lower()
+    text = _norm_ar(" ".join(_html.unescape(_TAG_RE.sub(" ", page)).split()).lower())
     if len(text) < 200:
         return True
-    digits = re.sub(r"\D", "", row.get("phone") or "")
-    stems = {w[:4] for w in re.findall(r"[^\W\d_]{4,}", (row.get("category") or "").lower())
-             if w not in _CATEGORY_STOP}
+    digits = re.sub(r"\D", "", (row.get("phone") or "").translate(_AR_DIGITS))
+    cat_norm = _norm_ar((row.get("category") or "").lower())
+    stems = set()
+    for w in re.findall(r"[^\W\d_]{3,}", cat_norm):
+        if w in _CATEGORY_STOP:
+            continue
+        w_clean = w[2:] if w.startswith("ال") and len(w) >= 5 else w
+        if len(w_clean) >= 4:
+            st = w_clean[:4]
+            stems.add(st)
+            stems.update(_BILINGUAL_STEMS.get(st, ()))
+        elif any("\u0600" <= c <= "\u06FF" for c in w_clean) and len(w_clean) >= 3:
+            stems.add(w_clean)
     if len(digits) < 7 and not stems:
         return True
-    return (len(digits) >= 7 and digits[-7:] in re.sub(r"\D", "", page)) or any(s in text for s in stems)
+    page_digits = re.sub(r"\D", "", page.translate(_AR_DIGITS))
+    return (len(digits) >= 7 and digits[-7:] in page_digits) or any(s in text for s in stems)
 
 def _not_theirs_note(todo):
     n = sum(r.get("website") in _NOT_THEIRS for r in todo)
